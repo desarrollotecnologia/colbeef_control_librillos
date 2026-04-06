@@ -1,0 +1,487 @@
+
+
+
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Colbeef — Control de Librillos</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260330tables">
+</head>
+<body>
+
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-mark">CB</div>
+      <div class="logo-text">
+        <div class="logo-title">COLBEEF</div>
+        <div class="logo-sub">Control de movimientos</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" onclick="irVista('historial',this)">
+        <svg class="ni" viewBox="0 0 20 20"><rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5"/></svg>
+        Historial
+      </button>
+      <button class="nav-item" onclick="irVista('inventario',this)">
+        <svg class="ni" viewBox="0 0 20 20"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="5" r="2" fill="currentColor"/><circle cx="16" cy="15" r="2" fill="currentColor"/></svg>
+        Inventario
+      </button>
+      <button class="nav-item" onclick="irVista('clientes',this)">
+        <svg class="ni" viewBox="0 0 20 20"><circle cx="10" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2 18c0-4 3.6-7 8-7s8 3 8 7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+        Clientes
+      </button>
+      <button class="nav-item" onclick="irVista('reportes',this)">
+        <svg class="ni" viewBox="0 0 20 20"><path d="M4 4h8l4 4v10a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="10" x2="13" y2="10" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="13" x2="13" y2="13" stroke="currentColor" stroke-width="1.8"/></svg>
+        Reportes
+      </button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="conn-status">
+        <span class="conn-dot" id="conn-dot"></span>
+        <span id="conn-txt">Conectando...</span>
+      </div>
+      <button type="button" class="btn-sound" id="btn-sound" onclick="toggleSonidoNotificaciones()">
+        Sonido: ON
+      </button>
+      <button type="button" class="btn-sound" onclick="abrirModalCambiosObs()">
+        Ver cambios obs
+      </button>
+      <button
+        type="button"
+        class="btn-home"
+        title="Volver"
+        aria-label="Volver"
+        onclick="window.location.href='http://192.168.20.205:8501/?session=active'"
+      >
+        Volver
+      </button>
+      <button
+        type="button"
+        class="btn-suite"
+        title="Pa casita"
+        aria-label="Pa casita"
+        onclick="window.location.href='http://192.168.20.205:8000/site.html'"
+      >
+        <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M3 9.2L10 3l7 6.2"></path>
+          <path d="M5.2 8.8V17h9.6V8.8"></path>
+          <path d="M8.2 17v-4.2h3.6V17"></path>
+        </svg>
+      </button>
+      <div class="last-upd" id="last-upd">—</div>
+      <!-- Sin login: el usuario funciona siempre como perfil de usuario -->
+    </div>
+  </aside>
+  <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="cerrarMenuMovil()"></div>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button type="button" class="mobile-menu-btn" id="btn-mobile-menu" onclick="toggleMenuMovil()" aria-label="Abrir menú">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M3 5h14M3 10h14M3 15h14" stroke-linecap="round"></path>
+          </svg>
+        </button>
+        <h1 class="pg-title" id="pg-title">Historial</h1>
+        <p class="pg-sub" id="pg-sub"></p>
+      </div>
+      <div class="topbar-right">
+        <!-- KPIs rápidos globales -->
+        <div class="kpi-top">
+          <div class="kpi-top-item rojo">
+            <span class="kpi-top-n" id="kt-librillos">—</span>
+            <span class="kpi-top-l" id="kt-librillos-lbl">Despachos librillos (día)</span>
+          </div>
+          <div class="kpi-top-item verde">
+            <span class="kpi-top-n" id="kt-crudas">—</span>
+            <span class="kpi-top-l" id="kt-crudas-lbl">Despachos crudas (día)</span>
+          </div>
+          <div class="kpi-top-item gris">
+            <span class="kpi-top-n" id="kt-total">—</span>
+            <span class="kpi-top-l" id="kt-total-lbl">Total despachos (día)</span>
+          </div>
+        </div>
+        <input type="date" class="date-pick" id="fecha-global" onchange="cambiarFecha()">
+        <button type="button" class="btn-upd" id="btn-actualizar" onclick="cargarDatos()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 10a7 7 0 10-2 5.2"/><path d="M17 10V6M17 10h-4"/></svg></span>Actualizar</button>
+      </div>
+    </header>
+
+    <!-- ═══ HISTORIAL ═══ -->
+    <section class="vista active" id="vista-historial">
+      <!-- Historial Librillos -->
+      <div id="subtab-librillos">
+        <div class="panel">
+          <div class="ph">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span class="pt">Historial</span>
+              <div class="subtabs subtabs-inline">
+                <button type="button" class="subtab subtab-historial active" data-hist-tab="librillos" onclick="cambiarSubtab('librillos')"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 11h4"/></svg></span>Librillos</button>
+                <button type="button" class="subtab subtab-historial" data-hist-tab="crudas-h" onclick="cambiarSubtab('crudas-h')"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h12v8H4z"/><path d="M8 10h4"/></svg></span>Crudas</button>
+              </div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input class="srch" id="srch-hlib" placeholder="Buscar propietario o cliente..." oninput="filtrarHistorialLib()">
+              <span class="badge-count" id="hlib-count">0</span>
+            </div>
+          </div>
+          <div class="tw">
+            <table class="dt">
+              <thead><tr>
+                <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th><th>Agrupación</th>
+                <th>Observación</th><th>Destino</th><th>Sucursal</th><th>Empresa destino</th><th>Ingreso Cava</th><th>Salida</th><th>Total</th>
+              </tr></thead>
+              <tbody id="tbody-hlib"><tr><td colspan="11" class="empty">Cargando...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="pf"><span id="hlib-total-label">Total: <strong>0</strong> librillos</span></div>
+        </div>
+      </div>
+
+      <!-- Historial Crudas -->
+      <div id="subtab-crudas-h" style="display:none">
+        <div class="panel">
+          <div class="ph">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span class="pt">Historial</span>
+              <div class="subtabs subtabs-inline">
+                <button type="button" class="subtab subtab-historial" data-hist-tab="librillos" onclick="cambiarSubtab('librillos')"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 11h4"/></svg></span>Librillos</button>
+                <button type="button" class="subtab subtab-historial active" data-hist-tab="crudas-h" onclick="cambiarSubtab('crudas-h')"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h12v8H4z"/><path d="M8 10h4"/></svg></span>Crudas</button>
+              </div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input class="srch" id="srch-hcrud" placeholder="Buscar propietario o destino..." oninput="filtrarHistorialCrud()">
+              <span class="badge-count" id="hcrud-count">0</span>
+            </div>
+          </div>
+          <div class="tw">
+            <table class="dt">
+              <thead><tr>
+                <th>ID Producto</th><th>Propietario</th><th>Observación</th>
+                <th>Destino</th><th>Sucursal</th><th>Empresa destino</th><th>Ingreso Cava</th><th>Salida</th><th>Total</th>
+              </tr></thead>
+              <tbody id="tbody-hcrud"><tr><td colspan="9" class="empty">Cargando...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="pf"><span id="hcrud-total-label">Total: <strong>0</strong> crudas</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ INVENTARIO ═══ -->
+    <section class="vista" id="vista-inventario">
+      <div class="panel">
+        <div class="ph">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="pt">Inventario pendiente</span>
+            <div class="subtabs subtabs-inline">
+              <button type="button" class="subtab active" id="stab-inv-lib" onclick="cambiarSubtabInventario('lib')">Librillos</button>
+              <button type="button" class="subtab" id="stab-inv-crud" onclick="cambiarSubtabInventario('crud')">Crudas</button>
+            </div>
+          </div>
+          <span class="badge-count">Gestión de librillos y crudas por despacho</span>
+        </div>
+        <div class="inv-toolbar" id="inv-toolbar-lib-top">
+          <input class="srch" id="srch-inv" placeholder="Buscar propietario o cliente..." oninput="filtrarInventario()">
+          <span class="badge-count" id="inv-count">0</span>
+          <div style="flex:1"></div>
+          <button type="button" class="btn-sel-all" onclick="seleccionarTodos()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 10l2 2 4-4"/></svg></span>Seleccionar todos</button>
+          <button type="button" class="btn-despachar" id="btn-despachar" onclick="despacharSeleccionados()" disabled>
+            <span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 3h5l2 6h4l2-3h6"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="15.5" cy="17" r="1.5"/></svg></span>Despachar seleccionados (<span id="n-seleccionados">0</span>)
+          </button>
+        </div>
+        <div class="inv-toolbar" id="inv-toolbar-crud-top" style="display:none">
+          <input class="srch" id="srch-inv-crud" placeholder="Buscar propietario..." oninput="filtrarInventarioCrud()">
+          <span class="badge-count" id="inv-crud-count">0</span>
+          <div style="flex:1"></div>
+          <button type="button" class="btn-sel-all" onclick="seleccionarTodosCrud()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 10l2 2 4-4"/></svg></span>Seleccionar todos</button>
+          <button type="button" class="btn-despachar" id="btn-despachar-crud" onclick="despacharSeleccionadosCrud()" disabled>
+            <span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 3h5l2 6h4l2-3h6"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="15.5" cy="17" r="1.5"/></svg></span>Despachar seleccionados (<span id="n-seleccionados-crud">0</span>)
+          </button>
+        </div>
+      </div>
+
+      <div id="subtab-inv-lib">
+        <div class="panel">
+          <div class="ph">
+            <span class="pt">Librillos pendientes de despacho</span>
+            <span id="inv-total-label" style="font-size:12px;color:var(--tx2)">0 pendientes</span>
+          </div>
+          <div class="tw">
+            <table class="dt">
+              <thead><tr>
+                <th style="width:36px"><input type="checkbox" id="chk-all" onchange="toggleTodos(this)"></th>
+                <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th>
+                <th>Agrupación</th><th>Sucursal</th><th>Empresa destino</th><th>Observación</th><th>Ingreso cava</th><th>Estado</th>
+                <th id="th-acciones-inv" style="display:none">Acciones</th>
+              </tr></thead>
+              <tbody id="tbody-inv"><tr><td colspan="11" class="empty">Cargando...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:20px">
+          <div class="ph">
+            <span class="pt">Despachados hoy (librillos)</span>
+            <span id="desp-count" style="font-size:12px;color:var(--verde)">0 despachos</span>
+          </div>
+          <div class="tw">
+            <table class="dt">
+              <thead><tr>
+                <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th>
+                <th>Sucursal</th><th>Empresa destino</th><th>Fecha Salida</th><th>Registrado por</th>
+                <th id="th-acciones-desp" style="display:none">Acciones</th>
+              </tr></thead>
+              <tbody id="tbody-desp"><tr><td colspan="8" class="empty">Sin despachos hoy</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="subtab-inv-crud" style="display:none">
+        <div class="panel">
+          <div class="ph">
+            <span class="pt">Crudas pendientes de despacho</span>
+            <span id="inv-crud-total-label" style="font-size:12px;color:var(--tx2)">0 pendientes</span>
+          </div>
+          <div class="tw">
+            <table class="dt">
+              <thead><tr>
+                <th style="width:36px"><input type="checkbox" id="chk-all-crud" onchange="toggleTodosCrud(this)"></th>
+                <th>ID Producto</th><th>Propietario</th>
+                <th>Sucursal</th><th>Empresa destino</th><th>Observación</th><th>Ingreso Cava</th><th>Estado</th>
+                <th id="th-acciones-inv-crud" style="display:none">Acciones</th>
+              </tr></thead>
+              <tbody id="tbody-inv-crud"><tr><td colspan="9" class="empty">Cargando...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:20px">
+          <div class="ph">
+            <span class="pt">Despachados hoy (crudas)</span>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <button type="button" class="btn-gen btn-gen-sec" onclick="imprimirEtiquetasCrudasDespachadasHoy()">Etiquetas despachados</button>
+              <span id="desp-crud-count" style="font-size:12px;color:var(--verde)">0 despachos</span>
+            </div>
+          </div>
+          <div class="tw">
+            <table class="dt">
+              <thead><tr>
+                <th>ID Producto</th><th>Propietario</th>
+                <th>Sucursal</th><th>Empresa destino</th><th>Fecha Salida</th><th>Registrado por</th>
+                <th id="th-acciones-desp-crud" style="display:none">Acciones</th>
+              </tr></thead>
+              <tbody id="tbody-desp-crud"><tr><td colspan="7" class="empty">Sin despachos hoy</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ CLIENTES ═══ -->
+    <section class="vista" id="vista-clientes">
+      <div class="topbar-vista">
+        <input class="srch" id="srch-cli" placeholder="Buscar propietario, cliente u observación..." oninput="filtrarCli()">
+        <span class="badge-count" id="cli-count">0</span>
+      </div>
+      <div class="subtabs">
+        <button type="button" class="subtab active" id="stab-cli-librillos" onclick="cambiarSubtabClientes('librillos')">Librillos</button>
+        <button type="button" class="subtab" id="stab-cli-crudas" onclick="cambiarSubtabClientes('crudas')">Crudas</button>
+      </div>
+      <div class="panel">
+        <div class="ph">
+          <span class="pt" id="cli-title">Información — Librillos</span>
+          <span id="cli-total-label" style="font-size:12px;color:var(--tx2)">0 registros</span>
+        </div>
+        <div id="subtab-cli-librillos" class="tw">
+          <table class="dt">
+            <thead><tr>
+              <th>Propietario</th><th>Cliente Destino</th><th>Agrupación</th><th>IDs Producto</th>
+              <th>Observación</th><th>Destino</th><th>Sucursal</th><th>Empresa destino</th>
+              <th>Ingreso Cava</th><th>Salida Cava</th>
+            </tr></thead>
+            <tbody id="tbody-cli"><tr><td colspan="10" class="empty">Cargando...</td></tr></tbody>
+          </table>
+        </div>
+        <div id="subtab-cli-crudas" class="tw" style="display:none">
+          <table class="dt">
+            <thead><tr>
+              <th>Propietario</th><th>IDs Producto</th><th>Observación</th>
+              <th>Destino</th><th>Sucursal</th><th>Empresa Destino</th>
+              <th>Ingreso Cava</th><th>Salida</th><th>Total</th>
+            </tr></thead>
+            <tbody id="tbody-cli-crud"><tr><td colspan="9" class="empty">Cargando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ REPORTES ═══ -->
+    <section class="vista" id="vista-reportes">
+      <div class="rep-mini-grid">
+        <div class="rep-mini-card rep-mini-card-rojo">
+          <div class="rep-mini-head">
+            <div class="rep-mini-ico">👥</div>
+            <div>
+              <h3 class="rep-mini-title">Reporte por Cliente</h3>
+              <p class="rep-mini-desc">Filtra y genera información detallada de un cliente específico.</p>
+            </div>
+          </div>
+          <div class="rep-mini-form">
+            <label class="fl">Seleccionar cliente</label>
+            <select class="fs" id="sel-rep-cliente">
+              <option value="">Todos los clientes</option>
+            </select>
+            <div class="rep-mini-fechas">
+              <div>
+                <label class="fl">Desde</label>
+                <input type="date" class="fi" id="fecha-rep-cli-desde">
+              </div>
+              <div>
+                <label class="fl">Hasta</label>
+                <input type="date" class="fi" id="fecha-rep-cli-hasta">
+              </div>
+            </div>
+            <div class="rep-mini-actions">
+              <button type="button" class="btn-gen" onclick="generarReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 4v10M6 10l4 4 4-4"/></svg></span>Vista previa</button>
+              <button type="button" class="btn-gen btn-gen-sec" onclick="descargarPDFReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2h9l4 4v12a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M6 11h8M6 14h5"/></svg></span>Descargar PDF</button>
+              <button type="button" class="btn-gen btn-gen-sec" onclick="descargarExcelReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="2.5" width="14" height="15" rx="1.8"/><path d="M3 7.5h14M8 2.5v15M13 10l2 2m0-2l-2 2"/></svg></span>Descargar Excel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rep-mini-card rep-mini-card-verde">
+          <div class="rep-mini-head">
+            <div class="rep-mini-ico">📊</div>
+            <div>
+              <h3 class="rep-mini-title">Reporte General</h3>
+              <p class="rep-mini-desc">Consolidado global de la operación en el período seleccionado.</p>
+            </div>
+          </div>
+          <div class="rep-mini-form">
+            <label class="fl">Tipo de consolidado</label>
+            <select class="fs" id="sel-rep-general-tipo">
+              <option value="operativo">Total Operativo</option>
+            </select>
+            <div class="rep-mini-fechas">
+              <div>
+                <label class="fl">Desde</label>
+                <input type="date" class="fi" id="fecha-rep-gen-desde">
+              </div>
+              <div>
+                <label class="fl">Hasta</label>
+                <input type="date" class="fi" id="fecha-rep-gen-hasta">
+              </div>
+            </div>
+            <div class="rep-mini-actions">
+              <button type="button" class="btn-gen rep-btn-verde" onclick="generarReporteGeneralRango()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 4v10M6 10l4 4 4-4"/></svg></span>Vista previa</button>
+              <button type="button" class="btn-gen btn-gen-sec" onclick="descargarPDFReporteGeneralRango()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2h9l4 4v12a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M6 11h8M6 14h5"/></svg></span>Descargar PDF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel compact-summary" style="margin-top:18px">
+        <div class="ph">
+          <span class="pt">Resumen por agrupación (cliente destino)</span>
+          <span id="rep-agrup-total" style="font-size:12px;color:var(--tx2)">0 librillos</span>
+        </div>
+        <div class="tw">
+          <table class="dt">
+            <thead>
+              <tr><th>Agrupación</th><th>Total</th></tr>
+            </thead>
+            <tbody id="tbody-rep-agrup"><tr><td colspan="2" class="empty">Cargando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel compact-summary" style="margin-top:18px">
+        <div class="ph">
+          <span class="pt">Resumen de libros y chunchullas crudas</span>
+          <span id="rep-control-dia-total" style="font-size:12px;color:var(--tx2)">Total: 0</span>
+        </div>
+        <div class="tw">
+          <table class="dt resumen-dia-table">
+            <thead>
+              <tr><th>Categoría</th><th>Total</th></tr>
+            </thead>
+            <tbody id="tbody-rep-control-dia"><tr><td colspan="2" class="empty">Cargando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" id="rep-preview" style="margin-top:24px;display:none">
+        <div class="ph">
+          <span class="pt" id="rep-prev-title">Vista Previa</span>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button type="button" class="btn-print" onclick="imprimirReporte()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 8V4h10v4M5 16v-4h10v4M3 8h14v6H3z"/><path d="M7 12h6"/></svg></span>Imprimir</button>
+            <button type="button" class="btn-pdf" onclick="descargarPDFReporte()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2h9l4 4v12a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M6 11h8M6 14h5"/></svg></span>Descargar PDF</button>
+          </div>
+        </div>
+        <div id="rep-prev-body" class="prev-wrap"></div>
+      </div>
+    </section>
+
+    <!-- Modal editar salida (solo admin/usuario propio) -->
+    <div class="modal-bg" id="modal-edit-salida" onclick="cerrarModalEditSalida()">
+      <div class="modal" onclick="event.stopPropagation()" style="max-width:400px">
+        <div class="modal-head">
+          <span class="modal-title">Editar Fecha de Salida</span>
+          <button type="button" class="modal-close" onclick="cerrarModalEditSalida()" aria-label="Cerrar">×</button>
+        </div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px">
+          <label class="fl">ID Producto</label>
+          <input type="text" class="fi" id="edit-id-producto" readonly style="opacity:.6">
+          <label class="fl">Nueva Fecha y Hora de Salida</label>
+          <input type="datetime-local" class="fi" id="edit-fecha-salida">
+          <button type="button" class="btn-gen" onclick="guardarEditSalida()">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal IDs (global, para todas las vistas) -->
+    <div class="modal-bg" id="modal-bg" onclick="cerrarModal()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <span class="modal-title" id="modal-title">IDs agrupados</span>
+          <button type="button" class="modal-close" onclick="cerrarModal()" aria-label="Cerrar">×</button>
+        </div>
+        <div class="tw">
+          <table class="dt">
+            <thead id="modal-thead"></thead>
+            <tbody id="modal-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal historial de cambios de observación -->
+    <div class="modal-bg" id="modal-cambios-obs" onclick="cerrarModalCambiosObs()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <span class="modal-title">Cambios de observación (antes / ahora)</span>
+          <button type="button" class="modal-close" onclick="cerrarModalCambiosObs()" aria-label="Cerrar">×</button>
+        </div>
+        <div class="tw">
+          <table class="dt">
+            <thead>
+              <tr>
+                <th>Hora</th><th>Tipo</th><th>ID</th><th>Antes</th><th>Ahora</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-cambios-obs"><tr><td colspan="5" class="empty">Sin cambios detectados</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="./app.js?v=20260330fase2"></script>
+</body>
+</html>

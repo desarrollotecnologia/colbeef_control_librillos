@@ -1,0 +1,17 @@
+{
+  "name": "colbeef",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "migrate:salidas": "node scripts/migrate-salidas-json-to-pg.mjs",
+    "db:salidas-schema": "node scripts/apply-salidas-schema.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "pg": "^8.20.0"
+  }
+}

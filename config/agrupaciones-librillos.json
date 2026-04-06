@@ -1,0 +1,66 @@
+{
+  "grupos": [
+    {
+      "codigo": "derivados_carnicos",
+      "etiqueta": "Derivados cárnicos",
+      "alias": [
+        "derivados carnicos",
+        "derivados cárnicos",
+        "ruth cacua",
+        "carviscol",
+        "juan rueda",
+        "maria fernanda",
+        "maría fernanda"
+      ]
+    },
+    {
+      "codigo": "cat",
+      "etiqueta": "CAT",
+      "alias": [
+        "cat"
+      ]
+    },
+    {
+      "codigo": "asurcarnescol",
+      "etiqueta": "Asurcarnescol",
+      "alias": [
+        "asurcarnescol",
+        "asurcarnes col",
+        "asurcarnes colombia",
+        "asurcarnes  col"
+      ]
+    },
+    {
+      "codigo": "asurcarnes",
+      "etiqueta": "Asurcarnes",
+      "alias": [
+        "asurcarnes"
+      ]
+    },
+    {
+      "codigo": "global_hides",
+      "etiqueta": "Global Hides",
+      "alias": [
+        "global hides",
+        "salomon",
+        "salomón"
+      ]
+    },
+    {
+      "codigo": "asurcarnes_glo",
+      "etiqueta": "Asurcarnes GLO",
+      "alias": [
+        "asurcarnes glo",
+        "asurcarnesglo"
+      ]
+    }
+  ],
+  "default": {
+    "codigo": "otros",
+    "etiqueta": "Otros"
+  },
+  "sin_destino": {
+    "codigo": "sin_destino",
+    "etiqueta": "Sin destino (retiro)"
+  }
+}
