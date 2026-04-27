@@ -6,7 +6,7 @@ node_modules/
 .env.local
 .env.*.local
 
-# Logs
+# Logs (incluye stdout/stderr del servicio Windows)
 logs/
 *.log
 npm-debug.log*

@@ -2,7 +2,10 @@
 setlocal EnableExtensions
 
 set "TASK_NAME=Colbeef LAN AutoStart"
-set "APP_DIR=C:\laragon\www\colbeef"
+rem APP_DIR se autodetecta desde la ubicación de este .bat (carpeta padre de scripts/)
+pushd "%~dp0.."
+set "APP_DIR=%CD%"
+popd
 set "STARTER_BAT=%APP_DIR%\scripts\iniciar-colbeef-lan.bat"
 
 if not exist "%STARTER_BAT%" (

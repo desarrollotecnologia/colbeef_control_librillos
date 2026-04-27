@@ -21,23 +21,26 @@ app.use(cors());
 app.use(express.json());
 
 // URL oficial de acceso en red local (evita confusión localhost vs IP compartida).
-const OFFICIAL_HOST = '192.168.20.137';
+// Configurable vía .env (OFFICIAL_HOST). Si está vacío, se desactiva la redirección.
+const OFFICIAL_HOST = String(process.env.OFFICIAL_HOST || '').trim();
 const OFFICIAL_PORT = String(process.env.PORT || 3001);
-const OFFICIAL_BASE_URL = `http://${OFFICIAL_HOST}:${OFFICIAL_PORT}`;
+const OFFICIAL_BASE_URL = OFFICIAL_HOST ? `http://${OFFICIAL_HOST}:${OFFICIAL_PORT}` : '';
 
-app.use((req, res, next) => {
-  try {
-    const hostHeader = String(req.headers.host || '').toLowerCase();
-    const hostOnly = hostHeader.split(':')[0];
-    if (hostOnly === 'localhost' || hostOnly === '127.0.0.1') {
-      const target = `${OFFICIAL_BASE_URL}${req.originalUrl || '/'}`;
-      return res.redirect(302, target);
+if (OFFICIAL_BASE_URL) {
+  app.use((req, res, next) => {
+    try {
+      const hostHeader = String(req.headers.host || '').toLowerCase();
+      const hostOnly = hostHeader.split(':')[0];
+      if (hostOnly === 'localhost' || hostOnly === '127.0.0.1') {
+        const target = `${OFFICIAL_BASE_URL}${req.originalUrl || '/'}`;
+        return res.redirect(302, target);
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
-  }
-  return next();
-});
+    return next();
+  });
+}
 
 app.use('/api/librillos', librillosRoutes);
 app.use('/api/salidas', salidasRoutes);
