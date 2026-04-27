@@ -1,0 +1,16 @@
+{
+  "exact": {
+    "CAVA": "CAVA",
+    "DRA CAVA": "DRA CAVA",
+    "CAVA FREDY": "CAVA FREDY"
+  },
+  "contains": {
+    "BUCARAMANGA": "02083 CAVA",
+    "CAMPANAZO": "02084 CAVA",
+    "LA CONCORDIA": "DRA CAVA",
+    "PIEDECUESTA": "DRA CAVA",
+    "TEMP 1 PIEDECUETA": "DRA CAVA",
+    "TEMP 3 FLORIDA": "DRA CAVA",
+    "TEMP 3 PCUESTA": "DRA CAVA"
+  }
+}

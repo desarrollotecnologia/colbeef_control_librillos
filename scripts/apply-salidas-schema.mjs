@@ -60,7 +60,7 @@ main().catch((e) => {
   1) Que TI o el DBA ejecute el archivo sql/colbeef_salidas_cava.sql en el servidor PRINCIPAL.
   2) Que te den credenciales/host de una conexión con escritura y actualices .env.
   3) Mientras tanto, en .env pon: SALIDAS_USE_FILE=1 (despachos en data/salidas.json).
-  Comprobar modo: node scripts/check-pg-readonly.mjs  (read_only debe ser "off" para crear tablas).`);
+  Comprobar en psql: SHOW transaction_read_only; (debe ser off para crear tablas).`);
   }
   process.exit(1);
 });

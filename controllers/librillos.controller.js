@@ -1,16 +1,38 @@
 import {
   obtenerLibrillos,
   obtenerLibrillosPorFecha,
+  obtenerLibrillosPorRangoFechas,
+  obtenerResumenMacroPorFecha,
   obtenerObservacionesPorFecha,
   obtenerStatsUltimos7Dias,
 } from '../services/librillos.service.js';
-import { obtenerValidacionMovimientos } from '../services/validacion.service.js';
+import {
+  obtenerValidacionMovimientos,
+  obtenerDiagnosticoMovimientos,
+  obtenerConfigOperacion,
+} from '../services/validacion.service.js';
 
 // GET /api/librillos?fecha=YYYY-MM-DD
-// Si hay ?fecha, consulta histórico directo; si no, devuelve cache de hoy.
+// GET /api/librillos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD — rango (una respuesta, más rápido que N llamadas)
+// Si no hay parámetros, devuelve cache de hoy.
 export const getLibrillos = async (req, res) => {
   try {
-    const { fecha } = req.query;
+    const { fecha, desde, hasta } = req.query;
+
+    if (desde && hasta) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
+        return res.status(400).json({ error: 'desde y hasta deben ser YYYY-MM-DD' });
+      }
+      if (desde > hasta) {
+        return res.status(400).json({ error: 'desde no puede ser mayor que hasta' });
+      }
+      try {
+        const datos = await obtenerLibrillosPorRangoFechas(desde, hasta);
+        return res.json(datos);
+      } catch (e) {
+        return res.status(400).json({ error: e.message || 'Rango inválido' });
+      }
+    }
 
     if (fecha) {
       // Validar formato básico YYYY-MM-DD
@@ -81,5 +103,40 @@ export const getValidacion = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error al validar movimientos' });
+  }
+};
+
+// GET /api/librillos/diagnostico?fecha=YYYY-MM-DD — desglose operativo real
+export const getDiagnostico = async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ error: 'Parámetro fecha requerido (YYYY-MM-DD)' });
+    }
+    const datos = await obtenerDiagnosticoMovimientos(fecha);
+    res.json(datos);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Error al obtener diagnóstico' });
+  }
+};
+
+// GET /api/librillos/config — parámetros operativos del backend
+export const getConfigOperacion = (req, res) => {
+  res.json(obtenerConfigOperacion());
+};
+
+// GET /api/librillos/resumen?fecha=YYYY-MM-DD — resumen macro estricto del día
+export const getResumenMacro = async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ error: 'Parámetro fecha requerido (YYYY-MM-DD)' });
+    }
+    const datos = await obtenerResumenMacroPorFecha(fecha);
+    return res.json(datos);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Error al obtener resumen macro' });
   }
 };

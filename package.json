@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
+    "verify": "node scripts/verify-setup.mjs",
     "migrate:salidas": "node scripts/migrate-salidas-json-to-pg.mjs",
     "db:salidas-schema": "node scripts/apply-salidas-schema.mjs"
   },

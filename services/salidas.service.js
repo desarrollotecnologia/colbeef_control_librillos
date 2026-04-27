@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { pool } from '../config/db.js';
+import { registrarCambioHistorico } from './auditoria.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ARCHIVO = path.join(__dirname, '../data/salidas.json');
@@ -121,6 +122,7 @@ export const obtenerSalidas = async () => {
 };
 
 export const registrarSalidas = async (ids_productos, usuario = 'usuario') => {
+  const usuarioTxt = String(usuario || 'usuario');
   if (USE_FILE) {
     const salidas = leerSalidasFile();
     const ahora = new Date().toISOString();
@@ -138,10 +140,33 @@ export const registrarSalidas = async (ids_productos, usuario = 'usuario') => {
       nuevas.push(nueva);
     });
     guardarSalidasFile(salidas);
+    if (nuevas.length) {
+      await registrarCambioHistorico({
+        modulo: 'salidas',
+        accion: 'registrar',
+        entidad: 'salidas_cava',
+        idEntidad: nuevas.length === 1 ? nuevas[0].id : null,
+        usuario: usuarioTxt,
+        antes: null,
+        despues: { total: nuevas.length, ids: nuevas.map((x) => x.id_producto) },
+      });
+    }
     return nuevas;
   }
   try {
-    return await registrarSalidasPg(ids_productos, usuario);
+    const out = await registrarSalidasPg(ids_productos, usuarioTxt);
+    if (out.length) {
+      await registrarCambioHistorico({
+        modulo: 'salidas',
+        accion: 'registrar',
+        entidad: 'salidas_cava',
+        idEntidad: out.length === 1 ? out[0].id : null,
+        usuario: usuarioTxt,
+        antes: null,
+        despues: { total: out.length, ids: out.map((x) => x.id_producto) },
+      });
+    }
+    return out;
   } catch (e) {
     console.error('❌ registrarSalidas PG:', e.message);
     throw e;
@@ -149,27 +174,83 @@ export const registrarSalidas = async (ids_productos, usuario = 'usuario') => {
 };
 
 export const editarSalida = async (id, fecha_salida, usuario_rol) => {
+  const usuarioTxt = String(usuario_rol || 'usuario');
   if (USE_FILE) {
     const salidas = leerSalidasFile();
     const idx = salidas.findIndex((s) => s.id === id);
     if (idx === -1) return null;
+    const antes = { ...salidas[idx] };
     salidas[idx].fecha_salida = fecha_salida;
-    salidas[idx].editado_por = usuario_rol;
+    salidas[idx].editado_por = usuarioTxt;
     salidas[idx].fecha_edicion = new Date().toISOString();
     guardarSalidasFile(salidas);
+    await registrarCambioHistorico({
+      modulo: 'salidas',
+      accion: 'editar',
+      entidad: 'salidas_cava',
+      idEntidad: id,
+      usuario: usuarioTxt,
+      antes,
+      despues: salidas[idx],
+    });
     return salidas[idx];
   }
-  return editarSalidaPg(id, fecha_salida, usuario_rol);
+  const antesRows = await pool.query(
+    `SELECT id, id_producto, fecha_salida, registrado_por, fecha_registro, editado_por, fecha_edicion
+     FROM colbeef.salidas_cava WHERE id = $1`,
+    [id]
+  );
+  const editada = await editarSalidaPg(id, fecha_salida, usuarioTxt);
+  if (editada) {
+    await registrarCambioHistorico({
+      modulo: 'salidas',
+      accion: 'editar',
+      entidad: 'salidas_cava',
+      idEntidad: id,
+      usuario: usuarioTxt,
+      antes: antesRows.rows[0] || null,
+      despues: editada,
+    });
+  }
+  return editada;
 };
 
-export const eliminarSalida = async (id) => {
+export const eliminarSalida = async (id, usuario = 'admin') => {
+  const usuarioTxt = String(usuario || 'admin');
   if (USE_FILE) {
     const salidas = leerSalidasFile();
     const idx = salidas.findIndex((s) => s.id === id);
     if (idx === -1) return false;
+    const antes = { ...salidas[idx] };
     salidas.splice(idx, 1);
     guardarSalidasFile(salidas);
+    await registrarCambioHistorico({
+      modulo: 'salidas',
+      accion: 'eliminar',
+      entidad: 'salidas_cava',
+      idEntidad: id,
+      usuario: usuarioTxt,
+      antes,
+      despues: null,
+    });
     return true;
   }
-  return eliminarSalidaPg(id);
+  const antesRows = await pool.query(
+    `SELECT id, id_producto, fecha_salida, registrado_por, fecha_registro, editado_por, fecha_edicion
+     FROM colbeef.salidas_cava WHERE id = $1`,
+    [id]
+  );
+  const ok = await eliminarSalidaPg(id);
+  if (ok) {
+    await registrarCambioHistorico({
+      modulo: 'salidas',
+      accion: 'eliminar',
+      entidad: 'salidas_cava',
+      idEntidad: id,
+      usuario: usuarioTxt,
+      antes: antesRows.rows[0] || null,
+      despues: null,
+    });
+  }
+  return ok;
 };

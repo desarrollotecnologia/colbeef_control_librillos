@@ -1,10 +1,7 @@
 import { pool } from '../config/db.js';
+import { ID_TIPO_PARTE_COLBEEF } from '../config/tipo-parte.js';
 import { obtenerLibrillosPorFecha } from './librillos.service.js';
 import { obtenerSalidas } from './salidas.service.js';
-
-function normalizarObs(obs) {
-  return String(obs || '').replace(/\s+/g, ' ').trim().toUpperCase();
-}
 
 function diaDesdeTimestamp(val) {
   if (!val) return null;
@@ -13,6 +10,18 @@ function diaDesdeTimestamp(val) {
   const d = new Date(val);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
+function horaBogotaHHmm(val) {
+  if (!val) return null;
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString('es-CO', {
+    timeZone: 'America/Bogota',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
 function esAgrupacionValida(d) {
@@ -24,11 +33,6 @@ function tieneRetiro(d) {
   return !!(d?.cliente_destino && String(d.cliente_destino).trim());
 }
 
-function esCrudaSinRetiro(d) {
-  if (tieneRetiro(d)) return false;
-  const obs = normalizarObs(d?.observacion);
-  return obs === 'CRUDAS' || obs === 'CRUDA';
-}
 
 export async function obtenerDashboardResumen(fechaISO) {
   const [clasificados, salidas, raw] = await Promise.all([
@@ -36,11 +40,10 @@ export async function obtenerDashboardResumen(fechaISO) {
     obtenerSalidas(),
     pool.query(
       `
-      SELECT DISTINCT id_producto
-      FROM a_trazabilidad_proceso.a_parte_producto
-      WHERE id_tipo_parte_producto = 13
-        AND fecha >= ($1::date + INTERVAL '12 hours')
-        AND fecha <  ($1::date + INTERVAL '30 hours')
+      SELECT DISTINCT id_producto::text AS id_producto
+      FROM trazabilidad_proceso.parte_producto
+      WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
+        AND DATE(fecha_registro) = $1::date
       `,
       [fechaISO]
     ),
@@ -48,8 +51,10 @@ export async function obtenerDashboardResumen(fechaISO) {
 
   const validos = (clasificados || []).filter(esAgrupacionValida);
   const librillos = validos.filter(tieneRetiro);
-  const crudas = validos.filter(esCrudaSinRetiro);
-  const cocidos = 0; // feed actual excluye cocidos desde servicio de librillos
+  const crudas = (validos || []).filter((d) =>
+    /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''))
+  );
+  const cocidos = validos.filter((d) => String(d?.agrupacion_codigo || '') === 'cocidos').length;
 
   const salidasDia = (salidas || []).filter((s) => diaDesdeTimestamp(s.fecha_salida) === fechaISO);
   const idsLibrillos = new Set(librillos.map((x) => String(x.id_producto)));
@@ -72,9 +77,10 @@ export async function obtenerDashboardResumen(fechaISO) {
     'global_hides',
     'cat',
     'derivados_carnicos',
+    'cocidos',
   ];
   const por_agrupacion = Object.fromEntries(agrupacionesEsperadas.map((k) => [k, 0]));
-  librillos.forEach((x) => {
+  validos.forEach((x) => {
     const k = String(x.agrupacion_codigo || '');
     if (Object.prototype.hasOwnProperty.call(por_agrupacion, k)) por_agrupacion[k] += 1;
   });
@@ -104,11 +110,15 @@ export async function obtenerDashboardResumen(fechaISO) {
     .slice(0, 50)
     .map((s) => {
       const row = validos.find((x) => String(x.id_producto) === String(s.id_producto));
+      const ac = row ? String(row.agrupacion_codigo || '') : '';
+      const esCruda = /\bCRUDAS?\b/i.test(String(row?.observaciones ?? row?.observacion ?? ''));
+      const tipo =
+        !row ? 'N/D' : esCruda ? 'CRUDA' : ac === 'cocidos' ? 'COCIDO' : 'LIBRILLO';
       return {
         id_producto: s.id_producto,
         fecha_salida: s.fecha_salida,
         registrado_por: s.registrado_por || 'usuario',
-        tipo: row ? (esCrudaSinRetiro(row) ? 'CRUDA' : 'LIBRILLO') : 'N/D',
+        tipo,
         propietario: row?.propietario || '—',
       };
     });
@@ -129,6 +139,54 @@ export async function obtenerDashboardResumen(fechaISO) {
     },
     pendientes_en_cava,
     ultimos_despachos,
+  };
+}
+
+export async function obtenerCierreOperacion(fechaISO) {
+  const resumen = await obtenerDashboardResumen(fechaISO);
+  const total = Number(resumen.total_librillos || 0);
+  const despachados = Number(resumen.librillos_despachados || 0);
+  const pendientes = Math.max(0, total - despachados);
+  const cumplimiento = total > 0 ? Math.round((despachados / total) * 100) : 0;
+
+  const ult = (resumen.ultimos_despachos || [])
+    .filter((x) => x && x.fecha_salida)
+    .sort((a, b) => new Date(b.fecha_salida) - new Date(a.fecha_salida))[0];
+  const ultimaHora = horaBogotaHHmm(ult?.fecha_salida) || '--:--';
+
+  const pendientesPorCliente = new Map();
+  (resumen.pendientes_en_cava || []).forEach((x) => {
+    const cli = String(x?.cliente_destino || x?.propietario || 'Sin cliente').trim() || 'Sin cliente';
+    pendientesPorCliente.set(cli, (pendientesPorCliente.get(cli) || 0) + 1);
+  });
+  const topPend = [...pendientesPorCliente.entries()].sort((a, b) => b[1] - a[1])[0] || null;
+  const clientePendiente = topPend ? topPend[0] : null;
+  const cantidadPendientePrincipal = topPend ? Number(topPend[1] || 0) : 0;
+
+  const lineaPendiente = pendientes > 0
+    ? `⚠️ Quedan ${pendientes} vísceras pendientes${clientePendiente ? ` (principal: ${clientePendiente} ${cantidadPendientePrincipal})` : ''}.`
+    : '✅ No quedan vísceras pendientes en cava.';
+
+  const mensaje = [
+    '✅ OPERACION FINALIZADA - DESPACHOS COMPLETADOS',
+    `Informamos que la jornada de despachos ha sido cerrada con ${cumplimiento}% de cumplimiento.`,
+    `⏱️ ${ultimaHora} ultimo despacho`,
+    `📦 ${despachados} juegos despachados`,
+    lineaPendiente,
+    'La operacion queda oficialmente finalizada y actualizada en el sistema.',
+  ].join('\n');
+
+  return {
+    fecha: fechaISO,
+    cumplimiento_pct: cumplimiento,
+    ultimo_despacho_hora: ultimaHora,
+    juegos_despachados: despachados,
+    total_juegos: total,
+    pendientes,
+    pendiente_principal: clientePendiente
+      ? { cliente: clientePendiente, cantidad: cantidadPendientePrincipal }
+      : null,
+    mensaje,
   };
 }
 

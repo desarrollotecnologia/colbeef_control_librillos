@@ -1,0 +1,25 @@
+{
+  "navHistorialHint": "Plan faena · parte Colbeef",
+  "linkColbeefDesdeInventario": "http://192.168.20.137:8080/",
+  "inventariosPostMessageOrigins": [
+    "http://192.168.20.205:8501"
+  ],
+  "kpiStripTitle": "Cifras según la fecha de la barra superior y el listado del API (unión plan de faena + movimiento Colbeef del mismo día cuando aplica).",
+  "kpiLabels": {
+    "universo": "Animales en listado del día",
+    "conParte": "Con registro Colbeef (hoy)",
+    "pendiente": "Pendiente registro (hoy)"
+  },
+  "externalLinks": [
+    {
+      "id": "back",
+      "url": "http://192.168.20.205:8501/?session=active",
+      "title": "Volver"
+    },
+    {
+      "id": "home",
+      "url": "http://192.168.20.205:8000/site.html",
+      "title": "Inicio intranet"
+    }
+  ]
+}

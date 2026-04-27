@@ -1,8 +1,1107 @@
 const API_URL      = '/api/librillos';
 const SALIDAS_URL  = '/api/salidas';
+const GUIAS_URL = '/api/guias';
+const ANALYTICS_URL = '/api/analytics/event';
+const ANALYTICS_RESUMEN_ADMIN_URL = '/api/analytics/resumen-admin';
+const AUDITORIA_CAMBIOS_URL = '/api/auditoria/cambios';
+
+/** Auto-actualización: listado general e inventario (segundos). Mínimo práctico ~15s. */
+const AUTO_REFRESH_DATOS_MS = 15000;
+/** Detección de cambios en observaciones (toast + datos). Un poco más frecuente. */
+const AUTO_REFRESH_OBS_MS = 10000;
+/** Heartbeat de uso para estimar tiempo activo en la app. */
+const ANALYTICS_HEARTBEAT_MS = 60000;
+
+const LS_ANALYTICS_SESSION = 'colbeef_analytics_session_v1';
+const LS_ANALYTICS_ADMIN_KEY = 'colbeef_analytics_admin_key_v1';
+let _analyticsSessionId = '';
+let _analyticsStartedAt = Date.now();
+let _analyticsViewActual = null;
+let _analyticsViewAt = Date.now();
+let _analyticsHeartbeat = null;
+let _analyticsUsuarioActivo = '';
+let _loaderDepth = 0;
+let _loaderDelayTimer = null;
+let _loaderHideTimer = null;
+let _loaderVisibleSince = 0;
+
+function setAppLoaderText(msg) {
+  const txt = document.getElementById('app-loader-text');
+  if (!txt) return;
+  txt.textContent = String(msg || 'Estamos preparando la informacion');
+}
+
+function beginAppLoader(msg) {
+  _loaderDepth += 1;
+  if (msg) setAppLoaderText(msg);
+  if (_loaderDepth > 1) return;
+  clearTimeout(_loaderHideTimer);
+  clearTimeout(_loaderDelayTimer);
+  _loaderDelayTimer = setTimeout(() => {
+    const overlay = document.getElementById('app-loader');
+    if (!overlay || _loaderDepth <= 0) return;
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+    _loaderVisibleSince = Date.now();
+  }, 180);
+}
+
+function endAppLoader() {
+  if (_loaderDepth <= 0) return;
+  _loaderDepth -= 1;
+  if (_loaderDepth > 0) return;
+  clearTimeout(_loaderDelayTimer);
+  const hide = () => {
+    const overlay = document.getElementById('app-loader');
+    if (!overlay) return;
+    overlay.classList.remove('show');
+    overlay.setAttribute('aria-hidden', 'true');
+    _loaderVisibleSince = 0;
+  };
+  if (_loaderVisibleSince) {
+    const elapsed = Date.now() - _loaderVisibleSince;
+    const wait = Math.max(0, 420 - elapsed);
+    _loaderHideTimer = setTimeout(hide, wait);
+    return;
+  }
+  hide();
+}
+
+async function runWithAppLoader(msg, fn) {
+  beginAppLoader(msg);
+  try {
+    return await fn();
+  } finally {
+    endAppLoader();
+  }
+}
+
+function crearSesionAnalyticsId() {
+  const rnd = Math.random().toString(36).slice(2, 10);
+  return `s_${Date.now().toString(36)}_${rnd}`;
+}
+
+function obtenerSesionAnalytics() {
+  try {
+    const saved = localStorage.getItem(LS_ANALYTICS_SESSION);
+    if (saved) return saved;
+    const id = crearSesionAnalyticsId();
+    localStorage.setItem(LS_ANALYTICS_SESSION, id);
+    return id;
+  } catch {
+    return crearSesionAnalyticsId();
+  }
+}
+
+/** Usuario que viene de Inventarios vía ?usuario= o postMessage (persistido en esta pestaña). */
+const SS_USUARIO_INVENTARIO = 'colbeef_usuario_inventario_v1';
+
+function leerUsuarioDesdeQueryString() {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const keys = [
+      'usuario',
+      'user',
+      'username',
+      'u',
+      'login',
+      'inventarios_usuario',
+      'inv_usuario',
+      'invUser',
+    ];
+    for (const k of keys) {
+      const v = String(q.get(k) || '').trim();
+      if (v) return v;
+    }
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+function persistirUsuarioSesionInventario(u) {
+  const s = String(u || '').trim();
+  if (!s) return;
+  try {
+    sessionStorage.setItem(SS_USUARIO_INVENTARIO, s);
+    sessionStorage.setItem('inventarios_usuario', s);
+  } catch {
+    // ignore
+  }
+}
+
+function detectarUsuarioActivoAnalytics() {
+  const desdeUrl = leerUsuarioDesdeQueryString();
+  if (desdeUrl) {
+    persistirUsuarioSesionInventario(desdeUrl);
+    return desdeUrl;
+  }
+  try {
+    const ss =
+      sessionStorage.getItem(SS_USUARIO_INVENTARIO) || sessionStorage.getItem('inventarios_usuario');
+    if (String(ss || '').trim()) return String(ss).trim();
+  } catch {
+    // ignore
+  }
+  try {
+    const g = window.__COLBEEF_USER__ || window.__USUARIO_ACTIVO__;
+    if (String(g || '').trim()) return String(g).trim();
+  } catch {
+    // ignore
+  }
+  const keys = [
+    'usuario_activo',
+    'inventarios_usuario',
+    'inventarios.user',
+    'auth_user',
+    'username',
+    'user',
+  ];
+  for (const k of keys) {
+    try {
+      const v = localStorage.getItem(k) || sessionStorage.getItem(k);
+      if (String(v || '').trim()) return String(v).trim();
+    } catch {
+      // ignore
+    }
+  }
+  return '';
+}
+
+/**
+ * Actualiza usuario para analytics y operaciones (despachos) cuando llega después del arranque
+ * (p. ej. postMessage desde la app Inventarios embebida o ventana padre).
+ */
+function aplicarUsuarioCaptadoInventario(u, origen = '') {
+  const s = String(u || '').trim();
+  if (!s) return;
+  persistirUsuarioSesionInventario(s);
+  try {
+    window.__COLBEEF_USER__ = s;
+  } catch {
+    // ignore
+  }
+  if (_analyticsUsuarioActivo === s) return;
+  _analyticsUsuarioActivo = s;
+  enviarEventoAnalytics({
+    eventName: 'usuario_contexto',
+    viewName: _analyticsViewActual,
+    meta: { usuario: s, origen: origen || 'desconocido' },
+  });
+}
+
+function esOrigenPostMessageInventariosPermitido(origin) {
+  const list = colbeefUiConfig?.inventariosPostMessageOrigins;
+  if (Array.isArray(list) && list.length) {
+    for (const entry of list) {
+      try {
+        if (new URL(String(entry).trim()).origin === origin) return true;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const links = colbeefUiConfig?.externalLinks;
+  if (Array.isArray(links)) {
+    for (const x of links) {
+      if (!x?.url) continue;
+      try {
+        if (new URL(x.url).origin === origin) return true;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return false;
+}
+
+function initListenerUsuarioDesdeInventario() {
+  if (typeof window !== 'undefined' && window.__colbeefInvMsgInit) return;
+  if (typeof window !== 'undefined') window.__colbeefInvMsgInit = true;
+  window.addEventListener('message', (ev) => {
+    if (!esOrigenPostMessageInventariosPermitido(ev.origin)) return;
+    const d = ev.data;
+    let u = '';
+    if (d && typeof d === 'object') {
+      u =
+        d.usuario ||
+        d.user ||
+        d.username ||
+        d.colbeefUsuario ||
+        d.login ||
+        (d.payload && (d.payload.usuario || d.payload.user)) ||
+        '';
+    } else if (typeof d === 'string' && /^usuario\s*[:=]/i.test(d)) {
+      u = d.replace(/^usuario\s*[:=]\s*/i, '').trim();
+    }
+    u = String(u || '').trim();
+    if (u) aplicarUsuarioCaptadoInventario(u, 'postMessage');
+  });
+}
+
+function labelEventoAnalitica(e) {
+  const map = {
+    app_open: 'Apertura de aplicacion',
+    app_close: 'Cierre de aplicacion',
+    view_enter: 'Ingreso a vista',
+    view_leave: 'Salida de vista',
+    heartbeat: 'Actividad continua',
+    historial_subtab: 'Cambio subvista historial',
+    inventario_subtab: 'Cambio subvista inventario',
+    usuario_contexto: 'Usuario identificado (Inventarios)',
+    dashboard_open: 'Apertura dashboard privado',
+    dashboard_refresh: 'Actualización dashboard',
+    export_excel: 'Descarga Excel',
+    export_pdf: 'Descarga PDF',
+    export_html: 'Descarga HTML',
+    print_report: 'Impresión reporte',
+    print_labels_crudas: 'Impresión etiquetas crudas',
+  };
+  return map[e] || e || 'Sin evento';
+}
+
+function enviarEventoAnalytics(payload) {
+  const body = JSON.stringify({
+    sessionId: _analyticsSessionId || (_analyticsSessionId = obtenerSesionAnalytics()),
+    userName: _analyticsUsuarioActivo || null,
+    path: location.pathname,
+    ...payload,
+  });
+
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: 'application/json' });
+      const ok = navigator.sendBeacon(ANALYTICS_URL, blob);
+      if (ok) return;
+    }
+  } catch {
+    // fallback a fetch
+  }
+
+  void fetch(ANALYTICS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function trackVista(nombre) {
+  const now = Date.now();
+  if (_analyticsViewActual) {
+    enviarEventoAnalytics({
+      eventName: 'view_leave',
+      viewName: _analyticsViewActual,
+      durationMs: Math.max(0, now - _analyticsViewAt),
+    });
+  }
+  _analyticsViewActual = nombre || null;
+  _analyticsViewAt = now;
+  enviarEventoAnalytics({
+    eventName: 'view_enter',
+    viewName: _analyticsViewActual,
+  });
+}
+
+function iniciarAnalyticsUso() {
+  _analyticsSessionId = obtenerSesionAnalytics();
+  _analyticsUsuarioActivo = detectarUsuarioActivoAnalytics();
+  _analyticsStartedAt = Date.now();
+  _analyticsViewAt = _analyticsStartedAt;
+  enviarEventoAnalytics({
+    eventName: 'app_open',
+    meta: { ua: navigator.userAgent, lang: navigator.language, usuario: _analyticsUsuarioActivo || null },
+  });
+
+  if (_analyticsHeartbeat) clearInterval(_analyticsHeartbeat);
+  _analyticsHeartbeat = setInterval(() => {
+    enviarEventoAnalytics({
+      eventName: 'heartbeat',
+      viewName: _analyticsViewActual,
+      durationMs: Math.max(0, Date.now() - _analyticsStartedAt),
+    });
+  }, ANALYTICS_HEARTBEAT_MS);
+
+  const vistaActiva = document.querySelector('.vista.active')?.id || '';
+  const nombreVista = vistaActiva.startsWith('vista-') ? vistaActiva.slice(6) : null;
+  if (nombreVista) trackVista(nombreVista);
+}
+
+function cerrarAnalyticsUso() {
+  const now = Date.now();
+  if (_analyticsViewActual) {
+    enviarEventoAnalytics({
+      eventName: 'view_leave',
+      viewName: _analyticsViewActual,
+      durationMs: Math.max(0, now - _analyticsViewAt),
+    });
+  }
+  enviarEventoAnalytics({
+    eventName: 'app_close',
+    durationMs: Math.max(0, now - _analyticsStartedAt),
+    viewName: _analyticsViewActual,
+  });
+}
+
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString('es-CO');
+}
+
+function fmtMin(v) {
+  const n = Number(v || 0);
+  return `${n.toFixed(1)} min`;
+}
+
+function fmtFechaHora(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return String(iso);
+  return d.toLocaleString('es-CO');
+}
+
+function renderAnalyticsDashboardHtml(data, ctx = {}) {
+  const k = data?.kpi || {};
+  const vistas = Array.isArray(data?.vistasTop) ? data.vistasTop : [];
+  const eventos = Array.isArray(data?.eventosTop) ? data.eventosTop : [];
+  const usuariosTop = Array.isArray(data?.usuariosTop) ? data.usuariosTop : [];
+  const det = data?.detalle || {};
+  const eventosDia = Array.isArray(det.eventosPorDia) ? det.eventosPorDia : [];
+  const vistasTiempo = Array.isArray(det.vistasTiempoMin) ? det.vistasTiempoMin : [];
+  const sesionesRecientes = Array.isArray(det.sesionesRecientes) ? det.sesionesRecientes : [];
+  const eventosRecientes = Array.isArray(det.eventosRecientes) ? det.eventosRecientes : [];
+  const storage = data?.almacenamiento || 'desconocido';
+  const desde = ctx.desde || '';
+  const hasta = ctx.hasta || '';
+  const backUrl = ctx.backUrl || '/';
+  const cambios = Array.isArray(ctx.cambios) ? ctx.cambios : [];
+
+  const rowsVistas = vistas.length
+    ? vistas
+        .map((r) => `<tr><td>${escapeHtml(r.vista || '')}</td><td style="text-align:right">${fmtNum(r.total)}</td></tr>`)
+        .join('')
+    : '<tr><td colspan="2" style="opacity:.72">Sin datos todavía</td></tr>';
+  const rowsEventos = eventos.length
+    ? eventos
+        .map(
+          (r) =>
+            `<tr><td title="${escapeHtml(String(r.evento || ''))}">${escapeHtml(
+              labelEventoAnalitica(r.evento || '')
+            )}</td><td style="text-align:right">${fmtNum(r.total)}</td></tr>`
+        )
+        .join('')
+    : '<tr><td colspan="2" style="opacity:.72">Sin datos todavía</td></tr>';
+  const rowsUsuariosTop = usuariosTop.length
+    ? usuariosTop
+        .map((r) => `<tr><td>${escapeHtml(r.usuario || '(sin usuario)')}</td><td style="text-align:right">${fmtNum(r.total)}</td></tr>`)
+        .join('')
+    : '<tr><td colspan="2" style="opacity:.72">Sin usuarios identificados</td></tr>';
+  const topVista = vistas.length ? String(vistas[0]?.vista || '—') : '—';
+  const totalEvtUsuarios = usuariosTop.reduce((acc, r) => acc + Number(r?.total || 0), 0);
+  const sinUsuarioEvt = usuariosTop
+    .filter((r) => String(r?.usuario || '').trim().toLowerCase() === '(sin usuario)')
+    .reduce((acc, r) => acc + Number(r?.total || 0), 0);
+  const pctIdentificados = totalEvtUsuarios > 0
+    ? Math.max(0, Math.min(100, ((totalEvtUsuarios - sinUsuarioEvt) / totalEvtUsuarios) * 100))
+    : 0;
+  const topEventoLabel = eventos.length ? labelEventoAnalitica(eventos[0]?.evento || '—') : '—';
+  const topEventoTotal = eventos.length ? Number(eventos[0]?.total || 0) : 0;
+  const topVistaTotal = vistas.length ? Number(vistas[0]?.total || 0) : 0;
+  const donutIdentSvg = (() => {
+    const size = 120;
+    const r = 42;
+    const c = 2 * Math.PI * r;
+    const p = Math.max(0, Math.min(100, Number(pctIdentificados || 0)));
+    const dash = (p / 100) * c;
+    const rest = c - dash;
+    return `<svg viewBox="0 0 ${size} ${size}" width="120" height="120" aria-label="Eventos con usuario">
+      <g transform="translate(${size / 2}, ${size / 2}) rotate(-90)">
+        <circle r="${r}" fill="none" stroke="#e7ece7" stroke-width="12"></circle>
+        <circle r="${r}" fill="none" stroke="#1a7a42" stroke-width="12" stroke-linecap="round"
+          stroke-dasharray="${dash.toFixed(2)} ${rest.toFixed(2)}"></circle>
+      </g>
+      <text x="50%" y="49%" text-anchor="middle" dominant-baseline="middle" font-size="20" font-weight="800" fill="#1a7a42">${fmtNum(p)}%</text>
+      <text x="50%" y="64%" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="#566">identificado</text>
+    </svg>`;
+  })();
+  const maxMinVista = Math.max(1, ...vistasTiempo.map((x) => Number(x.minutos || 0)));
+  const rowsVistasTiempo = vistasTiempo.length
+    ? vistasTiempo
+        .map((r) => {
+          const m = Number(r.minutos || 0);
+          const p = Math.max(2, Math.round((m / maxMinVista) * 100));
+          return `<tr>
+            <td>${escapeHtml(r.vista || '')}</td>
+            <td style="width:42%">
+              <div style="height:8px;background:#eef2ee;border-radius:10px;overflow:hidden">
+                <div style="height:8px;width:${p}%;background:#1a7a42"></div>
+              </div>
+            </td>
+            <td style="text-align:right;white-space:nowrap">${fmtMin(m)}</td>
+          </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="3" style="opacity:.72">Sin tiempos acumulados</td></tr>';
+  const rowsDia = eventosDia.length
+    ? eventosDia
+        .map((r) => {
+          return `<tr>
+            <td>${escapeHtml(r.fecha || '')}</td>
+            <td style="text-align:right">${fmtNum(r.totalEventos)}</td>
+            <td style="text-align:right">${fmtNum(r.sesiones)}</td>
+          </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="3" style="opacity:.72">Sin datos por día</td></tr>';
+  const maxEventosDia = Math.max(1, ...eventosDia.map((x) => Number(x.totalEventos || 0)));
+  const rowBarsDia = eventosDia.length
+    ? eventosDia
+        .map((r) => {
+          const n = Number(r.totalEventos || 0);
+          const p = Math.max(2, Math.round((n / maxEventosDia) * 100));
+          return `<tr>
+            <td>${escapeHtml(r.fecha || '')}</td>
+            <td style="width:50%">
+              <div style="height:8px;background:#eef2ee;border-radius:10px;overflow:hidden">
+                <div style="height:8px;width:${p}%;background:#3d8bfd"></div>
+              </div>
+            </td>
+            <td style="text-align:right">${fmtNum(n)}</td>
+          </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="3" style="opacity:.72">Sin datos por día</td></tr>';
+  const rowsSesiones = sesionesRecientes.length
+    ? sesionesRecientes
+        .map((r) => {
+          const sid = String(r.sessionId || '');
+          const sidShort = sid.length > 18 ? `${sid.slice(0, 9)}…${sid.slice(-6)}` : sid;
+          return `<tr>
+            <td title="${escapeHtml(sid)}">${escapeHtml(sidShort)}</td>
+            <td>${escapeHtml(r.usuario || '(sin usuario)')}</td>
+            <td>${escapeHtml(r.ultimaVista || '—')}</td>
+            <td style="text-align:right">${fmtNum(r.totalEventos)}</td>
+            <td style="text-align:right">${fmtMin(r.duracionMin)}</td>
+            <td style="white-space:nowrap">${escapeHtml(fmtFechaHora(r.fin))}</td>
+          </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="6" style="opacity:.72">Sin sesiones recientes</td></tr>';
+  const rowsEventosRec = eventosRecientes.length
+    ? eventosRecientes
+        .map((r) => {
+          const sid = String(r.sesion || '');
+          const sidShort = sid.length > 14 ? `${sid.slice(0, 7)}…${sid.slice(-4)}` : sid;
+          return `<tr>
+            <td style="white-space:nowrap">${escapeHtml(fmtFechaHora(r.tiempo))}</td>
+            <td title="${escapeHtml(String(r.evento || ''))}">${escapeHtml(labelEventoAnalitica(r.evento || ''))}</td>
+            <td>${escapeHtml(r.vista || '—')}</td>
+            <td>${escapeHtml(r.usuario || '(sin usuario)')}</td>
+            <td title="${escapeHtml(sid)}">${escapeHtml(sidShort || '—')}</td>
+            <td style="text-align:right">${r.duracionMs ? fmtNum(r.duracionMs) : '—'}</td>
+            <td>${escapeHtml(r.path || '—')}</td>
+          </tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="7" style="opacity:.72">Sin eventos recientes</td></tr>';
+  const descargasPorUsuario = new Map();
+  (eventosRecientes || []).forEach((r) => {
+    const ev = String(r?.evento || '');
+    if (!['export_excel', 'export_pdf', 'export_html', 'print_report', 'print_labels_crudas'].includes(ev)) return;
+    const u = String(r?.usuario || '(sin usuario)').trim() || '(sin usuario)';
+    if (!descargasPorUsuario.has(u)) {
+      descargasPorUsuario.set(u, { usuario: u, descargas: 0, impresiones: 0 });
+    }
+    const item = descargasPorUsuario.get(u);
+    if (ev.startsWith('export_')) item.descargas += 1;
+    else item.impresiones += 1;
+  });
+  const rowsActividadSalida = [...descargasPorUsuario.values()]
+    .sort((a, b) => (b.descargas + b.impresiones) - (a.descargas + a.impresiones))
+    .slice(0, 12)
+    .map((x) => `<tr><td>${escapeHtml(x.usuario)}</td><td style="text-align:right">${fmtNum(x.descargas)}</td><td style="text-align:right">${fmtNum(x.impresiones)}</td><td style="text-align:right">${fmtNum(x.descargas + x.impresiones)}</td></tr>`)
+    .join('') || '<tr><td colspan="4" style="opacity:.72">Sin descargas/impresiones en el rango</td></tr>';
+  const statsUsuario = new Map();
+  const eventoEsEntrega = new Set(['export_excel', 'export_pdf', 'export_html', 'print_report', 'print_labels_crudas']);
+  (eventosRecientes || []).forEach((r) => {
+    const usuario = String(r?.usuario || '(sin usuario)').trim() || '(sin usuario)';
+    const ev = String(r?.evento || '').trim();
+    if (!statsUsuario.has(usuario)) {
+      statsUsuario.set(usuario, {
+        usuario,
+        eventos: 0,
+        entregas: 0,
+        reintentos: 0,
+        heartbeat: 0,
+        ultimaVista: '—',
+        ultimaAccion: null,
+      });
+    }
+    const s = statsUsuario.get(usuario);
+    s.eventos += 1;
+    if (eventoEsEntrega.has(ev)) s.entregas += 1;
+    if (ev === 'heartbeat') s.heartbeat += 1;
+    if ((ev === 'print_labels_crudas' || ev === 'print_report') && Number(r?.duracionMs || 0) < 1200) s.reintentos += 1;
+    if (r?.vista) s.ultimaVista = String(r.vista);
+    if (r?.tiempo && (!s.ultimaAccion || String(r.tiempo) > String(s.ultimaAccion))) s.ultimaAccion = r.tiempo;
+  });
+  const radarUsers = [...statsUsuario.values()]
+    .map((s) => {
+      const friccion = s.reintentos + (s.heartbeat > Math.max(6, s.eventos * 0.55) ? 1 : 0);
+      const score = Math.max(0, (s.entregas * 6) + (s.eventos * 0.6) - (friccion * 4));
+      const conversion = s.eventos > 0 ? (s.entregas / s.eventos) * 100 : 0;
+      return { ...s, score, friccion, conversion };
+    })
+    .sort((a, b) => b.score - a.score);
+  const rowsRadarScore = radarUsers.slice(0, 12)
+    .map((u, idx) => `<tr>
+      <td style="text-align:right">${idx + 1}</td>
+      <td>${escapeHtml(u.usuario)}</td>
+      <td style="text-align:right">${fmtNum(Math.round(u.score))}</td>
+      <td style="text-align:right">${fmtNum(u.entregas)}</td>
+      <td style="text-align:right">${fmtNum(Number(u.conversion.toFixed(1)))}%</td>
+      <td style="white-space:nowrap">${escapeHtml(fmtFechaHora(u.ultimaAccion))}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="opacity:.72">Sin actividad por usuario en el rango</td></tr>';
+  const rowsFriccion = radarUsers.slice(0, 12)
+    .sort((a, b) => b.friccion - a.friccion)
+    .map((u) => `<tr>
+      <td>${escapeHtml(u.usuario)}</td>
+      <td style="text-align:right">${fmtNum(u.friccion)}</td>
+      <td style="text-align:right">${fmtNum(u.reintentos)}</td>
+      <td style="text-align:right">${fmtNum(u.heartbeat)}</td>
+      <td>${escapeHtml(u.ultimaVista || '—')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="opacity:.72">Sin señales de fricción en el rango</td></tr>';
+  const timelineRows = [...(eventosRecientes || [])]
+    .filter((r) => ['view_enter', 'export_excel', 'export_pdf', 'export_html', 'print_report', 'print_labels_crudas', 'inventario_subtab', 'historial_subtab'].includes(String(r?.evento || '')))
+    .slice(0, 60)
+    .map((r) => `<tr>
+      <td style="white-space:nowrap">${escapeHtml(fmtFechaHora(r.tiempo))}</td>
+      <td>${escapeHtml(r.usuario || '(sin usuario)')}</td>
+      <td>${escapeHtml(labelEventoAnalitica(r.evento || ''))}</td>
+      <td>${escapeHtml(r.vista || '—')}</td>
+      <td>${escapeHtml(r.path || '—')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="opacity:.72">Sin actividad reciente filtrada</td></tr>';
+  const detectarTipoCambio = (c) => {
+    const acc = String(c?.accion || '').toLowerCase();
+    const tieneAntes = !!(c?.antes && typeof c.antes === 'object' && Object.keys(c.antes).length);
+    const tieneDespues = !!(c?.despues && typeof c.despues === 'object' && Object.keys(c.despues).length);
+    if (acc.includes('insert') || acc.includes('crear') || acc.includes('nuevo')) return 'creado';
+    if (acc.includes('update') || acc.includes('actualiz') || acc.includes('editar') || acc.includes('modific')) return 'modificado';
+    if (!tieneAntes && tieneDespues) return 'creado';
+    if (tieneAntes && tieneDespues) return 'modificado';
+    return 'modificado';
+  };
+  const camposCambiados = (c) => {
+    const a = c?.antes && typeof c.antes === 'object' ? c.antes : {};
+    const d = c?.despues && typeof c.despues === 'object' ? c.despues : {};
+    const keys = new Set([...Object.keys(a), ...Object.keys(d)]);
+    const changed = [];
+    keys.forEach((k) => {
+      const va = a?.[k];
+      const vd = d?.[k];
+      if (JSON.stringify(va ?? null) !== JSON.stringify(vd ?? null)) changed.push(k);
+    });
+    return changed;
+  };
+  const fechaDia = (iso) => {
+    const d = new Date(iso || 0);
+    if (!Number.isFinite(d.getTime())) return '—';
+    return d.toLocaleDateString('es-CO');
+  };
+  const cambiosTipados = (cambios || []).map((c) => ({
+    ...c,
+    _tipo: detectarTipoCambio(c),
+    _campos: camposCambiados(c),
+    _dia: fechaDia(c?.fecha),
+  }));
+  const resumenPorFechaMap = new Map();
+  cambiosTipados.forEach((c) => {
+    const dia = String(c._dia || '—');
+    if (!resumenPorFechaMap.has(dia)) resumenPorFechaMap.set(dia, { dia, creados: 0, modificados: 0 });
+    const r = resumenPorFechaMap.get(dia);
+    if (c._tipo === 'creado') r.creados += 1;
+    else r.modificados += 1;
+  });
+  const rowsResumenFecha = [...resumenPorFechaMap.values()]
+    .sort((a, b) => {
+      const da = Date.parse(String(a.dia).split('/').reverse().join('-') || 0);
+      const db = Date.parse(String(b.dia).split('/').reverse().join('-') || 0);
+      return db - da;
+    })
+    .map((r) => `<tr><td>${escapeHtml(r.dia)}</td><td style="text-align:right">${fmtNum(r.creados)}</td><td style="text-align:right">${fmtNum(r.modificados)}</td><td style="text-align:right">${fmtNum(r.creados + r.modificados)}</td></tr>`)
+    .join('') || '<tr><td colspan="4" style="opacity:.72">Sin histórico en el rango</td></tr>';
+  const renderRowsCambios = (tipo) => {
+    const rows = cambiosTipados.filter((c) => {
+      if (c._tipo !== tipo) return false;
+      const antesObs = String(c?.antes?.observacion ?? '').replace(/\s+/g, ' ').trim();
+      const despuesObs = String(c?.despues?.observacion ?? '').replace(/\s+/g, ' ').trim();
+      return antesObs !== despuesObs;
+    });
+    if (!rows.length) return `<tr><td colspan="6" style="opacity:.72">Sin cambios reales de observación en el rango</td></tr>`;
+    return rows.map((c) => {
+      const a = c?.antes || {};
+      const d = c?.despues || {};
+      const idProducto = String(d?.id_producto ?? a?.id_producto ?? c?.idEntidad ?? '—');
+      const antesObs = String(a?.observacion ?? '').trim() || '—';
+      const despuesObs = String(d?.observacion ?? '').trim() || '—';
+      const usernameBd = String(d?.username_bd || a?.username_bd || c.usuario || '(sin username_bd)');
+      return `<tr>
+        <td style="white-space:nowrap">${escapeHtml(fmtFechaHora(c.fecha))}</td>
+        <td>${escapeHtml(idProducto)}</td>
+        <td title="${escapeHtml(antesObs)}">${escapeHtml(antesObs.slice(0, 120))}</td>
+        <td title="${escapeHtml(despuesObs)}">${escapeHtml(despuesObs.slice(0, 120))}</td>
+        <td>${escapeHtml(usernameBd)}</td>
+        <td>${escapeHtml(c._dia)}</td>
+      </tr>`;
+    }).join('');
+  };
+  const rowsCambiosCreados = renderRowsCambios('creado');
+  const rowsCambiosModificados = renderRowsCambios('modificado');
+
+  const grafLineEventosDia = (() => {
+    const pts = eventosDia.slice(-14);
+    const w = 520;
+    const h = 170;
+    const padL = 32;
+    const padR = 8;
+    const padT = 10;
+    const padB = 22;
+    if (!pts.length) return `<div style="padding:12px;color:#6f7e6f">Sin datos para graficar.</div>`;
+    const maxY = Math.max(1, ...pts.map((p) => Number(p.totalEventos || 0)));
+    const spanX = Math.max(1, pts.length - 1);
+    const points = pts
+      .map((p, i) => {
+        const x = padL + ((w - padL - padR) * i) / spanX;
+        const y = h - padB - ((h - padT - padB) * Number(p.totalEventos || 0)) / maxY;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+    const labels = pts
+      .map((p, i) => {
+        if (i !== 0 && i !== pts.length - 1 && i % 3 !== 0) return '';
+        const x = padL + ((w - padL - padR) * i) / spanX;
+        const fecha = String(p.fecha || '');
+        return `<text x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle" font-size="10" fill="#556">${escapeHtml(fecha.slice(5))}</text>`;
+      })
+      .join('');
+    return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="170" role="img" aria-label="Eventos por dia">
+      <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#d7e0d7" />
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#d7e0d7" />
+      <polyline fill="none" stroke="#1a7a42" stroke-width="2.5" points="${points}" />
+      ${labels}
+      <text x="${padL - 4}" y="${padT + 4}" text-anchor="end" font-size="10" fill="#556">${fmtNum(maxY)}</text>
+      <text x="${padL - 4}" y="${h - padB + 4}" text-anchor="end" font-size="10" fill="#556">0</text>
+    </svg>`;
+  })();
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Analitica privada · Colbeef</title>
+  <style>
+    :root{
+      --bg:#f2f5f2;
+      --card:#ffffff;
+      --line:#dbe5db;
+      --ink:#182018;
+      --muted:#5b6b5b;
+      --brand:#1a7a42;
+      --brand-soft:#edf7f1;
+    }
+    body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:linear-gradient(180deg,#f6f8f6 0%,#f0f3f0 100%);color:var(--ink)}
+    .wrap{max-width:1180px;margin:0 auto;padding:16px}
+    .head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+    .ttl{font-size:24px;font-weight:900;color:var(--brand);letter-spacing:.2px}
+    .sub{font-size:12px;color:var(--muted)}
+    .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    input,button{height:34px;border-radius:10px;border:1px solid #cfd8cf;padding:0 10px}
+    button{cursor:pointer;background:#fff;font-weight:700;transition:all .18s ease}
+    button:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(0,0,0,.10)}
+    button.primary{background:var(--brand);color:#fff;border-color:#166637}
+    #a-back{
+      background:linear-gradient(135deg,#ff6a00 0%,#ff3d00 100%);
+      color:#fff;border-color:#c03200;
+      box-shadow:0 6px 14px rgba(255,86,34,.25);
+      animation:pulseBack 1.7s ease-in-out infinite;
+    }
+    #a-back:hover{box-shadow:0 8px 16px rgba(255,86,34,.35)}
+    @keyframes pulseBack{
+      0%,100%{transform:translateY(0)}
+      50%{transform:translateY(-1px) scale(1.01)}
+    }
+    .grid{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:10px;margin:12px 0 16px}
+    .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;box-shadow:0 2px 6px rgba(20,40,20,.04)}
+    .kpi .l{font-size:11px;color:#667766;text-transform:uppercase}
+    .kpi .n{font-size:27px;font-weight:900;color:#c0392b;margin-top:4px;line-height:1}
+    .kpi .h{margin-top:6px;font-size:11px;color:#4f604f}
+    .panels{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .p{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(20,40,20,.04)}
+    .ph{padding:10px 12px;background:var(--brand-soft);font-weight:800;color:#1f3525}
+    table{width:100%;border-collapse:collapse}
+    td,th{padding:8px 10px;border-top:1px solid #ecf0ec;font-size:13px}
+    th{text-align:left;background:#f7faf7}
+    .scroll-y{max-height:280px;overflow:auto}
+    .mono{font-family:Consolas,Monaco,monospace;font-size:12px}
+    .foot{margin-top:10px;font-size:11px;color:#6f7e6f}
+    .chart-wrap{padding:10px 12px}
+    .hero{display:grid;grid-template-columns:1fr 280px;gap:12px;margin-top:8px}
+    .insight{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+    .insight .t{font-size:12px;color:#5d6e5d;text-transform:uppercase;font-weight:700}
+    .insight .v{font-size:18px;color:#143a23;font-weight:800;margin-top:2px}
+    .insight .mut{font-size:12px;color:#5d6e5d;margin-top:6px}
+    .donut-card{display:flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:12px;background:#fff}
+    .tag-new{display:inline-block;background:#1a7a42;color:#fff;border-radius:999px;padding:2px 8px;font-size:11px;margin-left:6px}
+    @media (max-width:960px){.grid{grid-template-columns:1fr 1fr}.panels,.hero{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <div>
+        <div class="ttl">Dashboard de usabilidad (privado)</div>
+        <div class="sub">Almacenamiento: <strong>${escapeHtml(storage)}</strong> · Actualizado: ${escapeHtml(
+          new Date().toLocaleString('es-CO')
+        )}</div>
+        <div class="sub">Usuario detectado en esta sesion: <strong>${escapeHtml(_analyticsUsuarioActivo || '(sin usuario)')}</strong></div>
+      </div>
+      <div class="filters">
+        <button id="a-back" title="Volver al programa" data-back="${escapeHtml(backUrl)}">Volver al programa</button>
+        <label>Desde</label>
+        <input id="a-desde" type="date" value="${escapeHtml(desde)}" />
+        <label>Hasta</label>
+        <input id="a-hasta" type="date" value="${escapeHtml(hasta)}" />
+        <button class="primary" id="a-refresh">Actualizar</button>
+        <button id="a-key">Cambiar clave</button>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="insight">
+        <div class="t">Lectura rápida</div>
+        <div class="v">Vista top: ${escapeHtml(topVista)} (${fmtNum(topVistaTotal)} ingresos)</div>
+        <div class="mut">Evento dominante: <strong>${escapeHtml(topEventoLabel)}</strong> (${fmtNum(topEventoTotal)}). Rango aplicado: ${escapeHtml(desde || 'inicio')} a ${escapeHtml(hasta || 'hoy')}.</div>
+      </div>
+      <div class="donut-card">${donutIdentSvg}</div>
+    </div>
+
+    <div class="grid">
+      <div class="kpi"><div class="l">Total eventos</div><div class="n">${fmtNum(k.totalEventos)}</div><div class="h">Base total de interacciones</div></div>
+      <div class="kpi"><div class="l">Sesiones únicas</div><div class="n">${fmtNum(k.sesionesUnicas)}</div><div class="h">Navegadores/sesiones distintas</div></div>
+      <div class="kpi"><div class="l">Activos 24h</div><div class="n">${fmtNum(k.usuariosActivos24h)}</div><div class="h">Uso reciente</div></div>
+      <div class="kpi"><div class="l">Duración promedio</div><div class="n">${fmtMin(k.duracionPromedioMin)}</div><div class="h">Por sesión</div></div>
+      <div class="kpi"><div class="l">Vista más usada</div><div class="n" style="font-size:18px;color:#1f5f3b">${escapeHtml(topVista)}</div><div class="h">${fmtNum(topVistaTotal)} entradas</div></div>
+      <div class="kpi"><div class="l">% con usuario</div><div class="n" style="color:#1f5f3b">${fmtNum(pctIdentificados)}%</div><div class="h">${fmtNum(totalEvtUsuarios - sinUsuarioEvt)} identificados</div></div>
+    </div>
+
+    <div class="p" style="margin:8px 0 12px">
+      <div class="ph">Radar operativo por usuario <span class="tag-new">NUEVO</span></div>
+      <div class="panels" style="padding:10px">
+        <div class="p">
+          <div class="ph">Ranking de operadores (score)</div>
+          <table><thead><tr><th>#</th><th>Usuario</th><th style="text-align:right">Score</th><th style="text-align:right">Entregas</th><th style="text-align:right">Conversión</th><th>Última acción</th></tr></thead><tbody>${rowsRadarScore}</tbody></table>
+        </div>
+        <div class="p">
+          <div class="ph">Riesgo / fricción por usuario</div>
+          <table><thead><tr><th>Usuario</th><th style="text-align:right">Fricción</th><th style="text-align:right">Reintentos</th><th style="text-align:right">Heartbeat</th><th>Última vista</th></tr></thead><tbody>${rowsFriccion}</tbody></table>
+        </div>
+      </div>
+      <div class="p" style="margin:10px">
+        <div class="ph">Línea de tiempo reciente (quién hizo qué)</div>
+        <div class="scroll-y" style="max-height:220px">
+          <table><thead><tr><th>Fecha/hora</th><th>Usuario</th><th>Acción</th><th>Vista</th><th>Ruta</th></tr></thead><tbody class="mono">${timelineRows}</tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="p">
+        <div class="ph">Tendencia de eventos (ultimos 14 dias)</div>
+        <div class="chart-wrap">${grafLineEventosDia}</div>
+      </div>
+      <div class="p">
+        <div class="ph">Top vistas</div>
+        <table><thead><tr><th>Vista</th><th style="text-align:right">Total</th></tr></thead><tbody>${rowsVistas}</tbody></table>
+      </div>
+      <div class="p">
+        <div class="ph">Top eventos</div>
+        <table><thead><tr><th>Evento</th><th style="text-align:right">Total</th></tr></thead><tbody>${rowsEventos}</tbody></table>
+      </div>
+    </div>
+
+    <div class="panels" style="margin-top:12px">
+      <div class="p">
+        <div class="ph">Top usuarios detectados</div>
+        <table><thead><tr><th>Usuario</th><th style="text-align:right">Eventos</th></tr></thead><tbody>${rowsUsuariosTop}</tbody></table>
+      </div>
+      <div class="p">
+        <div class="ph">Actividad de salida por usuario</div>
+        <table><thead><tr><th>Usuario</th><th style="text-align:right">Descargas</th><th style="text-align:right">Impresiones</th><th style="text-align:right">Total</th></tr></thead><tbody>${rowsActividadSalida}</tbody></table>
+      </div>
+      <div class="p">
+        <div class="ph">Actividad por día</div>
+        <table><thead><tr><th>Fecha</th><th style="text-align:right">Eventos</th><th style="text-align:right">Sesiones</th></tr></thead><tbody>${rowsDia}</tbody></table>
+      </div>
+      <div class="p">
+        <div class="ph">Eventos por día (barras)</div>
+        <table><thead><tr><th>Fecha</th><th></th><th style="text-align:right">Eventos</th></tr></thead><tbody>${rowBarsDia}</tbody></table>
+      </div>
+    </div>
+
+    <div class="p" style="margin-top:12px">
+      <div class="ph">Histórico planillaje por fecha (resumen)</div>
+      <div class="scroll-y" style="max-height:190px">
+        <table>
+          <thead><tr><th>Fecha</th><th style="text-align:right">Creados</th><th style="text-align:right">Modificados</th><th style="text-align:right">Total</th></tr></thead>
+          <tbody class="mono">${rowsResumenFecha}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panels" style="margin-top:12px">
+      <div class="p">
+        <div class="ph">Registros creados</div>
+        <div class="scroll-y" style="max-height:230px">
+          <table>
+            <thead><tr><th>Fecha/hora</th><th>ID producto</th><th>Observación antes</th><th>Observación ahora</th><th>Usuario</th><th>Día</th></tr></thead>
+            <tbody class="mono">${rowsCambiosCreados}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="p">
+        <div class="ph">Registros modificados</div>
+        <div class="scroll-y" style="max-height:230px">
+          <table>
+            <thead><tr><th>Fecha/hora</th><th>ID producto</th><th>Observación antes</th><th>Observación ahora</th><th>Usuario</th><th>Día</th></tr></thead>
+            <tbody class="mono">${rowsCambiosModificados}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="panels" style="margin-top:12px">
+      <div class="p">
+        <div class="ph">Tiempo acumulado por vista</div>
+        <table><thead><tr><th>Vista</th><th></th><th style="text-align:right">Tiempo</th></tr></thead><tbody>${rowsVistasTiempo}</tbody></table>
+      </div>
+      <div class="p">
+        <div class="ph">Interpretacion rapida</div>
+        <div style="padding:12px 14px;font-size:13px;line-height:1.45;color:#304230">
+          Si un evento aparece como <strong>(sin usuario)</strong>, el sistema Inventarios no envio el usuario al abrir Control Librillos.
+          Recomendado: abrir esta app con URL tipo <code>?usuario=nombre.login</code>.
+        </div>
+      </div>
+    </div>
+
+    <div class="panels" style="margin-top:12px">
+      <div class="p">
+        <div class="ph">Sesiones recientes (top 20)</div>
+        <div class="scroll-y">
+          <table>
+            <thead><tr><th>Sesion</th><th>Usuario</th><th>Ultima vista</th><th style="text-align:right">Eventos</th><th style="text-align:right">Duracion</th><th>Ultimo evento</th></tr></thead>
+            <tbody class="mono">${rowsSesiones}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="p">
+        <div class="ph">Eventos recientes (top 80)</div>
+        <div class="scroll-y">
+          <table>
+            <thead><tr><th>Tiempo</th><th>Evento</th><th>Vista</th><th>Usuario</th><th>Sesion</th><th style="text-align:right">ms</th><th>Path</th></tr></thead>
+            <tbody class="mono">${rowsEventosRec}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="foot">Tip: este panel se abre solo desde el boton oculto (Shift + clic).</div>
+  </div>
+</body>
+</html>`;
+}
+
+async function fetchAnalyticsResumenPrivado(key, desde = '', hasta = '') {
+  const q = new URLSearchParams();
+  if (desde) q.set('desde', desde);
+  if (hasta) q.set('hasta', hasta);
+  const [resAnalitica, resCambios] = await Promise.all([
+    fetch(`${ANALYTICS_RESUMEN_ADMIN_URL}?${q.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'x-analytics-key': key },
+    }),
+    fetch(`${AUDITORIA_CAMBIOS_URL}?${q.toString()}&modulo=planillaje&limit=160`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'x-analytics-key': key },
+    }),
+  ]);
+  const payloadAnalitica = await resAnalitica.json().catch(() => ({}));
+  const payloadCambios = await resCambios.json().catch(() => ({}));
+  if (!resAnalitica.ok) throw new Error(payloadAnalitica?.error || `HTTP ${resAnalitica.status}`);
+  if (!resCambios.ok) throw new Error(payloadCambios?.error || `HTTP ${resCambios.status}`);
+  return {
+    analitica: payloadAnalitica,
+    cambios: Array.isArray(payloadCambios?.items) ? payloadCambios.items : [],
+  };
+}
+
+async function abrirDashboardAnaliticaPrivado(key, desde = '', hasta = '') {
+  const doc = window.document;
+  const backUrl = `${window.location.pathname}${window.location.search}`;
+  doc.open();
+  doc.write('<!doctype html><html><body style="font-family:Arial;padding:16px">Cargando dashboard...</body></html>');
+  doc.close();
+
+  const render = async (nextDesde = desde, nextHasta = hasta) => {
+    const data = await fetchAnalyticsResumenPrivado(key, nextDesde, nextHasta);
+    doc.open();
+    doc.write(
+      renderAnalyticsDashboardHtml(data.analitica, {
+        desde: nextDesde,
+        hasta: nextHasta,
+        cambios: data.cambios,
+        backUrl,
+      })
+    );
+    doc.close();
+
+    const btnBack = doc.getElementById('a-back');
+    const btnRefresh = doc.getElementById('a-refresh');
+    const btnKey = doc.getElementById('a-key');
+    btnBack?.addEventListener('click', () => {
+      window.location.href = backUrl;
+    });
+    btnRefresh?.addEventListener('click', () => {
+      const d = String(doc.getElementById('a-desde')?.value || '');
+      const h = String(doc.getElementById('a-hasta')?.value || '');
+      enviarEventoAnalytics({
+        eventName: 'dashboard_refresh',
+        viewName: 'dashboard_privado',
+        meta: { desde: d || null, hasta: h || null },
+      });
+      void render(d, h);
+    });
+    btnKey?.addEventListener('click', async () => {
+      const nk = await promptClaveOcultaAnalitica({
+        title: 'Cambiar clave analítica',
+        message: 'Ingresa la nueva clave del dashboard privado.',
+        initialValue: '',
+        confirmText: 'Guardar',
+      });
+      if (!nk) return;
+      key = nk;
+      try {
+        localStorage.setItem(LS_ANALYTICS_ADMIN_KEY, nk);
+      } catch {
+        // ignore
+      }
+      void render(
+        String(doc.getElementById('a-desde')?.value || ''),
+        String(doc.getElementById('a-hasta')?.value || '')
+      );
+    });
+  };
+
+  try {
+    await render(desde, hasta);
+  } catch (e) {
+    doc.open();
+    doc.write(
+      `<html><body style="font-family:Arial;padding:16px;color:#b00020">No se pudo cargar dashboard: ${escapeHtml(
+        String(e?.message || e)
+      )}<div style="margin-top:12px"><button onclick="location.href='${escapeHtml(backUrl)}'">Volver al programa</button></div></body></html>`
+    );
+    doc.close();
+  }
+}
+
+async function promptClaveOcultaAnalitica(opts = {}) {
+  const title = String(opts.title || 'Clave de analitica (solo admin)');
+  const message = String(opts.message || 'Ingresa la clave para continuar.');
+  const initialValue = String(opts.initialValue || '');
+  const confirmText = String(opts.confirmText || 'Entrar');
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(10,18,12,.52);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.innerHTML = `
+      <div style="width:min(420px,92vw);background:#fff;border-radius:14px;border:1px solid #d6e2d7;box-shadow:0 16px 40px rgba(0,0,0,.2);padding:16px">
+        <div style="font-weight:900;color:#1a7a42;font-size:18px">${escapeHtml(title)}</div>
+        <div style="margin-top:6px;color:#4e5f52;font-size:13px">${escapeHtml(message)}</div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+          <input id="ana-pin-input" type="password" autocomplete="off" spellcheck="false"
+                 style="flex:1;height:38px;border:1px solid #cfd8cf;border-radius:10px;padding:0 10px;font-size:14px"
+                 value="${escapeHtml(initialValue)}" />
+          <button id="ana-pin-toggle" type="button"
+                  style="height:38px;border:1px solid #cfd8cf;border-radius:10px;padding:0 10px;background:#fff;cursor:pointer">Mostrar</button>
+        </div>
+        <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+          <button id="ana-pin-cancel" type="button"
+                  style="height:34px;border:1px solid #cfd8cf;border-radius:10px;padding:0 12px;background:#fff;cursor:pointer">Cancelar</button>
+          <button id="ana-pin-ok" type="button"
+                  style="height:34px;border:1px solid #166637;border-radius:10px;padding:0 14px;background:#1a7a42;color:#fff;font-weight:700;cursor:pointer">${escapeHtml(confirmText)}</button>
+        </div>
+      </div>
+    `;
+    const done = (val) => {
+      overlay.remove();
+      resolve(val);
+    };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) done('');
+    });
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#ana-pin-input');
+    const btnOk = overlay.querySelector('#ana-pin-ok');
+    const btnCancel = overlay.querySelector('#ana-pin-cancel');
+    const btnToggle = overlay.querySelector('#ana-pin-toggle');
+    input?.focus();
+    input?.select();
+    btnCancel?.addEventListener('click', () => done(''));
+    btnOk?.addEventListener('click', () => done(String(input?.value || '').trim()));
+    btnToggle?.addEventListener('click', () => {
+      if (!input) return;
+      const nextType = input.type === 'password' ? 'text' : 'password';
+      input.type = nextType;
+      btnToggle.textContent = nextType === 'password' ? 'Mostrar' : 'Ocultar';
+    });
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') done('');
+      if (e.key === 'Enter') done(String(input?.value || '').trim());
+    });
+  });
+}
+
+async function abrirAnaliticaOculta(ev) {
+  if (!ev?.shiftKey) {
+    mostrarToast('Atajo privado: usa Shift + clic.', 'warn');
+    return;
+  }
+  // Siempre pedir PIN al abrir el dashboard privado.
+  let keyGuardada = '';
+  try {
+    keyGuardada = localStorage.getItem(LS_ANALYTICS_ADMIN_KEY) || '';
+  } catch {
+    keyGuardada = '';
+  }
+  const key = await promptClaveOcultaAnalitica({
+    title: 'Dashboard privado',
+    message: 'Ingresa el PIN para acceder al dashboard de usabilidad.',
+    initialValue: keyGuardada,
+    confirmText: 'Entrar',
+  });
+  if (!key) return;
+  enviarEventoAnalytics({
+    eventName: 'dashboard_open',
+    viewName: 'dashboard_privado',
+    meta: { acceso: 'shift_click' },
+  });
+  void abrirDashboardAnaliticaPrivado(key);
+}
 
 // Sin login/roles: comportamiento único
 const USUARIO_ACTUAL = 'usuario';
+function usuarioOperacionActual() {
+  return _analyticsUsuarioActivo || USUARIO_ACTUAL;
+}
 
 // ── DATOS ─────────────────────────────────────────────────────────────────────
 let datosGlobal   = [];   // API: solo retiro librillos + crudas
@@ -11,31 +1110,106 @@ let datosCrudasHist = []; // observación solo CRUDAS/CRUDA
 let datosClientes  = [];
 let salidasRegistradas = [];
 let inventarioSubtab = 'lib'; // 'lib' | 'crud'
-let _autoInvTimer = null;
 let _autoInvSnapshot = '';
 let _autoGlobalTimer = null;
 let _autoObsTimer = null;
 let _autoObsSnapshot = '';
 let _obsTextoMapPrev = new Map();
 let historialCambiosObs = [];
+/** Historial de cambios de observación solo en este navegador (sin tablas en servidor). */
+const LS_HIST_OBS = 'colbeef_historial_obs_v1';
+let _modoCambiosObsActual = 'normal';
 let _toastOnClick = null;
+let historicoCambios = [];
+let historicoCambiosFiltrados = [];
+let historicoCrudasSeleccionadas = new Set();
 let historialSoloPendientes = false;
 const gruposHistorialColapsados = new Set();
 let tablaCompacta = false;
+let PLAZAS_ALIAS = { exact: {}, contains: {} };
+
+/** Config resumen LISTA LIBRILLOS: modo cliente + overrides (clientes-resumen-config.json). */
+const DEFAULT_CLIENTES_RESUMEN_CONFIG = {
+  modoClienteResumen: 'auto',
+  auto: {
+    regexEmpresaEsUbicacion: [
+      '(PLAZA|BUCARAMANGA|FLORIDABLANCA|PIEDECUESTA|MESA DE LOS SANTOS|GIRON|GUARIN|REAL DE MINAS|CAVA)',
+      '^\\d{2}\\s+PLAZA\\b',
+    ],
+    empresaExactaUsaPropietario: ['COLBEEF S.A.S'],
+  },
+  clientePorIdProducto: {},
+};
+
+function mergeClienteResumenConfig(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const b = DEFAULT_CLIENTES_RESUMEN_CONFIG;
+  const modos = new Set(['auto', 'empresa_destino', 'propietario']);
+  const modo = modos.has(r.modoClienteResumen) ? r.modoClienteResumen : b.modoClienteResumen;
+  const autoIn = r.auto && typeof r.auto === 'object' ? r.auto : {};
+  return {
+    modoClienteResumen: modo,
+    auto: {
+      regexEmpresaEsUbicacion:
+        Array.isArray(autoIn.regexEmpresaEsUbicacion) && autoIn.regexEmpresaEsUbicacion.length
+          ? autoIn.regexEmpresaEsUbicacion.map(String)
+          : [...b.auto.regexEmpresaEsUbicacion],
+      empresaExactaUsaPropietario:
+        Array.isArray(autoIn.empresaExactaUsaPropietario) && autoIn.empresaExactaUsaPropietario.length
+          ? autoIn.empresaExactaUsaPropietario.map(String)
+          : [...b.auto.empresaExactaUsaPropietario],
+    },
+    clientePorIdProducto:
+      r.clientePorIdProducto && typeof r.clientePorIdProducto === 'object'
+        ? { ...r.clientePorIdProducto }
+        : { ...b.clientePorIdProducto },
+  };
+}
+
+let CLIENTES_RESUMEN_CONFIG = mergeClienteResumenConfig({});
+
+function empresaPareceUbicacionResumen(emp) {
+  const e = String(emp || '');
+  const patterns = CLIENTES_RESUMEN_CONFIG?.auto?.regexEmpresaEsUbicacion || [];
+  for (const p of patterns) {
+    try {
+      if (new RegExp(p, 'i').test(e)) return true;
+    } catch {
+      /* regex inválido en JSON: ignorar */
+    }
+  }
+  return false;
+}
 
 // ── NOTIFICACIONES (sonido) ────────────────────────────────────────────────────
 let _audioUnlocked = false;
 const LS_SONIDO = 'colbeef_sonido_notif';
+
 function sonidoHabilitado() {
   const v = localStorage.getItem(LS_SONIDO);
   return v === null ? true : v === '1';
 }
+const SVG_CAMPANA_ON = `<svg class="ico-sound foot-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+</svg>`;
+
+/** Campana + línea encima (notificaciones silenciadas). */
+const SVG_CAMPANA_OFF = `<svg class="ico-sound ico-sound-muted foot-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <line x1="3" y1="4" x2="21" y2="4"/>
+  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+</svg>`;
+
 function renderBotonSonido() {
   const b = document.getElementById('btn-sound');
   if (!b) return;
   const on = sonidoHabilitado();
-  b.textContent = `Sonido: ${on ? 'ON' : 'OFF'}`;
   b.classList.toggle('off', !on);
+  const badge = on ? '<span class="foot-ico-badge" aria-hidden="true"></span>' : '';
+  b.innerHTML = `<span class="foot-ico-wrap">${on ? SVG_CAMPANA_ON : SVG_CAMPANA_OFF}${badge}</span>`;
+  b.title = on ? 'Silenciar notificaciones' : 'Activar sonido de notificaciones';
+  b.setAttribute('aria-label', on ? 'Silenciar notificaciones' : 'Activar sonido de notificaciones');
 }
 function toggleSonidoNotificaciones() {
   const next = !sonidoHabilitado();
@@ -101,15 +1275,71 @@ function beepNotif() {
 }
 
 function actualizarColumnasRol() {
-  ['th-acciones-inv', 'th-acciones-desp', 'th-acciones-inv-crud', 'th-acciones-desp-crud'].forEach(id => {
+  ['th-acciones-inv', 'th-acciones-desp', 'th-acciones-desp-crud'].forEach(id => {
     const th = document.getElementById(id);
     if (th) th.style.display = 'table-cell';
   });
 }
 
+/** KPI del turno: tamaño del listado y, si el API envía flags, registro Colbeef del día vs pendiente. */
+function actualizarKpiTurno() {
+  const elPlan = document.getElementById('kpi-plan-total');
+  const elCon = document.getElementById('kpi-con-parte');
+  const elPend = document.getElementById('kpi-pend-parte');
+  const wrap = document.getElementById('kpi-turno');
+  if (!elPlan || !elCon || !elPend || !wrap) return;
+  const libs = (datosLibrillos || []).filter(esVistaHistorialLibrillos);
+  const crudas = (datosCrudasHist || []).filter(esVistaHistorialCrudasSolo);
+  const nLib = libs.length;
+  const nCrud = crudas.length;
+  const nTot = nLib + nCrud;
+  if (!nTot) {
+    elPlan.textContent = '0';
+    elCon.textContent = '0';
+    elPend.textContent = '0';
+    wrap.classList.add('kpi-turno--empty');
+    return;
+  }
+  wrap.classList.remove('kpi-turno--empty');
+  elPlan.textContent = String(nLib);
+  elCon.textContent = String(nCrud);
+  elPend.textContent = String(nTot);
+}
+
 // ── FECHAS ────────────────────────────────────────────────────────────────────
 function hoyISO() {
   return diaOperacionISOFromTimestamp(new Date().toISOString());
+}
+
+/** Hora civil 0–23 en America/Bogota. */
+function horaActualBogota() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Bogota',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = parts.find((p) => p.type === 'hour')?.value;
+  return h != null ? parseInt(h, 10) : 12;
+}
+
+/** Resta un día calendario a YYYY-MM-DD (sin depender del huso del navegador). */
+function diaAnteriorISO(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+/**
+ * Día operativo por defecto al abrir la app: hasta las 13:00 (Bogotá) = día anterior;
+ * desde las 13:00 = día actual. Por la mañana revisan cierre del día previo; por la tarde
+ * el trabajo del día en curso (códigos, destinos, observaciones para etiquetas / logística).
+ */
+function fechaOperativaDefectoISO() {
+  const cal = hoyISO();
+  if (horaActualBogota() < 13) return diaAnteriorISO(cal);
+  return cal;
 }
 function formatFecha(f) {
   if (!f) return '—';
@@ -124,7 +1354,9 @@ function formatFechaCorta(iso) {
 }
 function labelFecha(iso) {
   if (!iso) return '';
-  return new Date(iso + 'T00:00:00').toLocaleDateString('es-CO', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  return new Date(`${iso}T00:00:00-05:00`).toLocaleDateString('es-CO', {
+    weekday:'long', day:'numeric', month:'long', year:'numeric'
+  });
 }
 
 /**
@@ -141,34 +1373,183 @@ function diaOperacionISOFromTimestamp(val) {
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
-const hoy = hoyISO();
-// Forzar fecha global a "hoy" (el navegador a veces restaura un valor previo)
+/**
+ * Corte de turno para salidas (0–23, hora Colombia). Salidas entre 00:00 y (hora-1)
+ * cuentan como día operativo anterior (turno que cruza medianoche). Por defecto 6.
+ */
+let HORA_CORTE_TURNO_SALIDA_BOGOTA = 6;
+
+function actualizarLabelCorteTurno() {
+  const el = document.getElementById('inv-corte-turno-label');
+  if (!el) return;
+  const hh = String(HORA_CORTE_TURNO_SALIDA_BOGOTA).padStart(2, '0');
+  el.textContent = `Gestión de librillos y crudas por despacho · corte turno salida ${hh}:00`;
+}
+
+async function cargarConfigOperacion() {
+  try {
+    const r = await fetch(`${API_URL}/config`);
+    if (!r.ok) return;
+    const cfg = await r.json();
+    const n = parseInt(String(cfg?.hora_corte_turno_salida_bogota ?? ''), 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 23) {
+      HORA_CORTE_TURNO_SALIDA_BOGOTA = n;
+      actualizarLabelCorteTurno();
+      renderInventario();
+      filtrarCli();
+      filtrarHistorialLib();
+      filtrarHistorialCrud();
+    }
+  } catch {
+    // fallback a valor por defecto
+  }
+}
+
+function horaEnBogotaParaTimestamp(val) {
+  if (!val) return null;
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Bogota',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(d);
+  const h = parts.find((p) => p.type === 'hour')?.value;
+  return h != null ? parseInt(h, 10) : null;
+}
+
+/**
+ * Día operativo YYYY-MM-DD de una fecha/hora de salida (Colbeef o cava).
+ * Madrugada antes del corte → asignado al día calendario anterior.
+ */
+function diaOperativoSalidaISO(val) {
+  if (!val) return null;
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return null;
+  const cal = diaOperacionISOFromTimestamp(val);
+  if (!cal) return null;
+  const h = horaEnBogotaParaTimestamp(val);
+  if (h == null) return cal;
+  if (h < HORA_CORTE_TURNO_SALIDA_BOGOTA) return diaAnteriorISO(cal);
+  return cal;
+}
+
+const fechaDefectoOperacion = fechaOperativaDefectoISO();
+// Fecha global: regla operativa (mañana = día anterior, tarde = hoy); el usuario puede cambiarla
 const fechaGlobalEl = document.getElementById('fecha-global');
 if (fechaGlobalEl) {
-  fechaGlobalEl.value = hoy;
-  fechaGlobalEl.defaultValue = hoy;
-  fechaGlobalEl.setAttribute('value', hoy);
+  fechaGlobalEl.value = fechaDefectoOperacion;
+  fechaGlobalEl.defaultValue = fechaDefectoOperacion;
+  fechaGlobalEl.setAttribute('value', fechaDefectoOperacion);
+  fechaGlobalEl.title =
+    'Hasta las 13:00 (Hora Colombia) se abre en el día anterior; desde las 13:00, en el día actual. Puede cambiar la fecha manualmente.';
 }
-const fechaRepGenEl = document.getElementById('fecha-rep-gen');
-if (fechaRepGenEl) fechaRepGenEl.value = hoy;
-const fechaRepGenDesdeEl = document.getElementById('fecha-rep-gen-desde');
-const fechaRepGenHastaEl = document.getElementById('fecha-rep-gen-hasta');
-if (fechaRepGenDesdeEl) fechaRepGenDesdeEl.value = hoy;
-if (fechaRepGenHastaEl) fechaRepGenHastaEl.value = hoy;
 const fechaRepCliDesdeEl = document.getElementById('fecha-rep-cli-desde');
 const fechaRepCliHastaEl = document.getElementById('fecha-rep-cli-hasta');
-if (fechaRepCliDesdeEl) fechaRepCliDesdeEl.value = hoy;
-if (fechaRepCliHastaEl) fechaRepCliHastaEl.value = hoy;
-const fechaRepAgrupEl = document.getElementById('fecha-rep-agrup');
-if (fechaRepAgrupEl) {
-  fechaRepAgrupEl.value = hoy;
-  fechaRepAgrupEl.defaultValue = hoy;
+if (fechaRepCliDesdeEl) fechaRepCliDesdeEl.value = fechaDefectoOperacion;
+if (fechaRepCliHastaEl) fechaRepCliHastaEl.value = fechaDefectoOperacion;
+
+const DEFAULT_COLBEEF_UI = {
+  navHistorialHint: 'Plan faena · parte Colbeef',
+  kpiStripTitle:
+    'Cifras según la fecha de la barra superior y el listado del API (unión plan de faena + movimiento Colbeef del mismo día cuando aplica).',
+  kpiLabels: {
+    universo: 'Animales en listado del día',
+    conParte: 'Con registro Colbeef (hoy)',
+    pendiente: 'Pendiente registro (hoy)',
+  },
+  /** Orígenes permitidos para window.postMessage con el usuario (app Inventarios). Vacío = solo se usa externalLinks. */
+  inventariosPostMessageOrigins: [],
+  externalLinks: [],
+};
+let colbeefUiConfig = { ...DEFAULT_COLBEEF_UI };
+
+async function cargarConfigUi() {
+  try {
+    const r = await fetch('/config-ui.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('config');
+    const j = await r.json();
+    colbeefUiConfig = {
+      ...DEFAULT_COLBEEF_UI,
+      ...j,
+      kpiLabels: { ...DEFAULT_COLBEEF_UI.kpiLabels, ...(j.kpiLabels || {}) },
+      inventariosPostMessageOrigins: Array.isArray(j.inventariosPostMessageOrigins)
+        ? j.inventariosPostMessageOrigins
+        : DEFAULT_COLBEEF_UI.inventariosPostMessageOrigins,
+    };
+  } catch {
+    colbeefUiConfig = { ...DEFAULT_COLBEEF_UI };
+  }
+  aplicarConfigUi();
 }
-const fechaRepUnaAgrupEl = document.getElementById('fecha-rep-una-agrup');
-if (fechaRepUnaAgrupEl) {
-  fechaRepUnaAgrupEl.value = hoy;
-  fechaRepUnaAgrupEl.defaultValue = hoy;
+
+function aplicarConfigUi() {
+  const c = colbeefUiConfig;
+  const nh = document.getElementById('nav-hint-historial');
+  if (nh && c.navHistorialHint) nh.textContent = c.navHistorialHint;
+  const kpi = document.getElementById('kpi-turno');
+  if (kpi && c.kpiStripTitle) kpi.setAttribute('title', c.kpiStripTitle);
+  const kl = c.kpiLabels || {};
+  const lu = document.getElementById('kpi-lbl-universo');
+  const lc = document.getElementById('kpi-lbl-con-parte');
+  const lp = document.getElementById('kpi-lbl-pendiente');
+  if (lu && kl.universo) lu.textContent = kl.universo;
+  if (lc && kl.conParte) lc.textContent = kl.conParte;
+  if (lp && kl.pendiente) lp.textContent = kl.pendiente;
+  const links = Array.isArray(c.externalLinks) ? c.externalLinks : [];
+  const back = document.getElementById('btn-ext-back');
+  const home = document.getElementById('btn-ext-home');
+  const construirLinkExternoConUsuario = (rawUrl) => {
+    const raw = String(rawUrl || '').trim();
+    if (!raw) return '';
+    try {
+      const u = new URL(raw, window.location.href);
+      const usuario = detectarUsuarioActivoAnalytics();
+      if (usuario) {
+        // Inventarios puede leer cualquiera de estos aliases.
+        u.searchParams.set('usuario', usuario);
+        u.searchParams.set('login', usuario);
+        u.searchParams.set('inventarios_usuario', usuario);
+      }
+      return u.toString();
+    } catch {
+      return raw;
+    }
+  };
+  const bind = (btn, entry, fallback) => {
+    if (!btn) return;
+    btn.style.display = '';
+    if (entry && entry.url) {
+      const urlConUsuario = construirLinkExternoConUsuario(entry.url);
+      btn.onclick = () => {
+        window.location.href = urlConUsuario || entry.url;
+      };
+      if (entry.title) btn.title = entry.title;
+      const al = entry.ariaLabel || entry.title || '';
+      if (al) btn.setAttribute('aria-label', al);
+      return;
+    }
+    btn.onclick = fallback;
+  };
+  bind(back, links.find((x) => x && x.id === 'back'), () => window.history.back());
+  bind(home, links.find((x) => x && x.id === 'home'), () => window.location.assign('/'));
 }
+
+/** Deep link: ?vista=inventario|historial|… al cargar la página. */
+function aplicarVistaDesdeQueryString() {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const v = (q.get('vista') || '').trim().toLowerCase();
+    if (!v) return;
+    const permitidas = new Set(['historial', 'inventario', 'clientes', 'totales', 'reportes', 'historico']);
+    if (!permitidas.has(v)) return;
+    const nav = document.querySelector(`.nav-item[data-vista="${v}"]`);
+    if (nav) irVista(v, nav);
+  } catch {
+    /* ignore */
+  }
+}
+
 // ── NAVEGACIÓN ────────────────────────────────────────────────────────────────
 function irVista(nombre, btn) {
   document.querySelectorAll('.vista').forEach(v => v.classList.remove('active'));
@@ -177,20 +1558,37 @@ function irVista(nombre, btn) {
   if (!vista) return;
   vista.classList.add('active');
   if (btn) btn.classList.add('active');
-  const titulos = { historial:'Historial', inventario:'Inventario', clientes:'Clientes', reportes:'Reportes' };
+  const titulos = {
+    historial: 'Turno / Detalle',
+    inventario: 'Inventario y despacho',
+    clientes: 'Por cliente',
+    totales: 'Resumen del día',
+    reportes: 'Reportes',
+    historico: 'Historico de cambios',
+  };
   document.getElementById('pg-title').textContent = titulos[nombre] || nombre;
-  document.getElementById('pg-sub').textContent = ['historial','inventario'].includes(nombre) ? labelFecha(document.getElementById('fecha-global').value) : '';
+  let sub = '';
+  if (['historial', 'inventario', 'clientes'].includes(nombre)) {
+    sub = labelFecha(document.getElementById('fecha-global').value);
+  } else if (nombre === 'totales') {
+    sub = labelFecha(document.getElementById('fecha-global').value);
+  }
+  document.getElementById('pg-sub').textContent = sub;
   const fg = document.getElementById('fecha-global');
   const ba = document.getElementById('btn-actualizar');
-  const kpiTop = document.querySelector('.kpi-top');
   if (fg) fg.style.display = '';
   if (ba) ba.style.display = '';
-  if (kpiTop) kpiTop.style.display = '';
   if (nombre === 'inventario') renderInventario();
-  if (nombre === 'reportes') {
-    renderTablaAgrupacionesReportes(datosGlobal);
-    renderResumenControlDia(datosGlobal);
+  if (nombre === 'totales') void actualizarVistaTotales();
+  if (nombre === 'historico') {
+    const fechaBase = document.getElementById('fecha-global')?.value || hoyISO();
+    const fd = document.getElementById('fecha-historico-desde');
+    const fh = document.getElementById('fecha-historico-hasta');
+    if (fd && !fd.value) fd.value = fechaBase;
+    if (fh && !fh.value) fh.value = fechaBase;
+    if (!historicoCambios.length) void cargarHistoricoCambios();
   }
+  trackVista(nombre);
   if (window.innerWidth <= 900) cerrarMenuMovil();
 }
 
@@ -223,6 +1621,7 @@ function cambiarSubtab(tab) {
   } else if (tab === 'crudas-h') {
     if (elC) elC.style.display = 'block';
   }
+  enviarEventoAnalytics({ eventName: 'historial_subtab', meta: { tab } });
 }
 
 // ── SUBTABS INVENTARIO ────────────────────────────────────────────────────────
@@ -241,6 +1640,7 @@ function cambiarSubtabInventario(tab) {
   seleccionados.clear();
   seleccionadosCrud.clear();
   renderInventario();
+  enviarEventoAnalytics({ eventName: 'inventario_subtab', meta: { tab } });
 }
 
 // ── FETCH ─────────────────────────────────────────────────────────────────────
@@ -259,6 +1659,17 @@ async function fetchSalidas() {
     return normalizarListaSalidas(data);
   } catch {
     return [];
+  }
+}
+
+async function fetchResumenMacro(fecha) {
+  if (!fecha) return null;
+  try {
+    const res = await fetch(`${API_URL}/resumen?fecha=${encodeURIComponent(fecha)}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
 }
 
@@ -283,53 +1694,33 @@ async function fetchObservacionesPorFecha(fecha) {
   }
 }
 
+/**
+ * Ya despachado en Colbeef (lista explícita o la global) o salida de cava en trazabilidad
+ * → no debe aparecer como pendiente de despacho en inventario.
+ */
+function productoYaSalidaColbeefOTraz(d, salidasLista = salidasRegistradas) {
+  const id = normalizarIdProducto(d?.id_producto);
+  if (!id) return false;
+  const lista = salidasLista || [];
+  if (lista.some((s) => normalizarIdProducto(s.id_producto) === id && s.fecha_salida)) return true;
+  if (d?.fecha_salida_cava) return true;
+  return false;
+}
+
 function snapshotPendientes(datos, salidas) {
-  const idsDesp = new Set((salidas || []).map(s => normalizarIdProducto(s.id_producto)));
   const lib = (datos || [])
     .filter(esVistaHistorialLibrillos)
-    .filter(d => !idsDesp.has(normalizarIdProducto(d.id_producto)))
+    .filter((d) => !productoYaSalidaColbeefOTraz(d, salidas))
     .map(d => `L:${d.id_producto}||${String(d.observacion || '').trim()}||${d.cliente_destino || ''}`)
     .sort()
     .join('##');
   const crud = (datos || [])
     .filter(esVistaHistorialCrudasSolo)
-    .filter(d => !idsDesp.has(normalizarIdProducto(d.id_producto)))
+    .filter((d) => !productoYaSalidaColbeefOTraz(d, salidas))
     .map(d => `C:${d.id_producto}||${String(d.observacion || '').trim()}`)
     .sort()
     .join('##');
   return `${lib}##${crud}`;
-}
-
-async function refrescarInventarioSiCambio() {
-  const inventarioActiva = document.getElementById('vista-inventario')?.classList.contains('active');
-  if (!inventarioActiva || document.hidden) return;
-  const fecha = document.getElementById('fecha-global')?.value || hoyISO();
-  try {
-    const [datosFresh, salidasFresh] = await Promise.all([
-      fetchPorFecha(fecha),
-      fetchSalidas(),
-    ]);
-    const snapNuevo = snapshotPendientes(datosFresh, salidasFresh);
-    if (_autoInvSnapshot && snapNuevo !== _autoInvSnapshot) {
-      datosGlobal = datosFresh;
-      datosClientes = datosFresh;
-      salidasRegistradas = salidasFresh;
-      separarDatos(datosFresh);
-      seleccionados.clear();
-      seleccionadosCrud.clear();
-      renderInventario();
-      actualizarPanelCuadre();
-      mostrarToast('Inventario actualizado por cambios recientes en observación/salida.', 'ok');
-    }
-    _autoInvSnapshot = snapNuevo;
-  } catch {
-    // silencioso
-  }
-}
-
-function iniciarAutoRefreshInventario() {
-  if (_autoInvTimer) return;
-  _autoInvTimer = setInterval(refrescarInventarioSiCambio, 30000);
 }
 
 async function refrescarGlobal() {
@@ -340,20 +1731,29 @@ async function refrescarGlobal() {
       fetchPorFecha(fecha),
       fetchSalidas(),
     ]);
+    const snapNuevo = snapshotPendientes(datos, salidas);
+    const invActiva = document.getElementById('vista-inventario')?.classList.contains('active');
+    const huboCambioInv =
+      invActiva && _autoInvSnapshot && snapNuevo !== _autoInvSnapshot;
+
     datosGlobal = datos;
     datosClientes = datos;
     salidasRegistradas = salidas;
     separarDatos(datos);
     actualizarEstado(true);
-    actualizarKPIsTop();
     renderHistorialLib(datosLibrillos);
+    actualizarKpiTurno();
     renderHistorialCrudas(datosCrudasHist);
-    renderTablaClientes(datosClientes);
+    filtrarCli();
+    if (huboCambioInv) {
+      seleccionados.clear();
+      seleccionadosCrud.clear();
+      mostrarToast('Inventario actualizado por cambios recientes en observación/salida.', 'ok');
+    }
     renderInventario();
-    renderTablaAgrupacionesReportes(datosGlobal);
-    renderResumenControlDia(datosGlobal);
     actualizarPanelCuadre();
     poblarSelectReporteCliente(datos);
+    _autoInvSnapshot = snapNuevo;
   } catch {
     // silencioso: conservar último estado visible
   }
@@ -361,18 +1761,32 @@ async function refrescarGlobal() {
 
 function iniciarAutoRefreshGlobal() {
   if (_autoGlobalTimer) return;
-  _autoGlobalTimer = setInterval(refrescarGlobal, 30000);
+  _autoGlobalTimer = setInterval(refrescarGlobal, AUTO_REFRESH_DATOS_MS);
 }
 
+/** Listado del reporte: códigos API con etiqueta tipo hoja Excel (ASURCARNES, DERIVADOS, …). */
 function poblarSelectReporteCliente(lista = datosGlobal) {
   const sel = document.getElementById('sel-rep-cliente');
   if (!sel) return;
   const prev = sel.value || '';
-  const clientes = [...new Set((lista || []).map(d => String(d.cliente_destino || '').trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, 'es'));
-  sel.innerHTML = '<option value="">Todos los clientes</option>' +
-    clientes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-  if (prev && clientes.includes(prev)) sel.value = prev;
+  const porCodigo = new Map();
+  (lista || []).forEach((d) => {
+    const cod = String(d?.agrupacion_codigo != null && d.agrupacion_codigo !== '' ? d.agrupacion_codigo : 'asurcarnes').trim() || 'asurcarnes';
+    const etiqueta = etiquetaAgrupacionMacro(d);
+    if (!porCodigo.has(cod)) porCodigo.set(cod, etiqueta);
+  });
+  const ordenados = [...porCodigo.entries()].sort((a, b) => {
+    const ia = ORDEN_MACRO_REPORTE.indexOf(a[1]);
+    const ib = ORDEN_MACRO_REPORTE.indexOf(b[1]);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return String(a[1]).localeCompare(String(b[1]), 'es');
+  });
+  sel.innerHTML = '<option value="">Todas las agrupaciones</option>' +
+    ordenados.map(([cod, etiqueta]) => {
+      const esc = String(cod).replace(/\\/g, '\\\\').replace(/"/g, '&quot;');
+      return `<option value="${esc}">${escapeHtml(etiqueta)}</option>`;
+    }).join('');
+  if (prev && porCodigo.has(prev)) sel.value = prev;
 }
 
 function rangoFechasISO(desde, hasta) {
@@ -387,6 +1801,12 @@ function rangoFechasISO(desde, hasta) {
 }
 
 async function fetchDatosRango(desde, hasta) {
+  try {
+    const res = await fetch(`${API_URL}?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`);
+    if (res.ok) return res.json();
+  } catch {
+    /* sin endpoint / red */
+  }
   const fechas = rangoFechasISO(desde, hasta);
   const chunks = await Promise.all(fechas.map(f => fetchPorFecha(f).catch(() => [])));
   const all = chunks.flat();
@@ -414,6 +1834,7 @@ function resumenAgrupacionesClienteDestino(lista = datosGlobal) {
     'asurcarnes',
     'cat',
     'derivados_carnicos',
+    'cocidos',
     'otros',
     'sin_destino',
   ];
@@ -424,6 +1845,7 @@ function resumenAgrupacionesClienteDestino(lista = datosGlobal) {
     asurcarnes: 'Asurcarnes',
     cat: 'CAT',
     derivados_carnicos: 'Derivados cárnicos',
+    cocidos: 'Cocidos',
     otros: 'Otros',
     sin_destino: 'Sin destino (retiro)',
   };
@@ -432,8 +1854,7 @@ function resumenAgrupacionesClienteDestino(lista = datosGlobal) {
   orden.forEach(k => m.set(k, { codigo: k, etiqueta: etiquetas[k], total: 0 }));
 
   (lista || []).forEach(d => {
-    if (!esVistaHistorialLibrillos(d)) return;
-    const c = String(d?.agrupacion_codigo || 'otros').trim() || 'otros';
+    const c = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
     if (!m.has(c)) m.set(c, { codigo: c, etiqueta: String(d?.agrupacion || c), total: 0 });
     m.get(c).total += 1;
   });
@@ -445,50 +1866,143 @@ function resumenAgrupacionesClienteDestino(lista = datosGlobal) {
   return [...base, ...extras].filter(x => x.total > 0);
 }
 
-function renderTablaAgrupacionesReportes(lista = datosGlobal) {
-  const tb = document.getElementById('tbody-rep-agrup');
-  const lbl = document.getElementById('rep-agrup-total');
-  if (!tb) return;
-  const rows = resumenAgrupacionesClienteDestino(lista);
-  const total = rows.reduce((s, r) => s + Number(r.total || 0), 0);
-  if (lbl) lbl.textContent = `${total} librillos`;
-  if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="2" class="empty">Sin datos para agrupaciones</td></tr>';
-    return;
-  }
-  tb.innerHTML = rows.map(r => `<tr>
-      <td>${escapeHtml(r.etiqueta || r.codigo || '—')}</td>
-      <td style="font-weight:700">${Number(r.total || 0)}</td>
-    </tr>`).join('');
-}
+/** HTML del cuadro «Resumen de libros y chunchullas crudas» (solo Reporte general / export). */
+function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
+  const rm = opts?.resumenMacro || null;
+  // En macro, varios "cocidos" llegan sin observacion y el backend los deja como
+  // asurcarnes por default. Para que el cuadro cuadre con la hoja operativa,
+  // reclasificamos localmente esos casos al generar este bloque.
+  const codigosBase = new Set([
+    'asurcarnes_glo',
+    'asurcarnescol',
+    'global_hides',
+    'asurcarnes',
+    'cat',
+    'derivados_carnicos',
+    'cocidos',
+    'otros',
+    'sin_destino',
+  ]);
+  const conteoAgr = new Map();
+  const sumarAgr = (codigo, n = 1) => {
+    const c = String(codigo || '').trim();
+    if (!c) return;
+    conteoAgr.set(c, Number(conteoAgr.get(c) || 0) + Number(n || 0));
+  };
+  (lista || []).forEach((d) => {
+    const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
+    const obs = textoObservacionFuente(d);
+    const obsVacia = !obs;
+    const codAjustado = (codRaw === 'asurcarnes' && obsVacia) ? 'cocidos' : codRaw;
+    sumarAgr(codigosBase.has(codAjustado) ? codAjustado : codRaw, 1);
+  });
+  const mapAgr = conteoAgr;
+  const totalCrudas = rm
+    ? Number(rm?.categorias?.chunchullas_crudas || 0)
+    : (lista || []).filter((d) =>
+        /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''))
+      ).length;
 
-function renderResumenControlDia(lista = datosGlobal) {
-  const tb = document.getElementById('tbody-rep-control-dia');
-  const lbl = document.getElementById('rep-control-dia-total');
-  if (!tb) return;
-
-  const rowsAgr = resumenAgrupacionesClienteDestino(lista);
-  const mapAgr = new Map(rowsAgr.map(r => [String(r.codigo || ''), Number(r.total || 0)]));
-  const totalCrudas = (lista || []).filter(esVistaHistorialCrudasSolo).length;
-  const totalCocidos = (lista || []).filter(d => {
-    const c = clasificarRegistro(d || {});
-    return c.viscera && !c.visceraCruda && !c.tieneRetiro;
-  }).length;
-
-  const vAsurGlo = mapAgr.get('asurcarnes_glo') || 0;
-  const vAsurCol = mapAgr.get('asurcarnescol') || 0;
-  const vGlobal = mapAgr.get('global_hides') || 0;
-  const vAsur = mapAgr.get('asurcarnes') || 0;
-  const vCat = mapAgr.get('cat') || 0;
-  const vDeriv = mapAgr.get('derivados_carnicos') || 0;
+  const vAsurGlo = rm ? Number(rm?.categorias?.asurcarnes_glo || 0) : (mapAgr.get('asurcarnes_glo') || 0);
+  const vAsurCol = rm ? Number(rm?.categorias?.asurcarnescol || 0) : (mapAgr.get('asurcarnescol') || 0);
+  const vGlobal = rm ? Number(rm?.categorias?.global_hides || 0) : (mapAgr.get('global_hides') || 0);
+  const vAsur = rm ? Number(rm?.categorias?.asurcarnes || 0) : (mapAgr.get('asurcarnes') || 0);
+  const vCat = rm ? Number(rm?.categorias?.cat || 0) : (mapAgr.get('cat') || 0);
+  const vDeriv = rm ? Number(rm?.categorias?.derivados || 0) : (mapAgr.get('derivados_carnicos') || 0);
+  const totalCocidos = rm ? Number(rm?.categorias?.cocidos || 0) : (mapAgr.get('cocidos') || 0);
   const vOtros = mapAgr.get('otros') || 0;
   const vSinDestino = mapAgr.get('sin_destino') || 0;
 
-  const totalLibros = rowsAgr.reduce((s, r) => s + Number(r.total || 0), 0);
-  const totalGeneral = totalLibros + totalCocidos;
-  if (lbl) lbl.textContent = `Total: ${totalGeneral}`;
+  const totalLibros = rm ? Number(rm?.categorias?.total || 0) : (lista || []).length;
+  const totalGeneral = totalLibros;
+  const fechaSel =
+    String(opts.fechaReporte || opts.fechaISO || '').trim() ||
+    document.getElementById('fecha-global')?.value ||
+    hoyISO();
 
-  tb.innerHTML = `
+  const resumenEstado = (items) => {
+    let despDia = 0;
+    let pendiente = 0;
+    let otroDia = 0;
+    (items || []).forEach((d) => {
+      const ts = salidaEfectivaTimestamp(d.id_producto, d);
+      if (!ts) {
+        pendiente += 1;
+        return;
+      }
+      const dia = diaOperativoSalidaISO(ts);
+      if (dia === fechaSel) despDia += 1;
+      else otroDia += 1;
+    });
+    return { despDia, pendiente, otroDia };
+  };
+
+  /**
+   * Resumen de libros (cuadro derecho tipo macro INICIO):
+   * - CRUDOS    = CAT + ASURCARNESCOL (+ ajustes I4-J4 del libro; aquí 0)
+   * - COCIDOS   = COCIDOS (menos CAVA K5; aquí 0)
+   * - DERIVADOS = DERIVADOS + ASURCARNES + GLOBAL HIDES (+ ajustes I6-J6; aquí 0)
+   * - TOTAL     = suma filas (no necesariamente igual al total general de vísceras)
+   */
+  const ajustesCrudos = 0;
+  const ajustesDerivados = 0;
+  const cavaCocidos = 0;
+  const totalCrudosMacro = rm
+    ? Number(rm?.resumen_libros?.crudos || 0)
+    : (vCat + vAsurCol + ajustesCrudos);
+  const totalCocidosMacro = rm
+    ? Number(rm?.resumen_libros?.cocidos || 0)
+    : Math.max(0, totalCocidos - cavaCocidos);
+  const totalDerivadosMacro = rm
+    ? Number(rm?.resumen_libros?.derivados || 0)
+    : (vDeriv + vAsur + vGlobal + ajustesDerivados);
+  /** Subtotal tipo hoja INICIO (solo tres filas; no incluye ASURCARNESGLO ni otros códigos). */
+  const totalSubInicio = rm
+    ? Number(rm?.resumen_libros?.total || 0)
+    : (totalCrudosMacro + totalCocidosMacro + totalDerivadosMacro);
+  /**
+   * Lo que falta para igualar el total de categorías comerciales (p. ej. ASURCARNESGLO, otros/sin destino).
+   * Así el TOTAL del segundo cuadro coincide con el de la primera tabla.
+   */
+  const deltaRestoComercial = Math.max(0, totalGeneral - totalSubInicio - vAsurGlo);
+  const totalLibrosMacro = totalGeneral;
+  // Nuevo armado solicitado por usuario para la tabla "Resumen de libros".
+  const totalFilaCocidos = Number(totalCocidos || 0);
+  const totalFilaDerivados = Number(vDeriv || 0) + Number(vAsur || 0);
+  const totalFilaCat = Number(vCat || 0) + Number(vAsurCol || 0);
+  const totalFilaGlobalHides = Number(vGlobal || 0) + Number(vAsurGlo || 0);
+  const totalTablaLibros =
+    totalFilaCocidos + totalFilaDerivados + totalFilaCat + totalFilaGlobalHides;
+
+  /**
+   * Partición disjunta operativa (para columnas Pendientes/Salió/Despachado).
+   */
+  const listaCocidos = (lista || []).filter(
+    (d) => String(d?.agrupacion_codigo || '') === 'cocidos'
+  );
+  const listaDerivados = (lista || []).filter(
+    (d) => esVistaHistorialLibrillos(d) && String(d?.agrupacion_codigo || '') === 'derivados_carnicos'
+  );
+  const listaCrudosLib = (lista || []).filter(
+    (d) =>
+      esVistaHistorialLibrillos(d) &&
+      String(d?.agrupacion_codigo || '') !== 'cocidos' &&
+      String(d?.agrupacion_codigo || '') !== 'derivados_carnicos'
+  );
+  const cubiertos = new Set(
+    [...listaCrudosLib, ...listaCocidos, ...listaDerivados].map((d) => String(d?.id_producto ?? ''))
+  );
+  const listaRestoLib = (lista || []).filter((d) => !cubiertos.has(String(d?.id_producto ?? '')));
+  const estCr = resumenEstado(listaCrudosLib);
+  const estCo = resumenEstado(listaCocidos);
+  const estDe = resumenEstado(listaDerivados);
+  const estRe = resumenEstado(listaRestoLib);
+  const listaLibrillosHoy = (lista || []).filter(esVistaHistorialLibrillos);
+  const listaCrudasHoy = (lista || []).filter(esVistaHistorialCrudasSolo);
+  const estLibrillosHoy = resumenEstado(listaLibrillosHoy);
+  const estCrudasHoy = resumenEstado(listaCrudasHoy);
+
+  const tbody = `
     <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td>${totalCrudas}</td></tr>
     <tr class="resumen-dia-asur-glo"><td>ASURCARNESGLO</td><td>${vAsurGlo}</td></tr>
     <tr class="resumen-dia-asur-col"><td>ASURCARNESCOL</td><td>${vAsurCol}</td></tr>
@@ -500,17 +2014,60 @@ function renderResumenControlDia(lista = datosGlobal) {
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
     <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
   `;
+  return `
+    <div class="rep-bloque-resumen-lch">
+      <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
+      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
+      <div class="tw rep-table-wrap">
+        <table class="dt resumen-dia-table" style="max-width:520px">
+          <thead><tr><th>Categoría</th><th>Total</th></tr></thead>
+          <tbody>${tbody}</tbody>
+        </table>
+      </div>
+      <div class="tw rep-table-wrap" style="margin-top:14px">
+        <p class="rep-bloque-resumen-meta" style="margin:0 0 8px;font-size:12px;color:var(--tx3)">
+          COCIDOS = COCIDOS · DERIVADOS = DERIVADOS + ASURCARNES · CAT = CAT + ASURCARNESCOL ·
+          GLOBAL HIDES = GLOBAL HIDES + ASURCARNESGLO.
+        </p>
+        <table class="dt" style="max-width:460px">
+          <thead>
+            <tr>
+              <th>Resumen de libros</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>COCIDOS</td><td>${totalFilaCocidos}</td></tr>
+            <tr><td>DERIVADOS</td><td>${totalFilaDerivados}</td></tr>
+            <tr><td>CAT</td><td>${totalFilaCat}</td></tr>
+            <tr><td>GLOBAL HIDES</td><td>${totalFilaGlobalHides}</td></tr>
+            <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalTablaLibros}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 function salidaUltimaEnRango(idProducto, salidas, desde, hasta) {
   const rows = (salidas || [])
     .filter(s => s.id_producto === idProducto && s.fecha_salida)
     .filter(s => {
-      const dia = diaOperacionISOFromTimestamp(s.fecha_salida);
+      const dia = diaOperativoSalidaISO(s.fecha_salida);
       return dia && dia >= desde && dia <= hasta;
     })
     .sort((a, b) => new Date(b.fecha_salida) - new Date(a.fecha_salida));
   return rows[0]?.fecha_salida || null;
+}
+
+/** Colbeef en rango o, si no hay, salida de cava cuyo día operativo cae en [desde,hasta]. */
+function salidaDisplayEnRango(idProducto, salidas, desde, hasta, dRow) {
+  const colb = salidaUltimaEnRango(idProducto, salidas, desde, hasta);
+  if (colb) return colb;
+  if (dRow?.fecha_salida_cava) {
+    const dia = diaOperativoSalidaISO(dRow.fecha_salida_cava);
+    if (dia && dia >= desde && dia <= hasta) return dRow.fecha_salida_cava;
+  }
+  return null;
 }
 
 function validarRangoReportes(desde, hasta) {
@@ -525,47 +2082,422 @@ function validarRangoReportes(desde, hasta) {
   return true;
 }
 
+function vistaReporteCliente() {
+  // Reportes queda fijo en modo resumido.
+  return 'resumen';
+}
+
+/** Totales: un día = fecha global, vista resumida fija. */
+async function actualizarVistaTotales() {
+  return runWithAppLoader('Cargando resumen del dia...', async () => {
+    const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+    let datos;
+    let salidas;
+    let resumenMacro = null;
+    try {
+      [datos, salidas, resumenMacro] = await Promise.all([
+        fetchPorFecha(fecha),
+        fetchSalidas(),
+        fetchResumenMacro(fecha),
+      ]);
+      if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
+        throw new Error('Resumen macro no disponible');
+      }
+    } catch (e) {
+      mostrarToast('No se pudo cargar el resumen macro estricto. Intenta actualizar.', 'err');
+      const prev = document.getElementById('rep-preview');
+      const body = document.getElementById('rep-prev-body');
+      const t = document.getElementById('rep-prev-title');
+      if (prev && body) {
+        if (t) t.textContent = 'Totales';
+        body.innerHTML = '<p class="empty" style="padding:24px;text-align:center">Error al cargar datos.</p>';
+        prev.style.display = 'block';
+      }
+      return false;
+    }
+    const prev = document.getElementById('rep-preview');
+    const body = document.getElementById('rep-prev-body');
+    const t = document.getElementById('rep-prev-title');
+    if (!prev || !body) return false;
+    if (t) t.textContent = 'Totales';
+    if (!datos.length) {
+      body.innerHTML =
+        `<p class="empty" style="padding:24px;text-align:center">Sin datos para <strong>${escapeHtml(labelFecha(fecha))}</strong>.</p>`;
+      prev.style.display = 'block';
+      prev.scrollIntoView({ behavior: 'smooth' });
+      return false;
+    }
+    mostrarPreview('Totales', labelFecha(fecha), fecha, datos, salidas, {
+      desde: fecha,
+      hasta: fecha,
+      vistaReporte: 'resumen',
+      incluirResumenLibrosChunchullas: true,
+      ocultarKpis: true,
+      modoTotalesSimple: true,
+      resumenMacro,
+    });
+    return true;
+  });
+}
+
+async function descargarExcelTotales() {
+  const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+  const desde = fecha;
+  const hasta = fecha;
+  let datos;
+  try {
+    datos = await fetchPorFecha(fecha);
+  } catch (e) {
+    mostrarToast(String(e.message || e) || 'Error al cargar', 'err');
+    return;
+  }
+  if (!datos.length) {
+    mostrarToast('Sin datos para exportar', 'err');
+    return;
+  }
+  const marca = await obtenerMarcaExportColbeefImgHtml({ paraExcel: true });
+  const salidas = await fetchSalidas();
+  const rows = [...datos].sort((a, b) =>
+    String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+  );
+  const n = rows.length;
+  const gen = new Date().toLocaleString('es-CO');
+  const NC = 14;
+  const body = rows.map((d) => {
+    const salTxt = textoSalidaReporteExport(d, salidas, desde, hasta);
+    const diaOp = d.fecha ? formatFechaSolo(String(d.fecha)) : '—';
+    return `<tr>
+      <td>${escapeHtml(d.id_producto || '—')}</td>
+      <td>${escapeHtml(String(d.identificacion || '').trim() || '—')}</td>
+      <td>${escapeHtml(tipoOperacionTexto(d))}</td>
+      <td>${escapeHtml(d.propietario || '—')}</td>
+      <td>${escapeHtml(d.cliente_destino || '—')}</td>
+      <td>${escapeHtml(etiquetaAgrupacionMacro(d))}</td>
+      <td>${escapeHtml(String(d.destino || '').trim() || '—')}</td>
+      <td>${escapeHtml(String(d.sucursal || '').trim() || '—')}</td>
+      <td>${escapeHtml(destinoTabla(d))}</td>
+      <td>${escapeHtml(d.empresa_destino || '—')}</td>
+      <td>${escapeHtml(String(d.observacion || '').trim() || '—')}</td>
+      <td>${escapeHtml(diaOp)}</td>
+      <td>${escapeHtml(formatFecha(d.fecha_ingreso_cava))}</td>
+      <td>${escapeHtml(salTxt)}</td>
+    </tr>`;
+  }).join('');
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+    .rep-xls-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+    .rep-xls-head .rep-export-logo-img{height:24px!important;max-width:90px!important}
+    table{border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11px}
+    th{background:#1a5f35;color:#fff;padding:6px 8px;text-align:left;font-weight:700}
+    td{padding:5px 8px;border:1px solid #ccc;vertical-align:top}
+    .meta td{background:#f5f5f5;font-weight:600;border-color:#bbb}
+    .nota{font-size:10px;color:#444;margin-top:10px;max-width:900px}
+  </style></head><body>
+    <div class="rep-xls-head">${marca}<span style="font-weight:700;color:#333">Totales (día operativo)</span></div>
+    <table border="1">
+      <tr class="meta"><td colspan="${NC}">Fecha: ${escapeHtml(fecha)}</td></tr>
+      <tr class="meta"><td colspan="${NC}">Total registros: ${n} · Generado: ${escapeHtml(gen)}</td></tr>
+      <tr>
+        <th>ID producto</th>
+        <th>Identificación</th>
+        <th>Tipo operación</th>
+        <th>Propietario</th>
+        <th>Cliente destino (comercial)</th>
+        <th>Agrupación (tipo Excel)</th>
+        <th>Destino (código trazabilidad)</th>
+        <th>Sucursal</th>
+        <th>Plaza / ubicación</th>
+        <th>Empresa destino</th>
+        <th>Observación</th>
+        <th>Día operación (registro)</th>
+        <th>Ingreso a cava</th>
+        <th>Salida (despacho o cava)</th>
+      </tr>
+      ${body}
+    </table>
+    <p class="nota"><strong>Nota:</strong> Misma lógica de columnas que el reporte por cliente. «Salida» usa despacho Colbeef en el día o salida de cava en trazabilidad.</p>
+  </body></html>`;
+  descargarExcel(`Totales_${fecha}`, html);
+}
+
+async function descargarPDFTotales() {
+  await actualizarVistaTotales();
+  descargarPDFReporte();
+}
+
+async function imprimirTotalesListo() {
+  if (!document.getElementById('rep-prev-body')?.innerHTML?.trim()) {
+    await actualizarVistaTotales();
+  }
+  imprimirReporte();
+}
+
+/**
+ * Misma estructura que «Resumen del día» (Totales): cuadro macro + tabla resumida o listado detallado.
+ * `resumenMacro` solo aplica a un día sin filtro por código (coincide con el backend /resumen).
+ */
+function buildOptsReporteEstiloTotales(ctx) {
+  const esVistaResumen = ctx.vistaReporte !== 'detalle';
+  /** Una sola agrupación en el selector: solo pivote CLIENTE/PLAZA + auditoría (como la captura), sin cuadro macro ni tabla de movimiento. */
+  const filtroAgr = !!(ctx.agrupacionCodigo && String(ctx.agrupacionCodigo).trim());
+  return {
+    desde: ctx.desde,
+    hasta: ctx.hasta,
+    vistaReporte: esVistaResumen ? 'resumen' : 'detalle',
+    modoTotalesSimple: esVistaResumen && !filtroAgr,
+    incluirResumenLibrosChunchullas: !filtroAgr,
+    soloListasLibrillosPorAgrupacion: filtroAgr,
+    resumenMacro: ctx.resumenMacro || null,
+  };
+}
+
 async function obtenerContextoReporteCliente() {
   const desde = document.getElementById('fecha-rep-cli-desde')?.value;
   const hasta = document.getElementById('fecha-rep-cli-hasta')?.value;
-  const clienteDestino = document.getElementById('sel-rep-cliente')?.value || '';
+  const agrupacionCodigo = document.getElementById('sel-rep-cliente')?.value || '';
   if (!validarRangoReportes(desde, hasta)) return null;
-  const datos = await fetchDatosRango(desde, hasta);
-  const filtrados = clienteDestino ? datos.filter(d => String(d.cliente_destino || '').trim() === clienteDestino) : datos;
-  if (!filtrados.length) {
-    mostrarToast('Sin datos para ese cliente/rango', 'err');
+  const dias = rangoFechasISO(desde, hasta).length;
+  if (dias > 95) {
+    mostrarToast('El rango no puede superar 95 días', 'err');
     return null;
   }
-  const salidas = await fetchSalidas();
-  const titulo = clienteDestino ? `Reporte por Cliente Destino: ${clienteDestino}` : 'Reporte por Cliente Destino';
+  const codFiltro = agrupacionCodigo || '';
+  const cargarMacro =
+    desde === hasta && !codFiltro ? fetchResumenMacro(desde) : Promise.resolve(null);
+  const [datos, salidas, resumenMacro] = await Promise.all([
+    fetchDatosRango(desde, hasta),
+    fetchSalidas(),
+    cargarMacro,
+  ]);
+  const filtrados = codFiltro
+    ? datos.filter((d) => {
+        const c = String(d?.agrupacion_codigo != null && d.agrupacion_codigo !== '' ? d.agrupacion_codigo : 'asurcarnes').trim() || 'asurcarnes';
+        return c === codFiltro;
+      })
+    : datos;
+  if (!filtrados.length) {
+    mostrarToast('Sin datos para esa agrupación en el rango', 'err');
+    return null;
+  }
+  const agrupacionEtiqueta = codFiltro ? etiquetaAgrupacionMacro(filtrados[0]) : '';
+  const titulo = codFiltro
+    ? `Reporte por agrupación: ${agrupacionEtiqueta || codFiltro}`
+    : 'Reporte por agrupación (todos)';
   const etiqueta = `${labelFecha(desde)} a ${labelFecha(hasta)}`;
-  return { desde, hasta, clienteDestino, filtrados, salidas, titulo, etiqueta };
+  const vistaReporte = vistaReporteCliente();
+  return {
+    desde,
+    hasta,
+    agrupacionCodigo: codFiltro,
+    agrupacionEtiqueta,
+    filtrados,
+    salidas,
+    titulo,
+    etiqueta,
+    vistaReporte,
+    resumenMacro,
+  };
 }
 
 async function generarReporteCliente() {
-  const ctx = await obtenerContextoReporteCliente();
-  if (!ctx) return false;
-  mostrarPreview(ctx.titulo, ctx.etiqueta, ctx.hasta, ctx.filtrados, ctx.salidas, { desde: ctx.desde, hasta: ctx.hasta });
-  return true;
+  return runWithAppLoader('Generando vista previa del reporte...', async () => {
+    const ctx = await obtenerContextoReporteCliente();
+    if (!ctx) return false;
+    mostrarPreview(ctx.titulo, ctx.etiqueta, ctx.hasta, ctx.filtrados, ctx.salidas, {
+      ...buildOptsReporteEstiloTotales(ctx),
+      destino: 'reportes',
+      ocultarKpis: true,
+    });
+    return true;
+  });
 }
 
 async function generarReporteGeneralRango() {
-  const desde = document.getElementById('fecha-rep-gen-desde')?.value;
-  const hasta = document.getElementById('fecha-rep-gen-hasta')?.value;
-  if (!validarRangoReportes(desde, hasta)) return;
-  const datos = await fetchDatosRango(desde, hasta);
-  if (!datos.length) {
-    mostrarToast('Sin datos para ese rango', 'err');
-    return;
-  }
-  const salidas = await fetchSalidas();
-  const etiqueta = `${labelFecha(desde)} a ${labelFecha(hasta)}`;
-  mostrarPreview('Reporte General', etiqueta, hasta, datos, salidas, { desde, hasta });
+  return actualizarVistaTotales();
 }
 
 async function descargarPDFReporteCliente() {
-  const ok = await generarReporteCliente();
-  if (ok) descargarPDFReporte();
+  return runWithAppLoader('Generando documento PDF...', async () => {
+    const ok = await generarReporteCliente();
+    if (ok) await descargarPDFReporte();
+  });
+}
+
+function fechaGuiaTexto(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('es-CO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function fmtKg(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return `${n.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} kg`;
+}
+
+function construirHtmlGuiaDespachoPdf(data) {
+  const c = data?.cabecera || {};
+  const detalle = Array.isArray(data?.detalle) ? data.detalle : [];
+  const fechaExp = fechaGuiaTexto(c.fecha_creacion);
+  const fechaVig = fechaGuiaTexto(c.fecha_fin_vigencia);
+  const conductor = c.conductor_nombre || (c.id_conductor != null ? `ID ${c.id_conductor}` : '—');
+  const guiaTransporte = c.numero_guia_transporte_completo || c.numero_guia_transporte || '—';
+  const destinoTxt = c.destinos || (detalle.find((x) => x?.destino)?.destino || '—');
+  const empresaDestino = detalle.find((x) => x?.empresa_destino)?.empresa_destino || '—';
+  const sucursal = detalle.find((x) => x?.sucursal)?.sucursal || '—';
+  const rows = detalle.length
+    ? detalle.map((d, idx) => `
+      <tr>
+        <td>${idx + 1}</td>
+        <td>${escapeHtml(d.id_producto || '—')}</td>
+        <td>${escapeHtml(d.identificacion || '—')}</td>
+        <td>${escapeHtml(d.nombre_parte || '—')}</td>
+        <td>${escapeHtml(d.especie || '—')}</td>
+        <td>${escapeHtml(d.destino || '—')}</td>
+        <td>${escapeHtml(d.sucursal || '—')}</td>
+        <td>${fmtKg(d.peso_despacho)}</td>
+      </tr>
+    `).join('')
+    : `<tr><td colspan="8" style="text-align:center;color:#666">Sin detalle enlazado para esta guía. Se imprime resumen oficial.</td></tr>`;
+
+  return `
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Guia ${escapeHtml(c.codigo || '')}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111;margin:0;padding:18px}
+    .top{display:flex;justify-content:space-between;gap:14px}
+    .brand{font-size:34px;font-weight:800;line-height:1}
+    .brand .a{color:#2c9f45}.brand .b{color:#d43636}
+    .box{border:1px solid #333;padding:8px;font-size:12px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+    .t{width:100%;border-collapse:collapse;margin-top:12px;font-size:11px}
+    .t th,.t td{border:1px solid #333;padding:4px 6px;vertical-align:top}
+    .t th{background:#efefef}
+    .strong{font-weight:700}
+    .tot{margin-top:10px;border:1px solid #333;padding:8px;font-size:12px}
+    .foot{margin-top:18px;font-size:11px}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div class="brand"><span class="a">Col</span><span class="b">beef</span></div>
+      <div style="font-size:12px;margin-top:4px">Guia de transporte de subproductos no comestibles</div>
+    </div>
+    <div class="box">
+      <div><span class="strong">Codigo:</span> ${escapeHtml(c.codigo || '—')}</div>
+      <div><span class="strong">Expedicion:</span> ${escapeHtml(fechaExp)}</div>
+      <div><span class="strong">Vigencia:</span> ${escapeHtml(fechaVig)}</div>
+      <div><span class="strong">Guia transporte:</span> ${escapeHtml(String(guiaTransporte))}</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <div><span class="strong">Responsable:</span> ${escapeHtml(c.responsable || '—')}</div>
+      <div><span class="strong">Usuario registro:</span> ${escapeHtml(c.usuario_guia || '—')}</div>
+      <div><span class="strong">Conservacion:</span> ${escapeHtml(c.conservacion || '—')}</div>
+      <div><span class="strong">Tipo despacho:</span> ${escapeHtml(c.tipo_despacho_nombre || '—')}</div>
+    </div>
+    <div class="box">
+      <div><span class="strong">Conductor:</span> ${escapeHtml(conductor)}</div>
+      <div><span class="strong">Placa:</span> ${escapeHtml(c.placa || '—')}</div>
+      <div><span class="strong">Precinto:</span> ${escapeHtml(c.precinto || '—')}</div>
+      <div><span class="strong">Destino:</span> ${escapeHtml(destinoTxt)}</div>
+    </div>
+  </div>
+
+  <table class="t">
+    <thead>
+      <tr>
+        <th>#</th><th>ID Producto</th><th>ID Animal</th><th>Producto</th><th>Especie</th><th>Destino</th><th>Sucursal</th><th>Peso</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+
+  <div class="tot">
+    <div><span class="strong">Total productos:</span> ${Number(c.total_productos || 0)}</div>
+    <div><span class="strong">Cantidad canal:</span> ${Number(c.cantidad_canal || 0)} &nbsp; | &nbsp;
+         <span class="strong">Cuarto canal:</span> ${Number(c.cantidad_cuarto_canal || 0)} &nbsp; | &nbsp;
+         <span class="strong">Lengua:</span> ${Number(c.cantidad_lengua || 0)}</div>
+    <div><span class="strong">Hallazgos:</span> ${Number(c.hallazgos_productos || 0)}</div>
+    <div><span class="strong">Empresa destino:</span> ${escapeHtml(empresaDestino)} &nbsp; | &nbsp;
+         <span class="strong">Sucursal:</span> ${escapeHtml(sucursal)}</div>
+    <div><span class="strong">Observaciones:</span> ${escapeHtml(c.observaciones_guia || '—')}</div>
+  </div>
+
+  <div class="foot">
+    <div><span class="strong">Texto guia:</span> ${escapeHtml(c.texto_guia_tipo || '—')}</div>
+    <div style="margin-top:8px">Documento generado por Colbeef para control interno de despacho.</div>
+  </div>
+</body>
+</html>
+`;
+}
+
+async function descargarPdfGuiaDespacho() {
+  return runWithAppLoader('Generando guia de despacho en PDF...', async () => {
+    const input = document.getElementById('inp-guia-codigo');
+    const codigo = String(input?.value || '').trim();
+    if (!codigo) {
+      mostrarToast('Ingresa un codigo de guia', 'err');
+      return;
+    }
+
+    let data = null;
+    try {
+      const r = await fetch(`${GUIAS_URL}/${encodeURIComponent(codigo)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      data = j;
+    } catch (e) {
+      mostrarToast(`No se pudo cargar la guia: ${e.message || e}`, 'err');
+      return;
+    }
+
+    const html = construirHtmlGuiaDespachoPdf(data);
+    const host = document.createElement('div');
+    host.style.position = 'fixed';
+    host.style.left = '-10000px';
+    host.style.top = '0';
+    host.style.width = '794px';
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    try {
+      const h2p = await ensureHtml2PdfDisponible();
+      await h2p()
+        .set({
+          margin: 6,
+          filename: `Guia_Despacho_${codigo.replace(/[^\w\-]+/g, '_')}.pdf`,
+          image: { type: 'jpeg', quality: 0.96 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          pagebreak: { mode: ['css', 'legacy'] },
+        })
+        .from(host)
+        .save();
+      mostrarToast('Guia PDF generada', 'ok');
+      enviarEventoAnalytics({
+        eventName: 'export_pdf',
+        viewName: _analyticsViewActual,
+        meta: { archivo: `Guia_Despacho_${codigo}` },
+      });
+    } catch (e) {
+      mostrarToast(`No se pudo generar PDF: ${e.message || e}`, 'err');
+    } finally {
+      try { host.remove(); } catch { /* ignore */ }
+    }
+  });
 }
 
 function descargarExcel(nombre, html) {
@@ -576,48 +2508,378 @@ function descargarExcel(nombre, html) {
   a.click();
   URL.revokeObjectURL(a.href);
   mostrarToast('Excel generado', 'ok');
+  enviarEventoAnalytics({
+    eventName: 'export_excel',
+    viewName: _analyticsViewActual,
+    meta: { archivo: `${nombre}.xls` },
+  });
+}
+
+/**
+ * Marca Colbeef solo en export (no en vista previa).
+ * `paraExcel: true` → texto bicolor (Excel no muestra imágenes data:URL en .xls y las marca como rotas).
+ * `paraExcel: false` (por defecto en HTML descargado) → img embebida, visible en el navegador.
+ */
+async function obtenerMarcaExportColbeefImgHtml(opts = {}) {
+  if (opts.paraExcel === true) {
+    return (
+      '<span style="font-family:Arial Black,Arial,sans-serif;font-size:15px;font-weight:bold;letter-spacing:-0.5px;white-space:nowrap">' +
+      '<span style="color:#2e7d32">Col</span>' +
+      '<span style="color:#c62828">beef</span>' +
+      '</span>'
+    );
+  }
+  let dataUrl = typeof window !== 'undefined' && window.COLBEEF_LOGO_DATA_URL;
+  if (!dataUrl) {
+    try {
+      const href = new URL('assets/colbeef-logo.png', window.location.href).href;
+      const r = await fetch(href, { cache: 'force-cache' });
+      if (r.ok) {
+        const blob = await r.blob();
+        dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = reject;
+          fr.readAsDataURL(blob);
+        });
+      }
+    } catch {
+      dataUrl = null;
+    }
+  }
+  if (!dataUrl) {
+    return (
+      '<span style="font-family:Arial Black,Arial,sans-serif;font-size:15px;font-weight:bold;white-space:nowrap">' +
+      '<span style="color:#2e7d32">Col</span><span style="color:#c62828">beef</span></span>'
+    );
+  }
+  return `<img class="rep-export-logo-img" src="${dataUrl}" alt="Colbeef" style="height:26px;max-width:100px;width:auto;object-fit:contain;vertical-align:middle;border:0;display:inline-block;-ms-interpolation-mode:bicubic" />`;
+}
+
+/** Texto de salida para reporte cliente: despacho en rango, luego salida cava en vista, si no Pendiente. */
+function textoSalidaReporteExport(d, salidas, desde, hasta) {
+  const desp = salidaDisplayEnRango(d.id_producto, salidas, desde, hasta, d);
+  if (desp) return formatFecha(desp);
+  return 'Pendiente';
 }
 
 async function descargarExcelReporteCliente() {
-  const ctx = await obtenerContextoReporteCliente();
-  if (!ctx) return;
-  const rows = [...ctx.filtrados].sort((a, b) =>
+  return runWithAppLoader('Generando archivo Excel...', async () => {
+    const ctx = await obtenerContextoReporteCliente();
+    if (!ctx) return;
+    const opts = buildOptsReporteEstiloTotales(ctx);
+    const logoMarcaHtml = await obtenerMarcaExportColbeefImgHtml({ paraExcel: true });
+    const html = generarHTMLReporte(
+      ctx.titulo,
+      `${labelFecha(ctx.desde)} a ${labelFecha(ctx.hasta)}`,
+      ctx.hasta,
+      ctx.filtrados,
+      ctx.salidas,
+      { ...opts, logoMarcaHtml }
+    );
+    const slug = ctx.agrupacionCodigo ? String(ctx.agrupacionCodigo).replace(/[^\w\-]+/g, '_') : 'Todos';
+    const nombre = `Reporte_Agrupacion_${slug}_${ctx.desde}_a_${ctx.hasta}`;
+    descargarExcel(nombre, html);
+  });
+}
+
+function escapeXml(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function agrCodigoNorm(d) {
+  return String(d?.agrupacion_codigo != null && d.agrupacion_codigo !== '' ? d.agrupacion_codigo : 'asurcarnes')
+    .trim()
+    .toLowerCase() || 'asurcarnes';
+}
+
+function rowsResumenAsurSheet(items, nombreGrupo) {
+  const rows = contarPorClienteComercialPuesto(items || [], nombreGrupo);
+  const out = [];
+  const total = rows.reduce((s, r) => s + Number(r.cantidad || 0), 0);
+  out.push(['CLIENTE / PUESTO', 'CANTIDAD']);
+  if (!rows.length) {
+    out.push(['Sin datos para este grupo en el rango', '0']);
+    return { rows: out, total: 0 };
+  }
+  const byCli = new Map();
+  rows.forEach((r) => {
+    const c = String(r.cliente || 'SIN ASIGNAR');
+    if (!byCli.has(c)) byCli.set(c, []);
+    byCli.get(c).push(r);
+  });
+  [...byCli.keys()].sort((a, b) => a.localeCompare(b)).forEach((cli) => {
+    const sub = byCli.get(cli).sort((a, b) => String(a.ubicacion || '').localeCompare(String(b.ubicacion || '')));
+    const tCli = sub.reduce((s, x) => s + Number(x.cantidad || 0), 0);
+    out.push([String(cli).toUpperCase(), String(tCli)]);
+    sub.forEach((s) => out.push([`  - ${String(s.ubicacion || '—')}`, String(s.cantidad || 0)]));
+  });
+  out.push(['TOTAL GENERAL', String(total)]);
+  return { rows: out, total };
+}
+
+function rowsDetalleAsurSheet(items, nombreGrupo) {
+  const sorted = [...(items || [])].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
   );
-  const body = rows.map(d => {
-    const salida = salidaUltimaEnRango(d.id_producto, ctx.salidas, ctx.desde, ctx.hasta);
-    return `<tr>
-      <td>${escapeHtml(d.id_producto || '—')}</td>
-      <td>${escapeHtml(tipoOperacionTexto(d))}</td>
-      <td>${escapeHtml(d.propietario || '—')}</td>
-      <td>${escapeHtml(d.cliente_destino || '—')}</td>
-      <td>${escapeHtml(d.sucursal || ubicacionPlaza(d) || '—')}</td>
-      <td>${escapeHtml(d.empresa_destino || '—')}</td>
-      <td>${escapeHtml(etiquetaAgrupacion(d))}</td>
-      <td>${escapeHtml(d.observacion || '—')}</td>
-      <td>${escapeHtml(formatFecha(d.fecha_ingreso_cava))}</td>
-      <td>${escapeHtml(salida ? formatFecha(salida) : '—')}</td>
-    </tr>`;
+  const out = [['ID PRODUCTO', 'PROPIETARIO', 'CLIENTE RESUMEN', 'PLAZA / PUESTO', 'OBSERVACION']];
+  sorted.forEach((d) => {
+    const cli = clientePivotMacro(d, nombreGrupo);
+    out.push([
+      String(d?.id_producto || '—'),
+      String(d?.propietario || 'SIN ASIGNAR').toUpperCase(),
+      String(cli || 'SIN ASIGNAR').toUpperCase(),
+      String(puestoPivotMacro(d) || '—'),
+      String(d?.observacion || d?.observaciones || '—'),
+    ]);
+  });
+  return out;
+}
+
+function rowsAsurDualSheet(items, nombreGrupo, fechaISO) {
+  const listSorted = [...(items || [])].sort((a, b) =>
+    String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+  );
+  const resumen = rowsResumenAsurSheet(items || [], nombreGrupo).rows;
+  const leftRows = [
+    [
+      { v: 'Identificación', style: 'sLeftHead' },
+      { v: 'Empresa propietaria', style: 'sLeftHead' },
+      { v: 'Vísceras blancas', style: 'sLeftHead' },
+    ],
+    ...listSorted.map((d, idx) => ([
+      { v: String(d?.id_producto || '—'), style: idx % 2 ? 'sLeftIdAlt' : 'sLeftId' },
+      { v: String(d?.propietario || 'SIN ASIGNAR').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
+      { v: String(puestoPivotMacro(d) || '—').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
+    ])),
+  ];
+
+  const rightRows = [
+    [
+      { v: `LISTA LIBRILLOS ${String(nombreGrupo || '').toUpperCase()}`, style: 'sTitle' },
+      { v: formatFechaCorta(fechaISO), style: 'sTitleDate' },
+    ],
+    ...resumen.map((r, idx) => {
+      const l = String(r?.[0] || '');
+      const q = String(r?.[1] || '');
+      if (/^CLIENTE \/ PUESTO$/i.test(l)) return [{ v: l, style: 'sHeadL' }, { v: q, style: 'sHeadR' }];
+      if (/^TOTAL GENERAL$/i.test(l)) return [{ v: l, style: 'sTotalL' }, { v: q, style: 'sTotalR' }];
+      if (/^\s*-\s+/.test(l)) return [{ v: l, style: 'sChildL' }, { v: q, style: 'sChildR' }];
+      return [{ v: l, style: 'sGroupL' }, { v: q, style: 'sGroupR' }];
+    }),
+  ];
+
+  const rows = [];
+  // Bloque derecho inicia en columnas G/H (7/8), separado del bloque izquierdo.
+  rows.push([
+    { v: 'Colbeef', style: 'sMetaBrand', col: 1 },
+    { v: `LISTA LIBRILLOS ${String(nombreGrupo || '').toUpperCase()}`, style: 'sTitle', col: 7 },
+    { v: formatFechaCorta(fechaISO), style: 'sTitleDate', col: 8 },
+  ]);
+  rows.push([
+    { v: 'CLIENTE / PUESTO', style: 'sHeadL', col: 7 },
+    { v: 'CANTIDAD', style: 'sHeadR', col: 8 },
+  ]);
+
+  // Contenido de ambas tablas con posicionamiento independiente por columna.
+  const maxRows = Math.max(leftRows.length, Math.max(0, rightRows.length - 2));
+  for (let i = 0; i < maxRows; i++) {
+    const rowCells = [];
+    const l = leftRows[i] || null;
+    const r = rightRows[i + 2] || null;
+    if (l) {
+      rowCells.push({ ...l[0], col: 1 }, { ...l[1], col: 2 }, { ...l[2], col: 3 });
+    }
+    if (r) {
+      rowCells.push({ ...r[0], col: 7 }, { ...r[1], col: 8 });
+    }
+    rows.push(rowCells.length ? rowCells : [{ v: '', style: 'sBlank', col: 1 }]);
+  }
+  return rows;
+}
+
+function descargarExcelMultiHojaXml(nombreBase, sheets) {
+  const safeName = String(nombreBase || 'Reporte').replace(/[^\w\-]+/g, '_');
+  const xmlSheets = sheets.map((s) => {
+    const sheetName = String(s.name || 'Hoja').slice(0, 31);
+    let inDetalle = false;
+    let nextDetalleHeader = false;
+    const rowsXml = (s.rows || [])
+      .map((r, rowIdx) => {
+        const row = Array.isArray(r) ? r : [];
+        const first = String(row[0] || '').trim();
+        if (/^DETALLE POR IDs/i.test(first)) {
+          inDetalle = true;
+          nextDetalleHeader = true;
+        }
+        const cells = row.map((c, colIdx) => {
+          const isObj = c && typeof c === 'object' && !Array.isArray(c);
+          const raw = String(isObj ? (c.v ?? c.value ?? '') : c ?? '');
+          const isNum = /^-?\d+(\.\d+)?$/.test(raw.trim());
+          const isRightCol = colIdx > 0;
+          const colIndex = isObj && Number.isFinite(Number(c.col)) ? Number(c.col) : null;
+          let style = isObj && c.style ? String(c.style) : (isRightCol ? 'sCellR' : 'sCellL');
+
+          // Solo inferir estilos cuando la celda no trae estilo explícito.
+          if (!(isObj && c.style)) {
+            if (rowIdx === 0) style = isRightCol ? 'sTitleDate' : 'sTitle';
+            else if (rowIdx === 1 && /^CLIENTE \/ PUESTO$/i.test(first)) style = isRightCol ? 'sHeadR' : 'sHeadL';
+            else if (rowIdx === 1) style = 'sMeta';
+            else if (!raw && row.length <= 1) style = 'sBlank';
+            else if (/^CLIENTE \/ PUESTO$/i.test(first)) style = isRightCol ? 'sHeadR' : 'sHeadL';
+            else if (/^TOTAL GENERAL$/i.test(first)) style = isRightCol ? 'sTotalR' : 'sTotalL';
+            else if (inDetalle && /^DETALLE POR IDs/i.test(first)) style = 'sDetBlock';
+            else if (inDetalle && nextDetalleHeader) style = isRightCol ? 'sDetHeadR' : 'sDetHeadL';
+            else if (inDetalle) style = isRightCol ? 'sDetCellR' : 'sDetCellL';
+            else if (/^\s*-\s+/.test(first)) style = isRightCol ? 'sChildR' : 'sChildL';
+            else style = isRightCol ? 'sGroupR' : 'sGroupL';
+          }
+
+          if (nextDetalleHeader) nextDetalleHeader = false;
+          const idxAttr = colIndex && colIndex > 1 ? ` ss:Index="${colIndex}"` : '';
+          if (isObj && c.type === 'string') {
+            return `<Cell${idxAttr} ss:StyleID="${style}"><Data ss:Type="String">${escapeXml(raw)}</Data></Cell>`;
+          }
+          if (isNum && Number.isFinite(Number(raw))) {
+            return `<Cell${idxAttr} ss:StyleID="${style}"><Data ss:Type="Number">${Number(raw)}</Data></Cell>`;
+          }
+          return `<Cell${idxAttr} ss:StyleID="${style}"><Data ss:Type="String">${escapeXml(raw)}</Data></Cell>`;
+        }).join('');
+        return `<Row>${cells}</Row>`;
+      })
+      .join('');
+    return `<Worksheet ss:Name="${escapeXml(sheetName)}">
+      <Table>
+        <Column ss:AutoFitWidth="0" ss:Width="320"/>
+        <Column ss:AutoFitWidth="0" ss:Width="110"/>
+        <Column ss:AutoFitWidth="0" ss:Width="240"/>
+        <Column ss:AutoFitWidth="0" ss:Width="240"/>
+        <Column ss:AutoFitWidth="0" ss:Width="260"/>
+        ${rowsXml}
+      </Table>
+    </Worksheet>`;
   }).join('');
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>
-    <table border="1">
-      <tr><th colspan="10">COLBEEF - ${escapeHtml(ctx.titulo)}</th></tr>
-      <tr><th colspan="10">Rango: ${escapeHtml(ctx.desde)} a ${escapeHtml(ctx.hasta)}</th></tr>
-      <tr>
-        <th>ID Lote</th><th>Tipo</th><th>Propietario</th><th>Cliente Comercial</th>
-        <th>Sucursal</th><th>Empresa Destino</th><th>Agrupacion</th><th>Observacion</th>
-        <th>Ingreso Cava</th><th>Salida</th>
-      </tr>
-      ${body}
-    </table>
-  </body></html>`;
-  const nombre = `Reporte_Cliente_Destino_${ctx.clienteDestino ? ctx.clienteDestino.replace(/\s+/g, '_') : 'Todos'}_${ctx.desde}_a_${ctx.hasta}`;
-  descargarExcel(nombre, html);
+
+  const xml = `<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Default" ss:Name="Normal">
+      <Alignment ss:Vertical="Center"/>
+      <Borders/>
+      <Font ss:FontName="Calibri" ss:Size="11"/>
+      <Interior/>
+      <NumberFormat/>
+      <Protection/>
+    </Style>
+    <Style ss:ID="sBlank"><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sTitle">
+      <Font ss:Bold="1" ss:Size="13"/>
+      <Interior ss:Color="#C8E6C9" ss:Pattern="Solid"/>
+      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+    </Style>
+    <Style ss:ID="sTitleDate">
+      <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+      <Font ss:Bold="1" ss:Size="13"/>
+      <Interior ss:Color="#C8E6C9" ss:Pattern="Solid"/>
+      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+    </Style>
+    <Style ss:ID="sMeta"><Font ss:Bold="1"/><Interior ss:Color="#E8F5E9" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sHeadL">
+      <Font ss:Bold="1" ss:Color="#111111"/>
+      <Interior ss:Color="#E1BEE7" ss:Pattern="Solid"/>
+      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+    </Style>
+    <Style ss:ID="sHeadR">
+      <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+      <Font ss:Bold="1" ss:Color="#111111"/>
+      <Interior ss:Color="#E1BEE7" ss:Pattern="Solid"/>
+      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+    </Style>
+    <Style ss:ID="sGroupL"><Font ss:Bold="1"/><Interior ss:Color="#FFB74D" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sGroupR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Color="#D50000"/><Interior ss:Color="#FFB74D" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sChildL"><Interior ss:Color="#DCEAF7" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sChildR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Interior ss:Color="#DCEAF7" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sTotalL"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1" ss:Size="14"/><Interior ss:Color="#FF66FF" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sTotalR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Size="14"/><Interior ss:Color="#FF66FF" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sCellL"><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E2DC"/></Borders></Style>
+    <Style ss:ID="sCellR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E2DC"/></Borders></Style>
+    <Style ss:ID="sDetBlock"><Font ss:Bold="1"/><Interior ss:Color="#F3E5F5" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sDetHeadL"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#455A64" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sDetHeadR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#455A64" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sDetCellL"><Interior ss:Color="#FAFAFA" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sDetCellR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Interior ss:Color="#FAFAFA" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sMetaBrand"><Font ss:Bold="1" ss:Color="#1A7A42"/></Style>
+    <Style ss:ID="sLeftHead"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#C8E6C9" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sLeftCell"><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sLeftCellAlt"><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sLeftId"><Font ss:Color="#C0392B" ss:Bold="1"/><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sLeftIdAlt"><Font ss:Color="#C0392B" ss:Bold="1"/><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/></Style>
+  </Styles>
+  ${xmlSheets}
+</Workbook>`;
+
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${safeName}.xls`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  mostrarToast('Excel multihoja generado', 'ok');
+}
+
+async function descargarExcelAsurEspecial(modo = 'resumen') {
+  return runWithAppLoader('Generando Excel especial de Asurcarnes...', async () => {
+    const desde = document.getElementById('fecha-rep-cli-desde')?.value;
+    const hasta = document.getElementById('fecha-rep-cli-hasta')?.value;
+    if (!validarRangoReportes(desde, hasta)) return;
+    const dias = rangoFechasISO(desde, hasta).length;
+    if (dias > 95) {
+      mostrarToast('El rango no puede superar 95 días', 'err');
+      return;
+    }
+    const datos = await fetchDatosRango(desde, hasta);
+    const base = (datos || []).filter(esVistaHistorialLibrillos);
+    const grupos = [
+      { code: 'asurcarnes', name: 'ASURCARNES' },
+      { code: 'asurcarnesglo', name: 'ASURCARNESGLO' },
+      { code: 'asurcarnescol', name: 'ASURCARNESCOL' },
+    ];
+    const sheets = grupos.map((g) => {
+      const items = base.filter((d) => agrCodigoNorm(d) === g.code);
+      const resumen = rowsResumenAsurSheet(items, g.name);
+      let rows;
+      if (modo === 'resumen_detalle') {
+        rows = rowsAsurDualSheet(items, g.name, hasta);
+      } else {
+        rows = [[`LISTA LIBRILLOS ${g.name}`, formatFechaCorta(hasta)], ...resumen.rows];
+      }
+      return { name: g.name, rows };
+    });
+    const totalData = sheets.reduce((s, sh) => s + (sh.rows.length > 5 ? 1 : 0), 0);
+    if (!totalData) {
+      mostrarToast('Sin datos ASURCARNES/ASURCARNESGLO/ASURCARNESCOL en el rango', 'err');
+      return;
+    }
+    const suf = modo === 'resumen_detalle' ? 'resumen_detalle' : 'resumen';
+    descargarExcelMultiHojaXml(`Reporte_Asurcarnes_3hojas_${suf}_${desde}_a_${hasta}`, sheets);
+    enviarEventoAnalytics({
+      eventName: 'export_excel',
+      viewName: _analyticsViewActual,
+      meta: { archivo: `Asurcarnes 3 hojas (${suf})`, desde, hasta },
+    });
+  });
 }
 
 async function descargarPDFReporteGeneralRango() {
-  await generarReporteGeneralRango();
-  descargarPDFReporte();
+  await descargarPDFTotales();
 }
 
 function snapshotObservaciones(datos) {
@@ -680,63 +2942,433 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
   return cambios;
 }
 
-function mensajeCambiosObservacion(cambios) {
-  if (!cambios.length) return 'Cambio detectado en observación. Datos actualizados.';
-  if (cambios.length === 1) {
-    const c = cambios[0];
-    const a = c.antes || '—';
-    const d = c.despues || '—';
-    return `${c.tipo} ${c.id}: observación "${a}" -> "${d}"`;
-  }
-  const top = cambios
-    .slice(0, 3)
-    .map(c => `${c.tipo} ${c.id}`)
-    .join(', ');
-  const extra = cambios.length > 3 ? ` y ${cambios.length - 3} más` : '';
-  return `Cambios en observación: ${top}${extra}`;
+/** Texto breve para el toast; el detalle está en el modal (clic en la notificación). */
+function textoToastCambiosObservacion(cantidad) {
+  const n = Number(cantidad) || 0;
+  if (n <= 0) return 'Cambios en observación. Ver más.';
+  if (n === 1) return '1 cambio en observación. Ver más.';
+  return `${n} cambios en observación. Ver más.`;
 }
 
-function registrarCambiosObservacion(cambios) {
+/**
+ * Registra cambios para el modal / historial.
+ * `momentoPorId`: ISO desde a_parte_producto.fecha (última fila del día por ID) — hora del registro en trazabilidad.
+ * `detectado_en` queda como respaldo si no hay timestamp en BD.
+ */
+function registrarCambiosObservacion(cambios, momentoPorId = new Map()) {
   if (!cambios?.length) return;
-  const ahora = new Date().toISOString();
-  const nuevos = cambios.map(c => ({ ...c, detectado_en: ahora }));
+  const detectadoApp = new Date().toISOString();
+  const nuevos = cambios.map((c) => {
+    const id = String(c.id);
+    const momentoBd = momentoPorId.get(id) || null;
+    return {
+      ...c,
+      momento_bd: momentoBd,
+      detectado_en: detectadoApp,
+    };
+  });
   historialCambiosObs = [...nuevos, ...historialCambiosObs].slice(0, 300);
+  guardarHistorialCambiosObsLS();
   return nuevos;
 }
 
-function abrirModalCambiosObs(cambios = null) {
-  const modal = document.getElementById('modal-cambios-obs');
-  const tbody = document.getElementById('tbody-cambios-obs');
-  if (!modal || !tbody) return;
-  const lista = Array.isArray(cambios) && cambios.length ? cambios : historialCambiosObs;
-  if (!lista.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">Sin cambios detectados</td></tr>';
-    modal.classList.add('open');
-    return;
+function guardarHistorialCambiosObsLS() {
+  try {
+    localStorage.setItem(LS_HIST_OBS, JSON.stringify(historialCambiosObs.slice(0, 300)));
+  } catch {
+    // silencioso
   }
-  tbody.innerHTML = lista.map(c => {
-    const hora = c.detectado_en ? formatFecha(c.detectado_en) : '—';
+}
+
+function cargarHistorialCambiosObsLS() {
+  try {
+    const raw = localStorage.getItem(LS_HIST_OBS);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.slice(0, 300);
+  } catch {
+    return [];
+  }
+}
+
+function mergeHistorialCambios(...listas) {
+  const seen = new Set();
+  const out = [];
+  for (const arr of listas) {
+    for (const c of arr || []) {
+      if (!c) continue;
+      const k = `${String(c.id)}|${String(c.antes || '').trim()}|${String(c.despues || '').trim()}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(c);
+    }
+  }
+  return out;
+}
+
+function ordenarHistorialPorMomento(lista) {
+  return [...lista].sort((a, b) => {
+    const ta = new Date(a.momento_bd || a.detectado_en || 0).getTime();
+    const tb = new Date(b.momento_bd || b.detectado_en || 0).getTime();
+    return tb - ta;
+  });
+}
+
+function renderFilasModalCambiosObs(tbody, lista) {
+  tbody.innerHTML = lista.map((c) => {
+    const momentoMostrar = c.momento_bd || c.detectado_en;
+    const hora = momentoMostrar ? formatFecha(momentoMostrar) : '—';
+    const titleMomento = c.momento_bd
+      ? 'Fecha/hora del registro en trazabilidad (tabla a_parte_producto)'
+      : 'Hora en que la app detectó el cambio (sin momento de BD en este evento)';
     const antes = c.antes && c.antes.trim() ? c.antes : '—';
     const despues = c.despues && c.despues.trim() ? c.despues : '—';
     return `<tr>
-      <td style="font-size:12px">${escapeHtml(hora)}</td>
+      <td style="font-size:12px" title="${escapeHtml(titleMomento)}">${escapeHtml(hora)}</td>
       <td>${escapeHtml(c.tipo || 'REGISTRO')}</td>
       <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(c.id || '—')}</td>
       <td style="font-size:12px">${escapeHtml(antes)}</td>
       <td style="font-size:12px">${escapeHtml(despues)}</td>
     </tr>`;
   }).join('');
+}
+
+function extraerClienteRetiro(obs) {
+  const txt = String(obs || '').replace(/\s+/g, ' ').trim();
+  if (!txt) return '';
+  const m = txt.match(/RETIRAR\s+LIBRILLOS\s+([A-Z0-9 ._-]+)/i);
+  return m ? String(m[1] || '').trim().toUpperCase() : '';
+}
+
+function esCambioCriticoReimpresion(c) {
+  const antes = String(c?.antes || '').trim();
+  const despues = String(c?.despues || '').trim();
+  if (!despues || antes === despues) return false;
+  const cliAntes = extraerClienteRetiro(antes);
+  const cliDespues = extraerClienteRetiro(despues);
+  if (cliAntes !== cliDespues) return true;
+  const t = String(c?.tipo || '').toUpperCase();
+  return t === 'LIBRILLO' || t === 'CRUDA';
+}
+
+function listaCambiosObsActual(cambiosExplicitos = null, modo = 'normal') {
+  let lista = mergeHistorialCambios(cargarHistorialCambiosObsLS(), historialCambiosObs);
+  if (cambiosExplicitos?.length) {
+    lista = mergeHistorialCambios(lista, cambiosExplicitos);
+  }
+  if (modo === 'logistica') {
+    lista = lista.filter(esCambioCriticoReimpresion);
+  }
+  return ordenarHistorialPorMomento(lista);
+}
+
+/** Historial: solo navegador (localStorage) + sesión actual; opcional lista recién detectada. */
+async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
+  const modal = document.getElementById('modal-cambios-obs');
+  const tbody = document.getElementById('tbody-cambios-obs');
+  const ttl = document.getElementById('modal-cambios-obs-title');
+  if (!modal || !tbody) return;
+  _modoCambiosObsActual = modo;
+  if (ttl) {
+    ttl.textContent = modo === 'logistica'
+      ? 'Reimpresiones logística (cambios detectados)'
+      : 'Cambios de observación (antes / ahora)';
+  }
   modal.classList.add('open');
+  const lista = listaCambiosObsActual(cambiosExplicitos, modo);
+  if (!lista.length) {
+    tbody.innerHTML = modo === 'logistica'
+      ? '<tr><td colspan="5" class="empty">Sin cambios críticos para reimpresión</td></tr>'
+      : '<tr><td colspan="5" class="empty">Sin cambios detectados</td></tr>';
+    return;
+  }
+  renderFilasModalCambiosObs(tbody, lista);
+}
+
+async function abrirModalCambiosObsLogistica() {
+  await abrirModalCambiosObs(null, 'logistica');
+}
+
+async function copiarIdsCambiosObs() {
+  const ids = [...new Set(listaCambiosObsActual(null, _modoCambiosObsActual).map((c) => String(c.id || '').trim()).filter(Boolean))];
+  if (!ids.length) {
+    mostrarToast('Sin IDs para copiar', 'err');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(ids.join('\n'));
+    mostrarToast(`${ids.length} IDs copiados`, 'ok');
+  } catch {
+    mostrarToast('No se pudo copiar IDs', 'err');
+  }
+}
+
+function imprimirListadoCambiosObs() {
+  const lista = listaCambiosObsActual(null, _modoCambiosObsActual);
+  if (!lista.length) {
+    mostrarToast('No hay cambios para imprimir', 'err');
+    return;
+  }
+  const rows = lista.slice(0, 200).map((c) => `
+    <tr>
+      <td>${escapeHtml(c.momento_bd || c.detectado_en ? formatFecha(c.momento_bd || c.detectado_en) : '—')}</td>
+      <td>${escapeHtml(String(c.id || '—'))}</td>
+      <td>${escapeHtml(String(c.tipo || 'REGISTRO'))}</td>
+      <td>${escapeHtml(String(c.antes || '—'))}</td>
+      <td>${escapeHtml(String(c.despues || '—'))}</td>
+    </tr>
+  `).join('');
+  const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Reimpresiones logística</title>
+    <style>body{font-family:Arial,sans-serif;margin:20px}h2{margin:0 0 10px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:6px;text-align:left}th{background:#f0f0f0}.meta{margin:0 0 10px;color:#666}</style>
+  </head><body>
+    <h2>Reimpresiones logística</h2>
+    <p class="meta">Fecha operativa: ${escapeHtml(fecha)} · Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}</p>
+    <table><thead><tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Antes</th><th>Ahora</th></tr></thead><tbody>${rows}</tbody></table>
+  </body></html>`;
+  const w = window.open('', '_blank', 'width=1200,height=800');
+  if (!w) {
+    mostrarToast('El navegador bloqueó la ventana de impresión', 'err');
+    return;
+  }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  w.print();
 }
 
 function cerrarModalCambiosObs() {
   document.getElementById('modal-cambios-obs')?.classList.remove('open');
 }
 
-function irHistorialYMostrarCambios(cambios) {
-  const btnHistorial = document.querySelector('.nav-item[onclick*="historial"]');
+async function irHistorialYMostrarCambios(cambios) {
+  const btnHistorial = document.querySelector('.nav-item[data-vista="historial"]');
   irVista('historial', btnHistorial || null);
-  abrirModalCambiosObs(cambios);
+  await abrirModalCambiosObs(cambios);
+}
+
+function textoObsHistorico(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  return String(payload.observacion ?? payload.observaciones ?? '').trim();
+}
+
+function idProductoHistorico(item) {
+  const desdeCambios = String(
+    item?.despues?.id_producto ??
+    item?.antes?.id_producto ??
+    item?.idEntidad ??
+    ''
+  ).trim();
+  if (!desdeCambios) return '';
+  const m = desdeCambios.match(/\d{4,}-\d+/);
+  return m ? m[0] : desdeCambios;
+}
+
+function tipoResultadoHistorico(obsAntes, obsDespues) {
+  const antes = String(obsAntes || '').trim();
+  const despues = String(obsDespues || '').trim();
+  if (antes && !despues) return 'vacia';
+  if (/\bCRUDAS?\b/i.test(despues)) return 'cruda';
+  return 'otro';
+}
+
+function normalizarObsHistorico(txt) {
+  return String(txt || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function normalizarCambioHistorico(item) {
+  const antes = textoObsHistorico(item?.antes);
+  const despues = textoObsHistorico(item?.despues);
+  const antesNorm = normalizarObsHistorico(antes);
+  const despuesNorm = normalizarObsHistorico(despues);
+  const tipo = tipoResultadoHistorico(antes, despues);
+  const idProducto = idProductoHistorico(item);
+  const usuario = String(item?.usuario || item?.despues?.username_bd || item?.antes?.username_bd || '(sin usuario)').trim();
+  const fechaIso = String(item?.fecha || '').trim();
+  const momento = fechaIso ? formatFecha(fechaIso) : '—';
+  return {
+    id: String(item?.id || ''),
+    fecha: fechaIso,
+    momento,
+    usuario,
+    idProducto,
+    antes,
+    despues,
+    esCambioRealObservacion: antesNorm !== despuesNorm,
+    tipo,
+    tipoLabel: tipo === 'cruda' ? 'CRUDAS' : (tipo === 'vacia' ? 'VACIA' : 'OTRO'),
+    searchText: [
+      idProducto,
+      usuario,
+      antes,
+      despues,
+      tipo,
+      fechaIso,
+      momento,
+    ].join(' ').toLowerCase(),
+  };
+}
+
+function pintarTablaHistoricoCambios() {
+  const tbody = document.getElementById('tbody-historico');
+  const count = document.getElementById('historico-count');
+  if (!tbody) return;
+  if (count) count.textContent = `${historicoCambiosFiltrados.length} cambios`;
+  if (!historicoCambiosFiltrados.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin cambios en el rango seleccionado</td></tr>';
+    return;
+  }
+  tbody.innerHTML = historicoCambiosFiltrados.map((r) => {
+    const cls = r.tipo === 'cruda' ? 'row-hist-cruda' : (r.tipo === 'vacia' ? 'row-hist-vacia' : 'row-hist-otro');
+    const badgeCls = r.tipo === 'cruda' ? 'hist-badge-cruda' : (r.tipo === 'vacia' ? 'hist-badge-vacia' : 'hist-badge-otro');
+    return `<tr class="${cls}">
+      <td>${escapeHtml(r.momento)}</td>
+      <td>${escapeHtml(r.usuario)}</td>
+      <td>${escapeHtml(r.idProducto || '—')}</td>
+      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 120))}</td>
+      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 120))}</td>
+      <td><span class="hist-badge ${badgeCls}">${escapeHtml(r.tipoLabel)}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function actualizarContadorHistoricoCrudas() {
+  const el = document.getElementById('n-hist-crudas-sel');
+  if (el) el.textContent = String(historicoCrudasSeleccionadas.size);
+}
+
+function pintarTablaHistoricoCrudas() {
+  const tbody = document.getElementById('tbody-historico-crudas');
+  const chkAll = document.getElementById('chk-historico-crudas');
+  if (!tbody) return;
+  const rows = historicoCambiosFiltrados.filter((x) => x.tipo === 'cruda' && x.idProducto);
+  if (!rows.length) {
+    historicoCrudasSeleccionadas.clear();
+    if (chkAll) chkAll.checked = false;
+    actualizarContadorHistoricoCrudas();
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin cambios a crudas en el rango</td></tr>';
+    return;
+  }
+  rows.forEach((r) => {
+    if (!historicoCrudasSeleccionadas.has(r.idProducto)) return;
+    // Conserva seleccionados válidos.
+  });
+  const valid = new Set(rows.map((r) => r.idProducto));
+  historicoCrudasSeleccionadas = new Set([...historicoCrudasSeleccionadas].filter((id) => valid.has(id)));
+  if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
+  actualizarContadorHistoricoCrudas();
+  tbody.innerHTML = rows.map((r) => {
+    const checked = historicoCrudasSeleccionadas.has(r.idProducto) ? 'checked' : '';
+    return `<tr class="row-hist-cruda">
+      <td><input type="checkbox" ${checked} onchange="toggleSeleccionHistoricoCruda('${escapeHtml(r.idProducto)}', this)"></td>
+      <td>${escapeHtml(r.momento)}</td>
+      <td>${escapeHtml(r.usuario)}</td>
+      <td>${escapeHtml(r.idProducto)}</td>
+      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 100))}</td>
+      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 100))}</td>
+    </tr>`;
+  }).join('');
+}
+
+function filtrarHistoricoCambios() {
+  const q = String(document.getElementById('srch-historico')?.value || '').trim().toLowerCase();
+  historicoCambiosFiltrados = q
+    ? historicoCambios.filter((r) => r.searchText.includes(q))
+    : [...historicoCambios];
+  pintarTablaHistoricoCambios();
+  pintarTablaHistoricoCrudas();
+}
+
+function toggleSeleccionHistoricoCruda(id, chk) {
+  const k = String(id || '').trim();
+  if (!k) return;
+  if (chk?.checked) historicoCrudasSeleccionadas.add(k);
+  else historicoCrudasSeleccionadas.delete(k);
+  actualizarContadorHistoricoCrudas();
+  const rows = historicoCambiosFiltrados.filter((x) => x.tipo === 'cruda' && x.idProducto);
+  const chkAll = document.getElementById('chk-historico-crudas');
+  if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
+}
+
+function toggleTodasHistoricoCrudas(chkAll) {
+  const rows = historicoCambiosFiltrados.filter((x) => x.tipo === 'cruda' && x.idProducto);
+  if (chkAll?.checked) rows.forEach((r) => historicoCrudasSeleccionadas.add(r.idProducto));
+  else rows.forEach((r) => historicoCrudasSeleccionadas.delete(r.idProducto));
+  pintarTablaHistoricoCrudas();
+}
+
+function seleccionarTodosHistoricoCrudas() {
+  const chkAll = document.getElementById('chk-historico-crudas');
+  if (chkAll) chkAll.checked = true;
+  toggleTodasHistoricoCrudas(chkAll);
+}
+
+async function cargarHistoricoCambios() {
+  return runWithAppLoader('Cargando historico de cambios...', async () => {
+    const desde = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
+    const hasta = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
+    if (!desde || !hasta) {
+      mostrarToast('Selecciona fecha desde y hasta para el historico', 'err');
+      return;
+    }
+    if (desde > hasta) {
+      mostrarToast('La fecha desde no puede ser mayor que hasta', 'err');
+      return;
+    }
+    const q = new URLSearchParams({ desde, hasta, modulo: 'planillaje', limit: '1000' });
+    const headers = { Accept: 'application/json' };
+    try {
+      const key = String(localStorage.getItem(LS_ANALYTICS_ADMIN_KEY) || '').trim();
+      if (key) headers['x-analytics-key'] = key;
+    } catch {
+      // ignore
+    }
+    const res = await fetch(`${AUDITORIA_CAMBIOS_URL}?${q.toString()}`, { headers });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = payload?.error || `HTTP ${res.status}`;
+      if (res.status === 403) {
+        mostrarToast('Sin permisos para ver historico de auditoria. Configurar acceso en servidor.', 'err');
+      } else {
+        mostrarToast(`No se pudo cargar el historico: ${msg}`, 'err');
+      }
+      return;
+    }
+    historicoCambios = (Array.isArray(payload?.items) ? payload.items : [])
+      .map(normalizarCambioHistorico)
+      .filter((r) => r.esCambioRealObservacion)
+      .sort((a, b) => Date.parse(b.fecha || 0) - Date.parse(a.fecha || 0));
+    const lbl = document.getElementById('historico-rango-label');
+    if (lbl) lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios`;
+    filtrarHistoricoCambios();
+  });
+}
+
+async function imprimirEtiquetasHistoricoCrudasSeleccion() {
+  const ids = [...historicoCrudasSeleccionadas];
+  if (!ids.length) {
+    mostrarToast('Selecciona cambios a crudas para imprimir etiquetas', 'err');
+    return;
+  }
+  return runWithAppLoader('Preparando etiquetas de cambios a crudas...', async () => {
+    const fecha = String(document.getElementById('fecha-historico-hasta')?.value || document.getElementById('fecha-global')?.value || hoyISO()).trim();
+    const datosDia = await fetchPorFecha(fecha);
+    const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
+    const lista = ids
+      .map((id) => map.get(String(id)))
+      .filter(Boolean)
+      .filter(esVistaHistorialCrudasSolo);
+    if (!lista.length) {
+      mostrarToast('No se encontraron crudas en la fecha seleccionada para imprimir etiquetas', 'err');
+      return;
+    }
+    abrirVentanaEtiquetasCrudas(lista);
+    mostrarToast(`${lista.length} etiqueta(s) de crudas listas para imprimir`, 'ok');
+  });
 }
 
 async function refrescarSiCambioObservacion() {
@@ -748,6 +3380,11 @@ async function refrescarSiCambioObservacion() {
       fetchObservacionesPorFecha(fecha),
     ]);
     const obsMapNow = new Map((obsDia || []).map(x => [String(x.id_producto), String(x.observacion_actual || '').trim()]));
+    const momentoPorId = new Map(
+      (obsDia || [])
+        .map((x) => [String(x.id_producto), x.momento_registro_bd || null])
+        .filter(([, t]) => t)
+    );
     const snapNuevo = snapshotObservaciones(datosFresh);
     if (_autoObsSnapshot && snapNuevo !== _autoObsSnapshot) {
       const cambios = obtenerCambiosObservacion(datosGlobal, datosFresh, _obsTextoMapPrev, obsMapNow);
@@ -756,15 +3393,16 @@ async function refrescarSiCambioObservacion() {
       datosClientes = datosFresh;
       salidasRegistradas = salidasFresh;
       separarDatos(datosFresh);
+      _autoInvSnapshot = snapshotPendientes(datosFresh, salidasFresh);
       renderHistorialLib(datosLibrillos);
+      actualizarKpiTurno();
       renderHistorialCrudas(datosCrudasHist);
-      renderTablaClientes(datosClientes);
+      filtrarCli();
       renderInventario();
-      actualizarKPIsTop();
       actualizarPanelCuadre();
       beepNotif();
-      const cambiosRegistrados = registrarCambiosObservacion(cambios) || [];
-      mostrarToast(`${mensajeCambiosObservacion(cambiosRegistrados)} · Clic para ver detalle`, 'ok', {
+      const cambiosRegistrados = registrarCambiosObservacion(cambios, momentoPorId) || [];
+      mostrarToast(textoToastCambiosObservacion(cambiosRegistrados.length), 'ok', {
         durationMs: 20000,
         onClick: () => irHistorialYMostrarCambios(cambiosRegistrados),
       });
@@ -778,7 +3416,7 @@ async function refrescarSiCambioObservacion() {
 
 function iniciarWatchObservaciones() {
   if (_autoObsTimer) return;
-  _autoObsTimer = setInterval(refrescarSiCambioObservacion, 10000);
+  _autoObsTimer = setInterval(refrescarSiCambioObservacion, AUTO_REFRESH_OBS_MS);
 }
 
 function mostrarToast(msg, tipo = 'ok', opts = {}) {
@@ -852,56 +3490,64 @@ function separarDatos(datos) {
 
 // ── CAMBIAR FECHA ─────────────────────────────────────────────────────────────
 async function cambiarFecha() {
-  const fecha = document.getElementById('fecha-global').value;
-  document.getElementById('pg-sub').textContent = labelFecha(fecha);
-  try {
-    const [datos, salidas] = await Promise.all([
-      fetchPorFecha(fecha),
-      fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
-    ]);
-    datosGlobal = datos;
-    datosClientes = datos;
-    salidasRegistradas = normalizarListaSalidas(salidas);
-    separarDatos(datosGlobal);
-    actualizarEstado(true);
-    actualizarKPIsTop();
-    renderHistorialLib(datosLibrillos);
-    renderHistorialCrudas(datosCrudasHist);
-    renderTablaClientes(datosClientes);
-    renderInventario();
-    renderTablaAgrupacionesReportes(datosGlobal);
-    renderResumenControlDia(datosGlobal);
-    actualizarPanelCuadre();
-    poblarSelectReporteCliente(datosGlobal);
-  } catch(e) { actualizarEstado(false); }
+  return runWithAppLoader('Actualizando datos por fecha...', async () => {
+    const fecha = document.getElementById('fecha-global').value;
+    document.getElementById('pg-sub').textContent = labelFecha(fecha);
+    if (document.getElementById('vista-totales')?.classList.contains('active')) {
+      void actualizarVistaTotales();
+    }
+    try {
+      const [datos, salidas] = await Promise.all([
+        fetchPorFecha(fecha),
+        fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
+      ]);
+      datosGlobal = datos;
+      datosClientes = datos;
+      salidasRegistradas = normalizarListaSalidas(salidas);
+      separarDatos(datosGlobal);
+      actualizarEstado(true);
+      renderHistorialLib(datosLibrillos);
+      actualizarKpiTurno();
+      renderHistorialCrudas(datosCrudasHist);
+      filtrarCli();
+      renderInventario();
+      actualizarPanelCuadre();
+      poblarSelectReporteCliente(datosGlobal);
+      _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
+    } catch(e) { actualizarEstado(false); }
+  });
 }
 
 // ── CARGAR DATOS ──────────────────────────────────────────────────────────────
 async function cargarDatos() {
-  try {
-    const fecha = document.getElementById('fecha-global').value;
-    const [datos, salidas] = await Promise.all([
-      fetchPorFecha(fecha),
-      fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
-    ]);
-    datosGlobal    = datos;
-    datosClientes  = datos;
-    salidasRegistradas = normalizarListaSalidas(salidas);
-    separarDatos(datos);
-    actualizarEstado(true);
-    actualizarKPIsTop();
-    renderHistorialLib(datosLibrillos);
-    renderHistorialCrudas(datosCrudasHist);
-    renderTablaClientes(datosClientes);
-    renderInventario();
-    renderTablaAgrupacionesReportes(datosGlobal);
-    renderResumenControlDia(datosGlobal);
-    actualizarPanelCuadre();
-    poblarSelectReporteCliente(datos);
-  } catch(e) {
-    console.error('Error:', e);
-    actualizarEstado(false);
-  }
+  return runWithAppLoader('Cargando inventario del turno...', async () => {
+    try {
+      const fecha = document.getElementById('fecha-global').value;
+      const [datos, salidas] = await Promise.all([
+        fetchPorFecha(fecha),
+        fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
+      ]);
+      datosGlobal    = datos;
+      datosClientes  = datos;
+      salidasRegistradas = normalizarListaSalidas(salidas);
+      separarDatos(datos);
+      actualizarEstado(true);
+      renderHistorialLib(datosLibrillos);
+      actualizarKpiTurno();
+      renderHistorialCrudas(datosCrudasHist);
+      filtrarCli();
+      renderInventario();
+      actualizarPanelCuadre();
+      poblarSelectReporteCliente(datos);
+      _autoInvSnapshot = snapshotPendientes(datos, salidasRegistradas);
+      if (document.getElementById('vista-totales')?.classList.contains('active')) {
+        void actualizarVistaTotales();
+      }
+    } catch(e) {
+      console.error('Error:', e);
+      actualizarEstado(false);
+    }
+  });
 }
 
 function actualizarEstado(ok) {
@@ -925,6 +3571,14 @@ async function actualizarPanelCuadre() {
     strip.classList.add(v.ok ? 'cuadre-ok' : 'cuadre-warn');
     const pend = v.pendientes_despacho_librillos ?? 0;
     const desp = v.despachos_registrados_dia ?? 0;
+    const pa = v.por_agrupacion && typeof v.por_agrupacion === 'object' ? v.por_agrupacion : null;
+    strip.title = pa
+      ? 'Con retiro por agrupación (código): ' +
+        Object.entries(pa)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, n]) => `${k}=${n}`)
+          .join(', ')
+      : '';
     if (v.ok) {
       txt.textContent = `OK · ${v.total_registros} reg. · ${desp} despachos · ${pend} librillos pendientes`;
     } else {
@@ -938,33 +3592,6 @@ async function actualizarPanelCuadre() {
   } catch {
     txt.textContent = 'Cuadre no disponible';
   }
-}
-
-// ── KPIs TOP GLOBALES ─────────────────────────────────────────────────────────
-function actualizarKPIsTop() {
-  const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
-  const salidasDia = salidasRegistradas.filter(s =>
-    diaOperacionISOFromTimestamp(s.fecha_salida) === fechaSel
-  );
-  const idsLibDesp = new Set();
-  const idsCrudDesp = new Set();
-  salidasDia.forEach(s => {
-    const d = datosGlobal.find(x => x.id_producto === s.id_producto);
-    if (!d) return;
-    if (esVistaHistorialLibrillos(d)) idsLibDesp.add(s.id_producto);
-    if (esVistaHistorialCrudasSolo(d)) idsCrudDesp.add(s.id_producto);
-  });
-  const libSalieron = idsLibDesp.size;
-
-  const crudSalieron = idsCrudDesp.size;
-  const total = libSalieron + crudSalieron;
-
-  const elLib = document.getElementById('kt-librillos');
-  const elCrud = document.getElementById('kt-crudas');
-  const elTot = document.getElementById('kt-total');
-  if (elLib) elLib.textContent = libSalieron;
-  if (elCrud) elCrud.textContent = crudSalieron;
-  if (elTot) elTot.textContent = total;
 }
 
 function topConteoPor(items, keyFn, limit = 8) {
@@ -1086,17 +3713,17 @@ function renderDashboard() {
 
 function actualizarGraficasDashboard() {
   const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
-  const salidasDia = salidasRegistradas.filter(s => diaOperacionISOFromTimestamp(s.fecha_salida) === fechaSel);
+  const salidasDiaOperativo = listaSalidasInventarioParaDia(fechaSel);
   const byId = new Map((datosGlobal || []).map(d => [String(d.id_producto), d]));
 
   const libs = (datosGlobal || []).filter(esLibrilloParaReporteAgrupacion);
-  const topAgrup = topConteoPor(libs, d => etiquetaAgrupacion(d), 8);
+  const topAgrup = topConteoPor(libs, d => etiquetaAgrupacionMacro(d), 8);
 
-  const libsDesp = salidasDia
+  const libsDesp = salidasDiaOperativo
     .map(s => byId.get(String(s.id_producto)))
     .filter(Boolean)
     .filter(esVistaHistorialLibrillos);
-  const crudDesp = salidasDia
+  const crudDesp = salidasDiaOperativo
     .map(s => byId.get(String(s.id_producto)))
     .filter(Boolean)
     .filter(esVistaHistorialCrudasSolo);
@@ -1158,13 +3785,57 @@ function etiquetaAgrupacion(d) {
   return t || '—';
 }
 
+/**
+ * Títulos de bloque alineados a hojas/pivots del libro «RETIRO DE LIBROS» (ASURCARNES, DERIVADOS, …).
+ * Misma `agrupacion_codigo` que calcula el backend desde la observación.
+ */
+const ETIQUETA_MACRO_EXCEL = {
+  asurcarnes_glo: 'ASURCARNESGLO',
+  asurcarnescol: 'ASURCARNESCOL',
+  global_hides: 'GLOBAL HIDES SAS',
+  asurcarnes: 'ASURCARNES',
+  cat: 'CAT',
+  derivados_carnicos: 'DERIVADOS',
+  cocidos: 'COCIDOS',
+};
+
+const ORDEN_MACRO_REPORTE = [
+  'ASURCARNESGLO',
+  'ASURCARNESCOL',
+  'GLOBAL HIDES SAS',
+  'ASURCARNES',
+  'CAT',
+  'DERIVADOS',
+  'COCIDOS',
+];
+
+function etiquetaAgrupacionMacro(d) {
+  const cod = String(d?.agrupacion_codigo ?? '').trim();
+  if (cod && ETIQUETA_MACRO_EXCEL[cod]) return ETIQUETA_MACRO_EXCEL[cod];
+  const t = etiquetaAgrupacion(d);
+  return t && t !== '—' ? t : cod || '—';
+}
+
+function ordenGruposMacro(etiquetas) {
+  const idx = (e) => {
+    const i = ORDEN_MACRO_REPORTE.indexOf(e);
+    return i === -1 ? 999 : i;
+  };
+  return [...etiquetas].sort((a, b) => {
+    const ia = idx(a);
+    const ib = idx(b);
+    if (ia !== ib) return ia - ib;
+    return String(a).localeCompare(String(b), 'es');
+  });
+}
+
 function poblarFiltroAgrupaciones() {
   const sel = document.getElementById('filtro-agrup-hlib');
   if (!sel) return;
   const prev = sel.value;
   const set = new Set();
   (datosLibrillos || []).filter(esVistaHistorialLibrillos).forEach(d => {
-    set.add(etiquetaAgrupacion(d));
+    set.add(etiquetaAgrupacionMacro(d));
   });
   const sorted = [...set].sort((a, b) => a.localeCompare(b, 'es'));
   sel.innerHTML = '<option value="">Todas las agrupaciones</option>' +
@@ -1184,16 +3855,48 @@ function normalizarObs(obs) {
   return String(obs || '').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
+const RX_RETIRO_LIBRILLO_FRONT = /\bRETIRAR?\s+LIBRIL+OS?\b/;
+
+/** Alineado con services/agrupaciones.service.js (códigos del merge API). */
+const COD_AGRUP_COMERCIAL = new Set([
+  'asurcarnes',
+  'asurcarnescol',
+  'asurcarnes_glo',
+  'global_hides',
+  'cat',
+  'derivados_carnicos',
+]);
+
 function clasificarRegistro(d) {
-  const obsRaw = String(d?.observacion || '').trim();
+  const cod = String(d?.agrupacion_codigo || '').trim();
+  const obsRaw = String(d?.observaciones ?? d?.observacion ?? '').trim();
   const obs = normalizarObs(obsRaw);
   const vacia = obs === '';
-  const tieneRetiro = !!(d?.cliente_destino && String(d.cliente_destino).trim()) || /RETIRAR\s+LIBRILLOS\b/.test(obs);
+
+  if (cod === 'cocidos') {
+    return {
+      librillo: false,
+      viscera: true,
+      visceraCruda: false,
+      vacia: !obsRaw,
+      tieneRetiro: false,
+      tieneCrudas: false,
+      tieneAcond: /\bACONDICIONAMIENTO\b/.test(obs),
+    };
+  }
+
+  const tieneRetiro =
+    !!(d?.cliente_destino && String(d.cliente_destino).trim()) ||
+    RX_RETIRO_LIBRILLO_FRONT.test(obs) ||
+    /\bRETIRA(R)?\b/.test(obs) ||
+    COD_AGRUP_COMERCIAL.has(cod);
   const tieneCrudas = /\bCRUDAS?\b/.test(obs);
   const tieneAcond = /\bACONDICIONAMIENTO\b/.test(obs);
 
   // Reglas de clasificación por observación (vistas historial):
   // - Un registro puede aplicar a LIBRILLO y/o VISCERA.
+  // - Criterio macro: si hay CRUDA, también debe caer en crudas; y si no hay RETIRA,
+  //   CRUDA se maneja como LIBRO Y CRUDA (doble conteo operativo).
   // - El usuario lo verá en su tabla correspondiente (sin mostrar “MIXTO” en badges).
   const casoVacia = vacia;
   const casoSoloCrudas = tieneCrudas && !tieneRetiro;       // víscera cruda
@@ -1201,7 +3904,7 @@ function clasificarRegistro(d) {
   const casoCrudasMasRetiro = tieneCrudas && tieneRetiro;    // librillo crudo + víscera cruda
   const casoAcond = tieneAcond && !tieneRetiro;              // víscera completa
 
-  const librillo = casoSoloRetiro || casoCrudasMasRetiro;
+  const librillo = casoSoloRetiro || casoCrudasMasRetiro || casoSoloCrudas;
   const viscera = casoVacia || casoSoloCrudas || casoCrudasMasRetiro || casoAcond || (!tieneRetiro && !vacia);
   const visceraCruda = casoSoloCrudas || casoCrudasMasRetiro;
 
@@ -1221,25 +3924,18 @@ function esVistaHistorialLibrillos(d) {
   return clasificarRegistro(d).tieneRetiro;
 }
 
-/** Historial — Crudas: observación únicamente CRUDAS/CRUDA (sin retiro de librillos). */
+/** Historial — Crudas: cualquier observación con CRUDAS/CRUDA (conteo paralelo a categoría comercial). */
 function esVistaHistorialCrudasSolo(d) {
-  const c = clasificarRegistro(d);
-  if (c.tieneRetiro) return false;
-  const obs = normalizarObs(String(d?.observacion || ''));
+  const obs = normalizarObs(String(d?.observaciones ?? d?.observacion ?? ''));
   return /\bCRUDAS?\b/.test(obs);
 }
 
 /**
- * Librillos que entran en reportes por agrupación (resumen): retiro con cliente parseado,
- * agrupación distinta de Otros / Sin destino, y fila en vw_pbi01 (propietario + plaza).
+ * Librillos en reportes por bloque tipo Excel: todo retiro de librillos según observación/API
+ * (mismos buckets que pivots ASURCARNES / DERIVADOS / …); no se exige cliente parseado ni vw_pbi01.
  */
 function esLibrilloParaReporteAgrupacion(d) {
-  if (!esVistaHistorialLibrillos(d)) return false;
-  if (!d.cliente_destino || !String(d.cliente_destino).trim()) return false;
-  const cod = String(d.agrupacion_codigo || '');
-  if (cod === 'sin_destino' || cod === 'otros') return false;
-  if (d.enriquecido !== true) return false;
-  return true;
+  return esVistaHistorialLibrillos(d);
 }
 
 function colorPorClave(str) {
@@ -1272,52 +3968,50 @@ function clienteChipHtml(cliente) {
   return `<span class="client-chip" style="--cc:${col}" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`;
 }
 
+function textoCampoBusqueda(d, campo) {
+  const c = String(campo || 'all').toLowerCase();
+  const map = {
+    id: d?.id_producto,
+    propietario: d?.propietario,
+    cliente: d?.cliente_destino,
+    agrupacion: etiquetaAgrupacionMacro(d),
+    plaza: ubicacionPlaza(d),
+    sucursal: d?.sucursal,
+    empresa: d?.empresa_destino,
+    observacion: d?.observacion,
+  };
+  if (c === 'all') {
+    return [
+      d?.id_producto, d?.propietario, d?.cliente_destino, etiquetaAgrupacionMacro(d),
+      ubicacionPlaza(d), d?.sucursal, d?.empresa_destino, d?.observacion, d?.observaciones,
+    ].map((x) => String(x || '')).join(' ').toLowerCase();
+  }
+  return String(map[c] || '').toLowerCase();
+}
+
+/** Búsqueda única: todos los textos visibles + fechas formateadas y datos auxiliares del registro. */
+function textoBusquedaLibre(d) {
+  const parts = [textoCampoBusqueda(d, 'all')];
+  try {
+    parts.push(String(d?.agrupacion_codigo || ''));
+    parts.push(String(d?.agrupacion || ''));
+    parts.push(formatFecha(d?.fecha_ingreso_cava));
+    if (d?.fecha_salida_cava) parts.push(formatFecha(d.fecha_salida_cava));
+    const sal = typeof salidaUltimaGrupo === 'function' ? salidaUltimaGrupo([d]) : null;
+    if (sal) parts.push(formatFecha(sal));
+  } catch (_) {
+    /* helpers opcionales */
+  }
+  if (d?.pendiente_registro_parte === true) parts.push('pendiente parte registro');
+  return parts.join(' ').toLowerCase();
+}
+
 function estilosFilaCliente(cliente) {
   const n = cliente || '—';
   const cc = colorPorClave(n);
   const cbg = fondoPorClave(n);
   const cbgH = fondoHoverPorClave(n);
   return `--cc:${cc};--cbg:${cbg};--cbg-h:${cbgH};`;
-}
-
-/** Agrupa registros en subarrays según clave */
-function agruparPor(arr, keyFn) {
-  const m = {};
-  arr.forEach(d => {
-    const k = keyFn(d);
-    if (!m[k]) m[k] = [];
-    m[k].push(d);
-  });
-  return Object.values(m);
-}
-
-/** Misma agrupación con IDs ordenados (estable en tablas) */
-function agruparPorOrdenado(arr, keyFn) {
-  return agruparPor(arr, keyFn).map(g =>
-    [...g].sort((a, b) => {
-      const ida = a.id_producto ?? a.d?.id_producto ?? '';
-      const idb = b.id_producto ?? b.d?.id_producto ?? '';
-      return String(ida).localeCompare(String(idb), undefined, { numeric: true });
-    })
-  );
-}
-
-/** IDs en una celda: 1 tag o primer ID + “+N” con modal (mismos registros que la fila) */
-function celdaIdsAgrupados(propietario, rowItems, ctx = 'auto') {
-  if (!rowItems || !rowItems.length) return '—';
-  const ordenados = [...rowItems].sort((a, b) => {
-    const ida = a.id_producto ?? '';
-    const idb = b.id_producto ?? '';
-    return String(ida).localeCompare(String(idb), undefined, { numeric: true });
-  });
-  const escProp = (propietario || '').replace(/'/g, "\\'");
-  const ids = ordenados.map(d => d.id_producto).filter(Boolean);
-  const payload = JSON.stringify(ordenados).replace(/"/g, '&quot;');
-  // Siempre permitir ver el detalle completo al hacer click
-  if (ids.length === 1) {
-    return `<span class="id-link" onclick='abrirModal("${escProp}",${payload},"${ctx}")'>${ids[0]}</span>`;
-  }
-  return `<span class="id-link" onclick='abrirModal("${escProp}",${payload},"${ctx}")'>${ids[0]}</span> <span class="id-more" onclick='abrirModal("${escProp}",${payload},"${ctx}")'>+${ids.length - 1}</span>`;
 }
 
 function animar(id, final) {
@@ -1328,15 +4022,43 @@ function animar(id, final) {
   const t = setInterval(() => { n = Math.min(n + step, final); el.textContent = n; if (n >= final) clearInterval(t); }, 30);
 }
 
+async function cargarAliasPlazas() {
+  try {
+    const r = await fetch('./plazas-alias.json');
+    if (!r.ok) return;
+    const cfg = await r.json();
+    PLAZAS_ALIAS = {
+      exact: cfg?.exact && typeof cfg.exact === 'object' ? cfg.exact : {},
+      contains: cfg?.contains && typeof cfg.contains === 'object' ? cfg.contains : {},
+    };
+  } catch {
+    // sin alias personalizados
+  }
+}
+
+async function cargarConfigClienteResumen() {
+  try {
+    const r = await fetch('./clientes-resumen-config.json');
+    if (!r.ok) return;
+    const raw = await r.json();
+    CLIENTES_RESUMEN_CONFIG = mergeClienteResumenConfig(raw);
+  } catch {
+    CLIENTES_RESUMEN_CONFIG = mergeClienteResumenConfig({});
+  }
+}
+
 // ── HISTORIAL LIBRILLOS ───────────────────────────────────────────────────────
 function renderHistorialLib(lista) {
   const tbody = document.getElementById('tbody-hlib');
-  const idsDesp = new Set((salidasRegistradas || []).map(s => String(s.id_producto)));
-  const filtrada = (lista || []).filter(esVistaHistorialLibrillos).filter(d =>
-    !historialSoloPendientes || !idsDesp.has(String(d.id_producto))
+  const filtrada = (lista || []).filter(esVistaHistorialLibrillos).filter((d) =>
+    !historialSoloPendientes || !productoYaSalidaColbeefOTraz(d)
   );
   document.getElementById('hlib-count').textContent = filtrada.length + ' registros';
-  document.getElementById('hlib-total-label').innerHTML = `Total: <strong style="color:var(--rojo)">${filtrada.length}</strong> librillos`;
+  const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
+  const mov = resumenMovimientoRealInventario(filtrada, fechaSel);
+  document.getElementById('hlib-total-label').innerHTML =
+    `Total: <strong style="color:var(--rojo)">${filtrada.length}</strong> librillos · ` +
+    `<span style="color:var(--tx2)">Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día</span>`;
 
   if (!filtrada.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">Sin librillos crudos para esta fecha</td></tr>'; return; }
 
@@ -1346,13 +4068,20 @@ function renderHistorialLib(lista) {
   tbody.innerHTML = sorted.map(d => {
     const sal = salidaUltimaGrupo([d]);
     const prop = d.propietario || 'Sin asignar';
+    const titProp = d.propietario_origen === 'vista_ultimo'
+      ? 'Propietario según último registro disponible en la vista'
+      : '';
+    const pendParte =
+      d.pendiente_registro_parte === true
+        ? ' <span class="badge-pend-parte" title="En plan de faena pero sin movimiento Colbeef registrado este día">Pend. parte</span>'
+        : '';
     return `<tr class="client-row" style="${estilosFilaCliente(d.cliente_destino || '—')}">
-      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}</td>
-      <td style="font-weight:600">${escapeHtml(prop)}</td>
+      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}${pendParte}</td>
+      <td style="font-weight:600"${titProp ? ` title="${escapeHtml(titProp).replace(/"/g, '&quot;')}"` : ''}>${escapeHtml(prop)}${d.propietario_origen === 'vista_ultimo' ? ' <span class="prop-origen" aria-hidden="true">·</span>' : ''}</td>
       <td>${clienteChipHtml(d.cliente_destino || '—')}</td>
-      <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacion(d))}</span></td>
+      <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacionMacro(d))}</span></td>
       <td>${badgeObs(d.observacion, d, 'librillo')}</td>
-      <td>${escapeHtml(ubicacionPlaza(d))}</td>
+      <td>${escapeHtml(destinoTabla(d))}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
       <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
@@ -1363,19 +4092,15 @@ function renderHistorialLib(lista) {
 }
 
 function filtrarHistorialLib() {
-  const txt = document.getElementById('srch-hlib').value.toLowerCase();
+  const txt = (document.getElementById('srch-hlib')?.value || '').toLowerCase().trim();
   const agrSel = (document.getElementById('filtro-agrup-hlib') && document.getElementById('filtro-agrup-hlib').value) || '';
   renderHistorialLib(datosLibrillos.filter(d => {
     if (!esVistaHistorialLibrillos(d)) return false;
-    const matchTxt = !txt || (
-      (d.propietario||'').toLowerCase().includes(txt) ||
-      (d.cliente_destino||'').toLowerCase().includes(txt) ||
-      (d.observacion||'').toLowerCase().includes(txt) ||
-      (d.sucursal||'').toLowerCase().includes(txt) ||
-      (d.empresa_destino||'').toLowerCase().includes(txt) ||
-      (etiquetaAgrupacion(d)).toLowerCase().includes(txt)
-    );
-    const matchAgr = !agrSel || etiquetaAgrupacion(d) === agrSel;
+    const matchTxt = !txt || textoBusquedaLibre(d).includes(txt);
+    const matchAgr =
+      !agrSel ||
+      etiquetaAgrupacionMacro(d) === agrSel ||
+      etiquetaAgrupacion(d) === agrSel;
     return matchTxt && matchAgr;
   }));
 }
@@ -1388,7 +4113,13 @@ function renderHistorialCrudas(lista) {
   const cEl = document.getElementById('hcrud-count');
   const tEl = document.getElementById('hcrud-total-label');
   if (cEl) cEl.textContent = n + ' registros';
-  if (tEl) tEl.innerHTML = `Total: <strong style="color:var(--verde)">${n}</strong> crudas`;
+  if (tEl) {
+    const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
+    const mov = resumenMovimientoRealInventario(lista || [], fechaSel);
+    tEl.innerHTML =
+      `Total: <strong style="color:var(--verde)">${n}</strong> crudas · ` +
+      `<span style="color:var(--tx2)">Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día</span>`;
+  }
 
   if (!n) { tbody.innerHTML = '<tr><td colspan="9" class="empty">Sin crudas para esta fecha</td></tr>'; return; }
 
@@ -1397,11 +4128,14 @@ function renderHistorialCrudas(lista) {
   );
   tbody.innerHTML = sorted.map(d => {
     const sal = salidaUltimaGrupo([d]);
+    const titProp = d.propietario_origen === 'vista_ultimo'
+      ? 'Propietario según último registro disponible en la vista'
+      : '';
     return `<tr>
       <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}</td>
-      <td style="font-weight:600">${escapeHtml(d.propietario || 'Sin asignar')}</td>
+      <td style="font-weight:600"${titProp ? ` title="${escapeHtml(titProp).replace(/"/g, '&quot;')}"` : ''}>${escapeHtml(d.propietario || 'Sin asignar')}${d.propietario_origen === 'vista_ultimo' ? ' <span class="prop-origen" aria-hidden="true">·</span>' : ''}</td>
       <td>${badgeObs(d.observacion, d, 'viscera')}</td>
-      <td>${escapeHtml(ubicacionPlaza(d))}</td>
+      <td>${escapeHtml(destinoTabla(d))}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
       <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
@@ -1412,13 +4146,8 @@ function renderHistorialCrudas(lista) {
 }
 
 function filtrarHistorialCrud() {
-  const txt = document.getElementById('srch-hcrud').value.toLowerCase();
-  renderHistorialCrudas(datosCrudasHist.filter(d =>
-    (d.propietario||'').toLowerCase().includes(txt) ||
-    (d.destino||'').toLowerCase().includes(txt) ||
-    (d.sucursal||'').toLowerCase().includes(txt) ||
-    (d.empresa_destino||'').toLowerCase().includes(txt)
-  ));
+  const txt = (document.getElementById('srch-hcrud')?.value || '').toLowerCase().trim();
+  renderHistorialCrudas(datosCrudasHist.filter(d => !txt || textoBusquedaLibre(d).includes(txt)));
 }
 
 // ── INVENTARIO ────────────────────────────────────────────────────────────────
@@ -1432,35 +4161,38 @@ function claveGrupoInventario(d) {
 
 /** Pendientes de inventario (librillos) */
 function obtenerPendientesInventario() {
-  const idsDesp = new Set((salidasRegistradas || []).map(s => String(s.id_producto)));
-  let pendientes = (datosLibrillos || []).filter(d => !idsDesp.has(String(d.id_producto)));
+  let pendientes = (datosLibrillos || []).filter((d) => !productoYaSalidaColbeefOTraz(d));
   const el = document.getElementById('srch-inv');
   const txt = (el && el.value.toLowerCase().trim()) || '';
   if (txt) {
-    pendientes = pendientes.filter(d =>
-      (d.propietario || '').toLowerCase().includes(txt) ||
-      (d.cliente_destino || '').toLowerCase().includes(txt) ||
-      (d.sucursal || '').toLowerCase().includes(txt) ||
-      (d.empresa_destino || '').toLowerCase().includes(txt) ||
-      (etiquetaAgrupacion(d)).toLowerCase().includes(txt)
-    );
+    pendientes = pendientes.filter((d) => textoBusquedaLibre(d).includes(txt));
   }
   return pendientes;
 }
 
 function obtenerPendientesInventarioCrud() {
-  const idsDesp = new Set((salidasRegistradas || []).map(s => String(s.id_producto)));
-  let pendientes = (datosCrudasHist || []).filter(d => !idsDesp.has(String(d.id_producto)));
+  let pendientes = (datosCrudasHist || []).filter((d) => !productoYaSalidaColbeefOTraz(d));
   const el = document.getElementById('srch-inv-crud');
   const txt = (el && el.value.toLowerCase().trim()) || '';
   if (txt) {
-    pendientes = pendientes.filter(d =>
-      (d.propietario || '').toLowerCase().includes(txt) ||
-      (d.sucursal || '').toLowerCase().includes(txt) ||
-      (d.empresa_destino || '').toLowerCase().includes(txt)
-    );
+    pendientes = pendientes.filter((d) => textoBusquedaLibre(d).includes(txt));
   }
   return pendientes;
+}
+
+function resumenMovimientoRealInventario(items, fechaSel) {
+  const out = { despachadoDia: 0, pendiente: 0, salioOtroDia: 0 };
+  (items || []).forEach((d) => {
+    const ts = salidaEfectivaTimestamp(d.id_producto, d);
+    if (!ts) {
+      out.pendiente += 1;
+      return;
+    }
+    const dia = diaOperativoSalidaISO(ts);
+    if (dia === fechaSel) out.despachadoDia += 1;
+    else out.salioOtroDia += 1;
+  });
+  return out;
 }
 
 function htmlFilasPendientesInv(pendientes, mensajeVacio) {
@@ -1475,7 +4207,7 @@ function htmlFilasPendientesInv(pendientes, mensajeVacio) {
       <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
       <td style="font-size:12px">${escapeHtml(prop)}</td>
       <td>${clienteChipHtml(d.cliente_destino || '—')}</td>
-      <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacion(d))}</span></td>
+      <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacionMacro(d))}</span></td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
       <td>${badgeObs(d.observacion, d, 'librillo')}</td>
@@ -1486,25 +4218,90 @@ function htmlFilasPendientesInv(pendientes, mensajeVacio) {
   }).join('');
 }
 
+/**
+ * Despachos del día operativo: Colbeef + filas solo con salida de cava en trazabilidad (sin duplicar).
+ */
+function listaSalidasInventarioParaDia(fechaSel) {
+  const colb = (salidasRegistradas || []).filter(
+    (s) => s.fecha_salida && diaOperativoSalidaISO(s.fecha_salida) === fechaSel
+  );
+  const porId = new Map(
+    colb.map((s) => [
+      String(s.id_producto),
+      { ...s, soloTrazabilidad: false },
+    ])
+  );
+
+  const tryTraz = (lista, filtroFn) => {
+    (lista || []).filter(filtroFn).forEach((d) => {
+      const id = String(d.id_producto || '');
+      if (!id || !d.fecha_salida_cava) return;
+      if (diaOperativoSalidaISO(d.fecha_salida_cava) !== fechaSel) return;
+      if (porId.has(id)) return;
+      porId.set(id, {
+        id: null,
+        id_producto: d.id_producto,
+        fecha_salida: d.fecha_salida_cava,
+        registrado_por: 'Trazabilidad (salida cava)',
+        soloTrazabilidad: true,
+      });
+    });
+  };
+  tryTraz(datosLibrillos, esVistaHistorialLibrillos);
+  tryTraz(datosCrudasHist, esVistaHistorialCrudasSolo);
+
+  return [...porId.values()].sort((a, b) =>
+    String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+  );
+}
+
+function listaSalioOtroDiaInventario(fechaSel) {
+  const byId = new Map();
+  const pushIf = (d, filtroFn) => {
+    if (!filtroFn(d)) return;
+    const det = salidaEfectivaDetalle(d.id_producto, d);
+    if (!det?.ts) return;
+    const dia = diaOperativoSalidaISO(det.ts);
+    if (!dia || dia === fechaSel) return;
+    const id = String(d.id_producto || '');
+    if (!id || byId.has(id)) return;
+    byId.set(id, {
+      id_producto: d.id_producto,
+      fecha_salida: det.ts,
+      fuente: det.fuente,
+      d,
+    });
+  };
+  (datosLibrillos || []).forEach((d) => pushIf(d, esVistaHistorialLibrillos));
+  (datosCrudasHist || []).forEach((d) => pushIf(d, esVistaHistorialCrudasSolo));
+  return [...byId.values()].sort((a, b) =>
+    String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+  );
+}
+
 function htmlFilasDespachadosHoy(despachados, modo) {
   const esCrud = modo === 'crud';
   const filtro = esCrud ? esVistaHistorialCrudasSolo : esVistaHistorialLibrillos;
   const rows = despachados
-    .map(s => {
-      const d = datosGlobal.find(x => x.id_producto === s.id_producto) || {};
+    .map((s) => {
+      const d = datosGlobal.find((x) => x.id_producto === s.id_producto) || {};
       return { s, d };
     })
     .filter(({ d }) => filtro(d))
     .sort((a, b) => String(a.s.id_producto || '').localeCompare(String(b.s.id_producto || ''), undefined, { numeric: true }));
 
   const colSpan = esCrud ? 7 : 8;
-  if (!rows.length) return `<tr><td colspan="${colSpan}" class="empty">Sin despachos registrados hoy</td></tr>`;
+  if (!rows.length) return `<tr><td colspan="${colSpan}" class="empty">Sin despachos en esta fecha operativa</td></tr>`;
 
   return rows.map(({ s, d }) => {
     const prop = d.propietario || 'Sin asignar';
     const cli = d.cliente_destino || '—';
     const escF = String(s.fecha_salida || '').replace(/'/g, "\\'");
     const estilo = estilosFilaCliente(esCrud ? prop : cli);
+    const btnEdit =
+      s.soloTrazabilidad || s.id == null
+        ? '<span style="font-size:11px;color:var(--tx3)" title="Salida registrada en trazabilidad; use despacho Colbeef si debe corregirse aquí">—</span>'
+        : `<button type="button" class="btn-edit-salida" title="Editar salida" onclick="abrirModalEditSalida('${s.id}','${s.id_producto}','${escF}')">Editar</button>`;
     if (esCrud) {
       return `<tr class="client-row" style="${estilo}">
         <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(s.id_producto)}</td>
@@ -1513,7 +4310,7 @@ function htmlFilasDespachadosHoy(despachados, modo) {
         <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
         <td style="font-size:12px">${formatFecha(s.fecha_salida)}</td>
         <td style="font-size:12px;color:var(--tx2)">${escapeHtml(s.registrado_por || '—')}</td>
-        <td><button type="button" class="btn-edit-salida" title="Editar salida" onclick="abrirModalEditSalida('${s.id}','${s.id_producto}','${escF}')">Editar</button></td>
+        <td>${btnEdit}</td>
       </tr>`;
     }
     return `<tr class="client-row" style="${estilo}">
@@ -1524,7 +4321,7 @@ function htmlFilasDespachadosHoy(despachados, modo) {
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
       <td style="font-size:12px">${formatFecha(s.fecha_salida)}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(s.registrado_por || '—')}</td>
-      <td><button type="button" class="btn-edit-salida" title="Editar salida" onclick="abrirModalEditSalida('${s.id}','${s.id_producto}','${escF}')">Editar</button></td>
+      <td>${btnEdit}</td>
     </tr>`;
   }).join('');
 }
@@ -1545,16 +4342,52 @@ function htmlFilasPendientesInvCrud(pendientes, mensajeVacio) {
       <td>${badgeObs(d.observacion, d, 'viscera')}</td>
       <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
       <td><span class="b b-cava">Pendiente</span></td>
-      <td></td>
+      <td><button type="button" class="btn-etq-mini" title="Crear etiqueta para imprimir (esta cruda)" onclick="imprimirEtiquetasCrudasUnId(${JSON.stringify(id)})">Etiqueta</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function htmlFilasSalioOtroDiaInventario(registros, modo) {
+  const esCrud = modo === 'crud';
+  const rows = (registros || [])
+    .filter(({ d }) => esCrud ? esVistaHistorialCrudasSolo(d) : esVistaHistorialLibrillos(d))
+    .sort((a, b) => String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
+
+  const colSpan = esCrud ? 6 : 7;
+  if (!rows.length) return `<tr><td colspan="${colSpan}" class="empty">Sin registros en este estado</td></tr>`;
+
+  return rows.map(({ id_producto, fecha_salida, fuente, d }) => {
+    const prop = d?.propietario || 'Sin asignar';
+    const cli = d?.cliente_destino || '—';
+    const estilo = estilosFilaCliente(esCrud ? prop : cli);
+    if (esCrud) {
+      return `<tr class="client-row" style="${estilo}">
+        <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(id_producto)}</td>
+        <td style="font-size:12px">${escapeHtml(prop)}</td>
+        <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d?.sucursal || '—')}</td>
+        <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d?.empresa_destino || '—')}</td>
+        <td style="font-size:12px">${formatFecha(fecha_salida)}</td>
+        <td style="font-size:12px;color:var(--tx2)">${escapeHtml(fuente || '—')}</td>
+      </tr>`;
+    }
+    return `<tr class="client-row" style="${estilo}">
+      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(id_producto)}</td>
+      <td style="font-size:12px">${escapeHtml(prop)}</td>
+      <td>${clienteChipHtml(cli)}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d?.sucursal || '—')}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d?.empresa_destino || '—')}</td>
+      <td style="font-size:12px">${formatFecha(fecha_salida)}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(fuente || '—')}</td>
     </tr>`;
   }).join('');
 }
 
 function renderInventario() {
   const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
-  const despachados = salidasRegistradas.filter(s =>
-    diaOperacionISOFromTimestamp(s.fecha_salida) === fechaSel
-  );
+  const despachados = listaSalidasInventarioParaDia(fechaSel);
+  const otroDia = listaSalioOtroDiaInventario(fechaSel);
+  const movLib = resumenMovimientoRealInventario(datosLibrillos || [], fechaSel);
+  const movCrud = resumenMovimientoRealInventario(datosCrudasHist || [], fechaSel);
 
   const pendLib = obtenerPendientesInventario();
   const txtLib = (document.getElementById('srch-inv') && document.getElementById('srch-inv').value.toLowerCase().trim()) || '';
@@ -1565,6 +4398,11 @@ function renderInventario() {
     document.getElementById('inv-total-label').textContent = txtLib
       ? pendLib.length + ' coincidencias'
       : pendLib.length + ' pendientes de despacho';
+    const lblMov = document.getElementById('inv-mov-real-label');
+    if (lblMov) {
+      lblMov.textContent =
+        `Mov. real: ${movLib.despachadoDia} despachado(s) día · ${movLib.pendiente} pendiente(s) · ${movLib.salioOtroDia} salió otro día`;
+    }
     const vacioPend = txtLib ? 'Sin resultados' : 'Todos los librillos han sido despachados';
     tbody.innerHTML = htmlFilasPendientesInv(pendLib, vacioPend);
   }
@@ -1572,6 +4410,13 @@ function renderInventario() {
     const nLibDesp = despachados.filter(s => esVistaHistorialLibrillos(datosGlobal.find(x => x.id_producto === s.id_producto) || {})).length;
     document.getElementById('desp-count').textContent = nLibDesp + ' despachos';
     tbodyDesp.innerHTML = htmlFilasDespachadosHoy(despachados, 'lib');
+  }
+  const tbodyOtroLib = document.getElementById('tbody-otro-dia-lib');
+  if (tbodyOtroLib) {
+    const rows = otroDia.filter((r) => esVistaHistorialLibrillos(r.d));
+    const lbl = document.getElementById('otro-dia-lib-count');
+    if (lbl) lbl.textContent = `${rows.length} registros`;
+    tbodyOtroLib.innerHTML = htmlFilasSalioOtroDiaInventario(rows, 'lib');
   }
 
   const pendCr = obtenerPendientesInventarioCrud();
@@ -1583,6 +4428,11 @@ function renderInventario() {
     document.getElementById('inv-crud-total-label').textContent = txtCr
       ? pendCr.length + ' coincidencias'
       : pendCr.length + ' pendientes de despacho';
+    const lblMovCrud = document.getElementById('inv-crud-mov-real-label');
+    if (lblMovCrud) {
+      lblMovCrud.textContent =
+        `Mov. real: ${movCrud.despachadoDia} despachado(s) día · ${movCrud.pendiente} pendiente(s) · ${movCrud.salioOtroDia} salió otro día`;
+    }
     const vacioCr = txtCr ? 'Sin resultados' : 'Todas las crudas han sido despachadas';
     tbodyC.innerHTML = htmlFilasPendientesInvCrud(pendCr, vacioCr);
   }
@@ -1591,8 +4441,14 @@ function renderInventario() {
     document.getElementById('desp-crud-count').textContent = nCrDesp + ' despachos';
     tbodyDespC.innerHTML = htmlFilasDespachadosHoy(despachados, 'crud');
   }
+  const tbodyOtroCrud = document.getElementById('tbody-otro-dia-crud');
+  if (tbodyOtroCrud) {
+    const rows = otroDia.filter((r) => esVistaHistorialCrudasSolo(r.d));
+    const lbl = document.getElementById('otro-dia-crud-count');
+    if (lbl) lbl.textContent = `${rows.length} registros`;
+    tbodyOtroCrud.innerHTML = htmlFilasSalioOtroDiaInventario(rows, 'crud');
+  }
 
-  actualizarKPIsTop();
   actualizarBotonDespachar();
 }
 
@@ -1667,7 +4523,6 @@ function actualizarBotonDespachar() {
 
 function expandirIdsRelacionadosPorIdentificacion(idsBase, datosFresh, salidasFresh) {
   const set = new Set((idsBase || []).map(String));
-  const idsDesp = new Set((salidasFresh || []).map(s => String(s.id_producto)));
   const byId = new Map((datosFresh || []).map(d => [String(d.id_producto), d]));
   const idents = new Set();
   set.forEach(id => {
@@ -1678,7 +4533,7 @@ function expandirIdsRelacionadosPorIdentificacion(idsBase, datosFresh, salidasFr
   if (!idents.size) return [...set];
   (datosFresh || []).forEach(d => {
     const id = String(d.id_producto || '');
-    if (!id || idsDesp.has(id)) return;
+    if (!id || productoYaSalidaColbeefOTraz(d, salidasFresh)) return;
     if (!esVistaHistorialLibrillos(d) && !esVistaHistorialCrudasSolo(d)) return;
     const ident = String(d.identificacion || '').trim();
     if (ident && idents.has(ident)) set.add(id);
@@ -1690,85 +4545,87 @@ async function despacharSeleccionadosCrud() {
   if (seleccionadosCrud.size === 0) { mostrarToast('Selecciona al menos una cruda', 'err'); return; }
 
   const ids = Array.from(seleccionadosCrud).map(String);
-  try {
-    const fecha = document.getElementById('fecha-global')?.value || hoyISO();
-    const [datosFresh, salidasFresh] = await Promise.all([fetchPorFecha(fecha), fetchSalidas()]);
-    const idsDespFresh = new Set((salidasFresh || []).map(s => String(s.id_producto)));
-    const pendientesFresh = (datosFresh || []).filter(esVistaHistorialCrudasSolo).filter(d => !idsDespFresh.has(String(d.id_producto)));
-    const mapFresh = new Map(pendientesFresh.map(d => [String(d.id_producto), d]));
-    const idsValidos = ids.filter(id => mapFresh.has(id));
-    if (!idsValidos.length) {
-      datosGlobal = datosFresh;
-      datosClientes = datosFresh;
-      salidasRegistradas = salidasFresh;
-      separarDatos(datosFresh);
-      seleccionadosCrud.clear();
-      renderInventario();
-      mostrarToast('Las crudas seleccionadas ya no están pendientes. Se actualizó inventario.', 'err');
-      return;
-    }
+  return runWithAppLoader('Registrando despacho de crudas...', async () => {
+    try {
+      const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+      const [datosFresh, salidasFresh] = await Promise.all([fetchPorFecha(fecha), fetchSalidas()]);
+      const pendientesFresh = (datosFresh || []).filter(esVistaHistorialCrudasSolo).filter((d) => !productoYaSalidaColbeefOTraz(d, salidasFresh));
+      const mapFresh = new Map(pendientesFresh.map(d => [String(d.id_producto), d]));
+      const idsValidos = ids.filter(id => mapFresh.has(id));
+      if (!idsValidos.length) {
+        datosGlobal = datosFresh;
+        datosClientes = datosFresh;
+        salidasRegistradas = salidasFresh;
+        separarDatos(datosFresh);
+        seleccionadosCrud.clear();
+        renderInventario();
+        mostrarToast('Las crudas seleccionadas ya no están pendientes. Se actualizó inventario.', 'err');
+        return;
+      }
 
-    const idsConRelacionados = expandirIdsRelacionadosPorIdentificacion(idsValidos, datosFresh, salidasFresh);
-    const res = await fetch(SALIDAS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids_productos: idsConRelacionados, rol: USUARIO_ACTUAL }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    salidasRegistradas = await fetchSalidas();
-    seleccionadosCrud.clear();
-    const ca = document.getElementById('chk-all-crud');
-    if (ca) ca.checked = false;
-    await cargarDatos();
-    const extras = Math.max(0, idsConRelacionados.length - idsValidos.length);
-    mostrarToast(`${data.registradas || idsConRelacionados.length} salida(s) registradas. ${extras ? `Incluye ${extras} relacionada(s) por identificación.` : ''}`, 'ok');
-  } catch(e) {
-    mostrarToast('Error al registrar despacho: ' + e.message, 'err');
-  }
+      const idsConRelacionados = expandirIdsRelacionadosPorIdentificacion(idsValidos, datosFresh, salidasFresh);
+      const res = await fetch(SALIDAS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids_productos: idsConRelacionados, rol: USUARIO_ACTUAL, usuario: usuarioOperacionActual() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      salidasRegistradas = await fetchSalidas();
+      seleccionadosCrud.clear();
+      const ca = document.getElementById('chk-all-crud');
+      if (ca) ca.checked = false;
+      await cargarDatos();
+      const extras = Math.max(0, idsConRelacionados.length - idsValidos.length);
+      mostrarToast(`${data.registradas || idsConRelacionados.length} salida(s) registradas. ${extras ? `Incluye ${extras} relacionada(s) por identificación.` : ''}`, 'ok');
+    } catch(e) {
+      mostrarToast('Error al registrar despacho: ' + e.message, 'err');
+    }
+  });
 }
 
 async function despacharSeleccionados() {
   if (seleccionados.size === 0) { mostrarToast('Selecciona al menos un librillo', 'err'); return; }
 
   const ids = Array.from(seleccionados).map(String);
-  try {
-    // Usa estado fresco de BD para despachar lo que siga pendiente sin bloquear por cambios menores.
-    const fecha = document.getElementById('fecha-global')?.value || hoyISO();
-    const [datosFresh, salidasFresh] = await Promise.all([fetchPorFecha(fecha), fetchSalidas()]);
-    const idsDespFresh = new Set((salidasFresh || []).map(s => String(s.id_producto)));
-    const pendientesFresh = (datosFresh || []).filter(esVistaHistorialLibrillos).filter(d => !idsDespFresh.has(String(d.id_producto)));
-    const mapFresh = new Map(pendientesFresh.map(d => [String(d.id_producto), d]));
-    const idsValidos = ids.filter(id => mapFresh.has(id));
-    if (!idsValidos.length) {
-      datosGlobal = datosFresh;
-      datosClientes = datosFresh;
-      salidasRegistradas = salidasFresh;
-      separarDatos(datosFresh);
-      seleccionados.clear();
-      renderInventario();
-      mostrarToast('Los librillos seleccionados ya no están pendientes. Se actualizó inventario.', 'err');
-      return;
-    }
+  return runWithAppLoader('Registrando despacho de librillos...', async () => {
+    try {
+      // Usa estado fresco de BD para despachar lo que siga pendiente sin bloquear por cambios menores.
+      const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+      const [datosFresh, salidasFresh] = await Promise.all([fetchPorFecha(fecha), fetchSalidas()]);
+      const pendientesFresh = (datosFresh || []).filter(esVistaHistorialLibrillos).filter((d) => !productoYaSalidaColbeefOTraz(d, salidasFresh));
+      const mapFresh = new Map(pendientesFresh.map(d => [String(d.id_producto), d]));
+      const idsValidos = ids.filter(id => mapFresh.has(id));
+      if (!idsValidos.length) {
+        datosGlobal = datosFresh;
+        datosClientes = datosFresh;
+        salidasRegistradas = salidasFresh;
+        separarDatos(datosFresh);
+        seleccionados.clear();
+        renderInventario();
+        mostrarToast('Los librillos seleccionados ya no están pendientes. Se actualizó inventario.', 'err');
+        return;
+      }
 
-    const idsConRelacionados = expandirIdsRelacionadosPorIdentificacion(idsValidos, datosFresh, salidasFresh);
-    const res = await fetch(SALIDAS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids_productos: idsConRelacionados, rol: USUARIO_ACTUAL }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    salidasRegistradas = await fetchSalidas();
-    seleccionados.clear();
-    const ca = document.getElementById('chk-all');
-    if (ca) ca.checked = false;
-    await cargarDatos();
-    const extras = Math.max(0, idsConRelacionados.length - idsValidos.length);
-    mostrarToast(`${data.registradas || idsConRelacionados.length} salida(s) registradas. ${extras ? `Incluye ${extras} relacionada(s) por identificación.` : ''}`, 'ok');
-  } catch(e) {
-    mostrarToast('Error al registrar despacho: ' + e.message, 'err');
-  }
+      const idsConRelacionados = expandirIdsRelacionadosPorIdentificacion(idsValidos, datosFresh, salidasFresh);
+      const res = await fetch(SALIDAS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids_productos: idsConRelacionados, rol: USUARIO_ACTUAL, usuario: usuarioOperacionActual() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      salidasRegistradas = await fetchSalidas();
+      seleccionados.clear();
+      const ca = document.getElementById('chk-all');
+      if (ca) ca.checked = false;
+      await cargarDatos();
+      const extras = Math.max(0, idsConRelacionados.length - idsValidos.length);
+      mostrarToast(`${data.registradas || idsConRelacionados.length} salida(s) registradas. ${extras ? `Incluye ${extras} relacionada(s) por identificación.` : ''}`, 'ok');
+    } catch(e) {
+      mostrarToast('Error al registrar despacho: ' + e.message, 'err');
+    }
+  });
 }
 
 // ── MODAL EDITAR SALIDA ───────────────────────────────────────────────────────
@@ -1797,14 +4654,13 @@ async function guardarEditSalida() {
     const res = await fetch(`${SALIDAS_URL}/${editSalidaId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fecha_salida: new Date(nuevaFecha).toISOString(), rol: 'admin' }),
+      body: JSON.stringify({ fecha_salida: new Date(nuevaFecha).toISOString(), rol: 'admin', usuario: usuarioOperacionActual() }),
     });
     const data = await res.json();
     if (data.error) { alert('Error: ' + data.error); return; }
     salidasRegistradas = normalizarListaSalidas(await fetch(SALIDAS_URL).then(r => r.json()));
     cerrarModalEditSalida();
     renderInventario();
-    actualizarKPIsTop();
     actualizarPanelCuadre();
   } catch(e) {
     alert('Error: ' + e.message);
@@ -1830,77 +4686,73 @@ function renderTablaClientes(lista) {
   if (active === 'crudas') {
     if (titulo) titulo.textContent = 'Información — Crudas';
     document.getElementById('cli-count').textContent = crudas.length + ' registros';
-    document.getElementById('cli-total-label').textContent = crudas.length + ' registros';
+    const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
+    const mov = resumenMovimientoRealInventario(crudas, fechaSel);
+    document.getElementById('cli-total-label').textContent =
+      `${crudas.length} registros · Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día`;
     if (!crudas.length) {
       if (tbodyCrud) tbodyCrud.innerHTML = '<tr><td colspan="9" class="empty">Sin registros</td></tr>';
       return;
     }
-    const grupos = {};
-    crudas.forEach(d => { const p = d.propietario || 'Sin asignar'; if (!grupos[p]) grupos[p] = []; grupos[p].push(d); });
-    let html = '';
-    Object.entries(grupos).sort((a, b) => a[0].localeCompare(b[0])).forEach(([prop, items]) => {
-      const sub = agruparPorOrdenado(items, d => `${ubicacionPlaza(d)}||${d.empresa_destino || '—'}`);
-      let primera = true;
-      sub.forEach(sg => {
-        const rep = sg[0];
-        const salGrupo = salidaUltimaGrupo(sg);
-        html += `<tr>
-          <td style="font-weight:600">${primera ? escapeHtml(prop) : ''}</td>
-          <td style="font-size:12px">${celdaIdsAgrupados(prop, sg, 'viscera')}</td>
-          <td>${badgeObs(rep.observacion, rep, 'viscera')}</td>
-          <td>${escapeHtml(ubicacionPlaza(rep))}</td>
-          <td style="font-size:12px;color:var(--tx2)">${escapeHtml(rep.sucursal || '—')}</td>
-          <td style="font-size:12px;color:var(--tx2)">${escapeHtml(rep.empresa_destino || '—')}</td>
-          <td style="font-size:12px">${formatFecha(rep.fecha_ingreso_cava)}</td>
-          <td style="font-size:12px">${salGrupo ? formatFecha(salGrupo) : '—'}</td>
-          <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:var(--verde)">${sg.length}</span></td>
-        </tr>`;
-        primera = false;
-      });
-      if (sub.length > 1) {
-        html += `<tr style="background:var(--verde2)"><td colspan="8" style="font-size:12px;color:var(--tx2);padding-left:16px">Total ${escapeHtml(prop)}</td><td style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:var(--verde)">${items.length}</td></tr>`;
-      }
-    });
-    if (tbodyCrud) tbodyCrud.innerHTML = html;
+    const sortedCrud = [...crudas].sort((a, b) =>
+      String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+    );
+    if (tbodyCrud) {
+      tbodyCrud.innerHTML = sortedCrud.map((d) => {
+        const sal = salidaUltimaGrupo([d]);
+        const titProp = d.propietario_origen === 'vista_ultimo'
+          ? 'Propietario según último registro disponible en la vista'
+          : '';
+        return `<tr>
+      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}</td>
+      <td style="font-weight:600"${titProp ? ` title="${escapeHtml(titProp).replace(/"/g, '&quot;')}"` : ''}>${escapeHtml(d.propietario || 'Sin asignar')}${d.propietario_origen === 'vista_ultimo' ? ' <span class="prop-origen" aria-hidden="true">·</span>' : ''}</td>
+      <td>${badgeObs(d.observacion, d, 'viscera')}</td>
+      <td>${escapeHtml(ubicacionPlaza(d))}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
+      <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
+      <td style="font-size:12px">${sal ? formatFecha(sal) : '—'}</td>
+      <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:var(--verde)">1</span></td>
+    </tr>`;
+      }).join('');
+    }
     return;
   }
 
   if (titulo) titulo.textContent = 'Información — Librillos';
   document.getElementById('cli-count').textContent = librillos.length + ' registros';
-  document.getElementById('cli-total-label').textContent = librillos.length + ' registros';
-  if (!librillos.length) { tbody.innerHTML = '<tr><td colspan="10" class="empty">Sin registros</td></tr>'; return; }
+  const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
+  const mov = resumenMovimientoRealInventario(librillos, fechaSel);
+  document.getElementById('cli-total-label').textContent =
+    `${librillos.length} registros · Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día`;
+  if (!librillos.length) {
+    tbody.innerHTML = '<tr><td colspan="11" class="empty">Sin registros</td></tr>';
+    return;
+  }
 
-  const grupos = {};
-  librillos.forEach(d => { const p = d.propietario || 'Sin asignar'; if (!grupos[p]) grupos[p] = []; grupos[p].push(d); });
-
-  let html = '';
-  Object.entries(grupos).sort((a, b) => a[0].localeCompare(b[0])).forEach(([prop, items]) => {
-    html += `<tr style="background:rgba(192,57,43,0.07)">
-      <td colspan="10" style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:15px;color:var(--rojo);padding:10px 16px">
-        ${escapeHtml(prop)} <span style="font-size:12px;color:var(--tx2);font-family:'Barlow',sans-serif;font-weight:400">— ${items.length} librillo${items.length !== 1 ? 's' : ''}</span>
-      </td></tr>`;
-
-    const subCru = agruparPorOrdenado(items, d => `${d.cliente_destino || '—'}||${(d.observacion || '').trim()}`);
-    let primera = true;
-
-    subCru.forEach(sg => {
-      const rep = sg[0];
-      html += `<tr class="client-row" style="${estilosFilaCliente(resolverCliente(rep))}">
-        <td style="color:var(--tx2);font-size:12px">${primera ? escapeHtml(prop) : ''}</td>
-        <td>${clienteChipHtml(resolverCliente(rep))}</td>
-        <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacion(rep))}</span></td>
-        <td>${celdaIdsAgrupados(prop, sg, 'librillo')}</td>
-        <td>${badgeObs(rep.observacion, rep, 'librillo')}</td>
-        <td>${escapeHtml(ubicacionPlaza(rep))}</td>
-        <td style="font-size:12px;color:var(--tx2)">${escapeHtml(rep.sucursal || '—')}</td>
-        <td style="font-size:12px;color:var(--tx2)">${escapeHtml(rep.empresa_destino || '—')}</td>
-        <td style="font-size:12px">${formatFecha(rep.fecha_ingreso_cava)}</td>
-        <td style="font-size:12px">${formatFecha(rep.fecha_salida_cava)}</td>
-      </tr>`;
-      primera = false;
-    });
-  });
-  tbody.innerHTML = html;
+  const sorted = [...librillos].sort((a, b) =>
+    String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+  );
+  tbody.innerHTML = sorted.map((d) => {
+    const sal = salidaUltimaGrupo([d]);
+    const prop = d.propietario || 'Sin asignar';
+    const titProp = d.propietario_origen === 'vista_ultimo'
+      ? 'Propietario según último registro disponible en la vista'
+      : '';
+    return `<tr class="client-row" style="${estilosFilaCliente(d.cliente_destino || '—')}">
+      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}</td>
+      <td style="font-weight:600"${titProp ? ` title="${escapeHtml(titProp).replace(/"/g, '&quot;')}"` : ''}>${escapeHtml(prop)}${d.propietario_origen === 'vista_ultimo' ? ' <span class="prop-origen" aria-hidden="true">·</span>' : ''}</td>
+      <td>${clienteChipHtml(d.cliente_destino || '—')}</td>
+      <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacionMacro(d))}</span></td>
+      <td>${badgeObs(d.observacion, d, 'librillo')}</td>
+      <td>${escapeHtml(ubicacionPlaza(d))}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
+      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
+      <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
+      <td style="font-size:12px">${sal ? formatFecha(sal) : '—'}</td>
+      <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:var(--rojo)">1</span></td>
+    </tr>`;
+  }).join('');
 }
 
 function cambiarSubtabClientes(tab) {
@@ -1912,19 +4764,49 @@ function cambiarSubtabClientes(tab) {
   if (bC) bC.classList.toggle('active', tab === 'crudas');
   if (sL) sL.style.display = tab === 'librillos' ? 'block' : 'none';
   if (sC) sC.style.display = tab === 'crudas' ? 'block' : 'none';
-  renderTablaClientes(datosClientes);
+  filtrarCli();
+}
+
+/** Texto agregado de un registro para búsqueda global en vista Clientes (todas las columnas visibles + campos API). */
+function textoBusquedaClienteRow(d) {
+  if (!d) return '';
+  const partes = [];
+  const add = (v) => {
+    if (v == null) return;
+    if (typeof v === 'object') return;
+    partes.push(String(v));
+  };
+  add(d.propietario);
+  add(d.cliente_destino);
+  add(d.destino);
+  add(d.observacion);
+  add(d.sucursal);
+  add(d.empresa_destino);
+  add(d.agrupacion);
+  add(d.id_producto);
+  try {
+    partes.push(String(etiquetaAgrupacionMacro(d)));
+    partes.push(String(etiquetaAgrupacion(d)));
+    partes.push(String(ubicacionPlaza(d)));
+    partes.push(String(resolverCliente(d)));
+    partes.push(String(formatFecha(d.fecha_ingreso_cava)));
+    partes.push(String(formatFecha(d.fecha_salida_cava)));
+  } catch (_) { /* fechas o helpers */ }
+  for (const k of Object.keys(d)) {
+    const v = d[k];
+    if (v != null && typeof v !== 'object' && typeof v !== 'function') partes.push(String(v));
+  }
+  return partes.join(' ').toLowerCase();
 }
 
 function filtrarCli() {
-  const txt = document.getElementById('srch-cli').value.toLowerCase();
-  renderTablaClientes(datosClientes.filter(d =>
-    (d.propietario||'').toLowerCase().includes(txt) ||
-    (d.cliente_destino||'').toLowerCase().includes(txt) ||
-    (d.observacion||'').toLowerCase().includes(txt) ||
-    (d.sucursal||'').toLowerCase().includes(txt) ||
-    (d.empresa_destino||'').toLowerCase().includes(txt) ||
-    (etiquetaAgrupacion(d)).toLowerCase().includes(txt)
-  ));
+  const raw = (document.getElementById('srch-cli').value || '').trim();
+  const txt = raw.toLowerCase();
+  if (!txt) {
+    renderTablaClientes(datosClientes);
+    return;
+  }
+  renderTablaClientes(datosClientes.filter(d => textoBusquedaClienteRow(d).includes(txt)));
 }
 
 // ── MODAL IDs ─────────────────────────────────────────────────────────────────
@@ -1976,15 +4858,23 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function salidaRegistrada(idProducto, fechaDia, salidas) {
-  if (!fechaDia || !salidas || !salidas.length) return null;
-  const row = salidas.find(
-    x =>
+function salidaRegistrada(idProducto, fechaDia, salidas, dRow) {
+  if (!fechaDia) return null;
+  const lista = salidas || [];
+  const row = lista.find(
+    (x) =>
       x.id_producto === idProducto &&
       x.fecha_salida &&
-      diaOperacionISOFromTimestamp(x.fecha_salida) === fechaDia
+      diaOperativoSalidaISO(x.fecha_salida) === fechaDia
   );
-  return row ? row.fecha_salida : null;
+  if (row) return row.fecha_salida;
+  if (
+    dRow?.fecha_salida_cava &&
+    diaOperativoSalidaISO(dRow.fecha_salida_cava) === fechaDia
+  ) {
+    return dRow.fecha_salida_cava;
+  }
+  return null;
 }
 
 function salidaUltimaRegistrada(idProducto) {
@@ -1994,9 +4884,30 @@ function salidaUltimaRegistrada(idProducto) {
   return rows[0].fecha_salida;
 }
 
+/** Colbeef o cava (la más reciente) para mostrar en tablas. */
+function salidaEfectivaTimestamp(idProducto, dRow) {
+  const colb = salidaUltimaRegistrada(idProducto);
+  const cava = dRow?.fecha_salida_cava ? String(dRow.fecha_salida_cava) : null;
+  if (!colb && !cava) return null;
+  if (!cava) return colb;
+  if (!colb) return cava;
+  return new Date(colb) >= new Date(cava) ? colb : cava;
+}
+
+function salidaEfectivaDetalle(idProducto, dRow) {
+  const colb = salidaUltimaRegistrada(idProducto);
+  const cava = dRow?.fecha_salida_cava ? String(dRow.fecha_salida_cava) : null;
+  if (!colb && !cava) return null;
+  if (!cava) return { ts: colb, fuente: 'Colbeef' };
+  if (!colb) return { ts: cava, fuente: 'Trazabilidad' };
+  return new Date(colb) >= new Date(cava)
+    ? { ts: colb, fuente: 'Colbeef' }
+    : { ts: cava, fuente: 'Trazabilidad' };
+}
+
 function salidaUltimaGrupo(items) {
   const fechas = (items || [])
-    .map(d => salidaUltimaRegistrada(d.id_producto))
+    .map((d) => salidaEfectivaTimestamp(d.id_producto, d))
     .filter(Boolean)
     .sort((a, b) => new Date(b) - new Date(a));
   return fechas[0] || null;
@@ -2016,7 +4927,7 @@ function tablaReporteGeneralLibrillosHTML(datos, fechaISO, salidas) {
     <th>ID Producto</th><th>Cliente Destino</th><th>Sucursal</th><th>Empresa destino</th><th>Entrada</th><th>Salida</th>
   </tr></thead><tbody>`;
   sorted.forEach(d => {
-    const sal = salidaRegistrada(d.id_producto, fechaISO, salidas);
+    const sal = salidaRegistrada(d.id_producto, fechaISO, salidas, d);
     h += `<tr>
       <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
       <td style="color:var(--verde);font-weight:500">${escapeHtml(d.cliente_destino) || '—'}</td>
@@ -2038,7 +4949,7 @@ function tablaReporteGeneralLibrillosHTMLExport(datos, fechaISO, salidas) {
     <th style="padding:10px;border:1px solid #666">ID Producto</th><th style="padding:10px;border:1px solid #666">Cliente Destino</th><th style="padding:10px;border:1px solid #666">Sucursal</th><th style="padding:10px;border:1px solid #666">Empresa destino</th><th style="padding:10px;border:1px solid #666">Entrada</th><th style="padding:10px;border:1px solid #666">Salida</th>
   </tr></thead><tbody>`;
   sorted.forEach(d => {
-    const sal = salidaRegistrada(d.id_producto, fechaISO, salidas);
+    const sal = salidaRegistrada(d.id_producto, fechaISO, salidas, d);
     h += `<tr>
       <td style="padding:8px;border:1px solid #ccc;font-weight:700;color:#8b0000">${escapeHtml(d.id_producto)}</td>
       <td style="padding:8px;border:1px solid #ccc">${escapeHtml(d.cliente_destino) || '—'}</td>
@@ -2052,12 +4963,27 @@ function tablaReporteGeneralLibrillosHTMLExport(datos, fechaISO, salidas) {
   return h;
 }
 
-function kpisGeneral(datos) {
-  const librillos = (datos || []).filter(esVistaHistorialLibrillos);
-  const crudas = (datos || []).filter(esVistaHistorialCrudasSolo);
+/**
+ * KPIs alineados con «LISTA LIBRILLOS / CRUDAS» y el pivote: mismos registros que
+ * `filtrarPorIngresoRango` cuando hay período (día operativo de ingreso a cava).
+ * Sin período, cuenta todo el conjunto recibido (comportamiento previo).
+ */
+function kpisGeneral(datos, opts = {}) {
+  const desde = opts.desde;
+  const hasta = opts.hasta;
+  let librillos = (datos || []).filter(esVistaHistorialLibrillos);
+  let crudas = (datos || []).filter(esVistaHistorialCrudasSolo);
+  if (desde && hasta) {
+    librillos = filtrarPorIngresoRango(librillos, desde, hasta);
+    crudas = filtrarPorIngresoRango(crudas, desde, hasta);
+  }
   const clis = new Set(librillos.map(d => d.cliente_destino).filter(Boolean));
   const propsCrud = new Set(crudas.map(d => d.propietario).filter(Boolean));
-  return `<div class="rep-kpis">
+  const tipKpis =
+    desde && hasta
+      ? ' title="Mismo criterio que el resumen y el total general: ingreso a cava en el período (día operativo)."'
+      : '';
+  return `<div class="rep-kpis"${tipKpis}>
     <div class="rep-kpi"><div class="rep-kpi-n">${librillos.length}</div><div class="rep-kpi-l">Librillos</div></div>
     <div class="rep-kpi"><div class="rep-kpi-n">${crudas.length}</div><div class="rep-kpi-l">Crudas</div></div>
     <div class="rep-kpi"><div class="rep-kpi-n">${clis.size}</div><div class="rep-kpi-l">Clientes destino</div></div>
@@ -2065,14 +4991,80 @@ function kpisGeneral(datos) {
   </div>`;
 }
 
+/** Mismas tablas tipo pivote «LISTA LIBRILLOS ASURCARNESGLO» (CLIENTE/PLAZA × CANTIDAD) que el Excel. */
+function debeIncluirListasPorAgrupacion(opts, datos) {
+  if (opts.incluirListasPorAgrupacion === false) return false;
+  if (!(datos || []).some((d) => esLibrilloParaReporteAgrupacion(d))) return false;
+  const desde = opts?.desde;
+  const hasta = opts?.hasta;
+  if (opts.incluirResumenLibrosChunchullas === true) return true;
+  if (desde && hasta && desde === hasta) return true;
+  return false;
+}
+
 function cuerpoReporteGeneral(datos, fechaISO, salidas, opts = {}) {
+  if (opts.soloListasLibrillosPorAgrupacion) {
+    const soloResumen = opts.vistaReporte !== 'detalle';
+    const soloLista = htmlReporteAgrupaciones(datos, fechaISO, salidas, {
+      soloResumen,
+      omitTotalesAside: true,
+    });
+    return (
+      soloLista ||
+      '<p style="color:var(--tx3);padding:12px">Sin datos de librillos para esta agrupación</p>'
+    );
+  }
   const t = tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts);
-  return t || '<p style="color:var(--tx3);padding:12px">Sin datos</p>';
+  let listasAgrup = '';
+  if (debeIncluirListasPorAgrupacion(opts, datos)) {
+    listasAgrup = htmlReporteAgrupaciones(datos, fechaISO, salidas, { soloResumen: true });
+  }
+  if (!t && !listasAgrup) return '<p style="color:var(--tx3);padding:12px">Sin datos</p>';
+  const sep =
+    t && listasAgrup
+      ? `<div style="margin:28px 0 8px;padding-bottom:6px;border-bottom:2px solid var(--brd2)"><strong style="font-size:15px;color:var(--rojo)">Listas por agrupación</strong> <span style="font-size:12px;color:var(--tx3)">(mismo criterio que el libro RETIRO: una tabla por bucket comercial)</span></div>`
+      : '';
+  return (t || '') + sep + listasAgrup;
 }
 
 function cuerpoReporteGeneralExport(datos, fechaISO, salidas, opts = {}) {
-  const t = tablaMovimientoResumenDiaHTMLExport(datos, fechaISO, salidas, opts);
-  return t || '<p>Sin datos</p>';
+  const desde = opts?.desde || fechaISO;
+  const hasta = opts?.hasta || fechaISO;
+  if (opts.soloListasLibrillosPorAgrupacion) {
+    const soloResumen = opts.vistaReporte !== 'detalle';
+    const inner = htmlReporteAgrupacionesExport(datos, fechaISO, salidas, {
+      soloResumen,
+      omitTotalesAside: true,
+    });
+    if (!inner || String(inner).includes('Sin librillos')) {
+      return inner || '<p>Sin datos</p>';
+    }
+    return `<div>${inner}</div>`;
+  }
+  const inner = tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts);
+  let listasAgrup = '';
+  if (debeIncluirListasPorAgrupacion(opts, datos)) {
+    listasAgrup =
+      `<div style="margin:28px 0 10px;padding-bottom:8px;border-bottom:2px solid #ccc"><strong style="font-size:15px;color:#8b0000">Listas por agrupación</strong> <span style="font-size:12px;color:#666">(CLIENTE / PLAZA × CANTIDAD, tipo Excel)</span></div>` +
+      htmlReporteAgrupacionesExport(datos, fechaISO, salidas, { soloResumen: true });
+  }
+  if (!inner && !listasAgrup) return '<p>Sin datos</p>';
+  const librIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialLibrillos), desde, hasta);
+  const crudIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialCrudasSolo), desde, hasta);
+  const totalLib = contarPorClienteComercialPuesto(librIng).reduce((a, b) => a + b.cantidad, 0);
+  const totalCrud = contarPorPropietarioUbicacion(crudIng).reduce((a, b) => a + b.cantidad, 0);
+  const bloqueLch = opts.incluirResumenLibrosChunchullas
+    ? htmlResumenLibrosChunchullasCrudas(datos, { fechaReporte: fechaISO, resumenMacro: opts.resumenMacro })
+    : '';
+  return `
+    <div>
+      <div style="font-weight:900;color:#8b0000;margin-top:10px">Movimiento (procesados) — ${escapeHtml(desde)} a ${escapeHtml(hasta)}</div>
+      <p style="font-size:12px;color:#666;margin:8px 0">Cada fila del listado detallado = 1 unidad. Tabla resumida = conteo por propietario y plaza.</p>
+      <div style="margin-top:8px">Total Librillos: <strong>${totalLib}</strong> · Total Crudas: <strong>${totalCrud}</strong></div>
+      ${bloqueLch}
+      ${inner || ''}
+      ${listasAgrup}
+    </div>`;
 }
 
 function filtrarPorIngresoDia(items, fechaISO) {
@@ -2110,84 +5102,538 @@ function contarPorClientePuesto(items, getCliente, getPuesto) {
   return out;
 }
 
-/** Plaza / ubicación: prioriza `sucursal`; fallback `destino`. */
-function ubicacionPlaza(d) {
-  const suc = d && d.sucursal != null && String(d.sucursal).trim();
-  if (suc) return suc;
-  const dest = d && d.destino != null && String(d.destino).trim();
-  return dest || '—';
+function limpiarPuestoTxt(v) {
+  return String(v || '').replace(/\s+/g, ' ').trim();
+}
+
+function esEtiquetaInstruccionOperativa(txt) {
+  const u = String(txt || '').toUpperCase();
+  if (!u) return false;
+  return /\bRETIRAR?\s+LIBRIL+OS?\b|\bCRUDAS?\b|\bDERIVADOS?\b|\bCARNICOS?\b|\bOBSERVA?CION\b/.test(u);
 }
 
 /**
- * Conteo por propietario + plaza (1 fila de trazabilidad = 1 unidad).
+ * Texto completo de observación (estilo hoja DATOS col D): prioriza `observaciones` del merge;
+ * si no hay, usa `observacion` (puede venir sin la parte antes del retiro).
  */
+function textoObservacionFuente(d) {
+  const full = limpiarPuestoTxt(d?.observaciones);
+  if (full) return full;
+  return limpiarPuestoTxt(d?.observacion);
+}
+
+/**
+ * Plaza / puesto: tramo antes del primer "(" (sin la instrucción RETIRAR LIBRILLOS…).
+ * Si el formato es «ZONA - PLAZA», la plaza operativa es lo que va **después del primer guion**.
+ */
+function plazaLogisticaTrasGuion(antesParentesis) {
+  const s = limpiarPuestoTxt(antesParentesis);
+  if (!s) return null;
+  const m = s.match(/^(.+?)\s*-\s*(.+)$/s);
+  if (m && limpiarPuestoTxt(m[2])) return limpiarPuestoTxt(m[2]);
+  return s;
+}
+
+function plazaDesdeTextoObservacion(raw) {
+  const s = limpiarPuestoTxt(raw);
+  if (!s) return null;
+  const idx = s.indexOf('(');
+  const antes = idx === -1 ? s : s.slice(0, idx);
+  return plazaLogisticaTrasGuion(antes) || null;
+}
+
+/**
+ * Detecta plaza operativa en cualquier tramo de la observación
+ * (incluyendo el texto dentro de paréntesis), para evitar usar frases
+ * de instrucción como "RETIRAR LIBRILLOS ..." en el pivote.
+ */
+function plazaOperativaDesdeObservacion(raw) {
+  const s = limpiarPuestoTxt(raw);
+  if (!s) return null;
+  const u = s.toUpperCase();
+
+  // Codigo con turno, p.ej. 01500 /VxS/
+  const mTurno = u.match(/\b(\d{4,6})\s*\/([A-Z])X([A-Z])\//);
+  if (mTurno) return `${mTurno[1]} /${mTurno[2]}x${mTurno[3]}/`;
+
+  // Codigo + CAVA, p.ej. 02083 CAVA
+  const mCodCava = u.match(/\b(\d{4,6})\s*CAVA\b/);
+  if (mCodCava) return `${mCodCava[1]} CAVA`;
+
+  // Siglas/plazas típicas
+  const mTf = u.match(/\bTF\d+\b/);
+  if (mTf) return mTf[0];
+  if (/\bDRA\s*CAVA\b/.test(u)) return 'DRA CAVA';
+  if (/\bCAVA\s*WO\b/.test(u)) return 'CAVA WO';
+  if (/\bCAVA\s*MIREYA\b/.test(u)) return 'CAVA MIREYA';
+  if (/\bCAVA\s*FREDY\b/.test(u)) return 'CAVA FREDY';
+
+  return null;
+}
+
+/** Aplica `plazas-alias.json` (exact + contains) sobre una etiqueta base y variantes de búsqueda. */
+function aplicarMapaPlazasAlias(base, variantesParaContains) {
+  const baseU = String(base).toUpperCase();
+  const exact = PLAZAS_ALIAS?.exact || {};
+  if (exact[baseU]) return String(exact[baseU]).trim();
+
+  const contains = PLAZAS_ALIAS?.contains || {};
+  const universo = (variantesParaContains || [])
+    .map((x) => String(x || '').toUpperCase())
+    .join(' | ');
+  for (const [k, v] of Object.entries(contains)) {
+    if (k && universo.includes(String(k).toUpperCase())) return String(v).trim();
+  }
+  return base;
+}
+
+function extraerPuestoMacroDesdeCampos(d) {
+  const suc = limpiarPuestoTxt(d?.sucursal);
+  const dest = limpiarPuestoTxt(d?.destino);
+  const joinedU = [suc, dest].filter(Boolean).join(' | ').toUpperCase();
+
+  // Patrones directos estilo macro.
+  const mCodCava = joinedU.match(/\b(\d{4,6})\s*CAVA\b/);
+  if (mCodCava) return `${mCodCava[1]} CAVA`;
+  if (/\bDRA\s*CAVA\b/.test(joinedU)) return 'DRA CAVA';
+  if (/\bCAVA\s*FREDY\b/.test(joinedU)) return 'CAVA FREDY';
+  return null;
+}
+
+/**
+ * Puesto/plaza normalizado para resumen tipo macro:
+ * - Si hay destino y sucursal:
+ *   - destino con CAVA + sucursal numérica => "<sucursal> CAVA"
+ *   - de lo contrario, prioriza destino (criterio logístico)
+ * - Si no hay destino, usa sucursal.
+ */
+function puestoNormalizado(d) {
+  const macro = extraerPuestoMacroDesdeCampos(d);
+  if (macro && !esEtiquetaInstruccionOperativa(macro)) return macro;
+
+  const suc = limpiarPuestoTxt(d?.sucursal);
+  const dest = limpiarPuestoTxt(d?.destino);
+  // Regla de negocio: plaza se maneja por sucursal.
+  // Solo si no hay sucursal, se usa destino como respaldo.
+  const sucOk = esEtiquetaInstruccionOperativa(suc) ? '' : suc;
+  const destOk = esEtiquetaInstruccionOperativa(dest) ? '' : dest;
+  const base = sucOk || destOk || '—';
+  return aplicarMapaPlazasAlias(base, [suc, dest, base]);
+}
+
+/**
+ * Plaza para UI y reportes: igual a `sucursal` de BD (mismo criterio que el API en `plaza`).
+ */
+function ubicacionPlaza(d) {
+  const apiPlaza = limpiarPuestoTxt(d?.plaza);
+  const suc = limpiarPuestoTxt(d?.sucursal);
+  const base = suc || apiPlaza;
+  if (!base) return '—';
+  if (esEtiquetaInstruccionOperativa(base)) return '—';
+  return aplicarMapaPlazasAlias(base, [suc, apiPlaza, base]);
+}
+
+function destinoTabla(d) {
+  const destino = String(d?.destino || '').trim();
+  if (destino) return destino;
+  return ubicacionPlaza(d);
+}
+
+/**
+ * Etiqueta de puesto para pivote tipo macro (INICIO).
+ * `plazaDesdeTextoObservacion` ya deja solo el tramo tras «-» si venía «ZONA - PUESTO».
+ * Respaldo: si aún hay « - », se toma la última parte.
+ */
+function puestoPivotMacro(d) {
+  return ubicacionPlaza(d);
+}
+
+/** Para pivote DERIVADOS: nombres tal como vienen en BD (empresa / propietario / cliente parseado), no etiquetas cortas. */
+function candidatosNombreCliente(d) {
+  return [
+    String(d?.propietario || '').trim(),
+    String(d?.empresa_destino || '').trim(),
+    String(d?.cliente_destino || '').trim(),
+  ].filter(Boolean);
+}
+
+/** Entre candidatos que cumplen el test, el más largo suele ser la razón social o nombre completo. */
+function elegirNombreMasCompleto(candidatos, test) {
+  const hits = candidatos.filter((s) => test(s));
+  if (!hits.length) return null;
+  return [...hits].sort((a, b) => b.length - a.length)[0];
+}
+
+function clientePivotMacro(d, nombreGrupo = '') {
+  const g = String(nombreGrupo || '').toUpperCase();
+  const obsU = String(textoObservacionFuente(d) || '').toUpperCase();
+  const cliDestU = String(d?.cliente_destino || '').toUpperCase();
+
+  const clienteDerivadosMacro = () => {
+    const src = `${obsU} ${cliDestU}`;
+    const cand = candidatosNombreCliente(d);
+    const prop = String(d?.propietario || '').trim();
+    const emp = String(d?.empresa_destino || '').trim();
+    const cliDest = String(d?.cliente_destino || '').trim();
+    const esEtiquetaOperativa = (txt) =>
+      /\bPLAZA\b|\bCAVA\b|\bRETIRAR?\s+LIBRIL+OS?\b|\bDERIVADOS?\b|\bCARNICOS?\b/.test(String(txt || '').toUpperCase());
+
+    // CARVISCOL → agrupación DERIVADOS; en el pivote el «cliente» es el propietario del animal (no la marca CARVISCOL).
+    if (src.includes('CARVISCOL')) {
+      return prop || elegirNombreMasCompleto(cand, (s) => /carviscol/i.test(s)) || 'CARVISCOL';
+    }
+    if (src.includes('RUTH CACUA') || cand.some((s) => /ruth/i.test(s) && /cacua/i.test(s))) {
+      const n = elegirNombreMasCompleto(cand, (s) => /ruth/i.test(s) && /cacua/i.test(s));
+      return prop || n || cliDest || 'RUTH CACUA';
+    }
+    if (
+      src.includes('JUAN CARLOS RUEDA') ||
+      src.includes('JUAN RUEDA') ||
+      cand.some((s) => /rueda/i.test(s))
+    ) {
+      const n = elegirNombreMasCompleto(cand, (s) => /rueda/i.test(s));
+      return prop || n || cliDest || 'JUAN CARLOS RUEDA';
+    }
+    if (src.includes('WALTER ARGUELLO') || cand.some((s) => /walter/i.test(s) && /arguello/i.test(s))) {
+      const n = elegirNombreMasCompleto(cand, (s) => /walter/i.test(s) || /arguello/i.test(s));
+      return prop || n || cliDest || 'WALTER ARGUELLO';
+    }
+    if (
+      src.includes('DERIVADOS CARNICOS VISCERAS PARA ACONDICIONAMIENTO') ||
+      src.includes('ARMANDO MURILLO')
+    ) {
+      const largoMacro =
+        'DERIVADOS CARNICOS VISCERAS PARA ACONDICIONAMIENTO-DESPOSTE-CONGELACION CARNE DE CABEZA-CUAJOS-CHUNCHULLAS-CANUTAS PARA ARMANDO MURILLO';
+      const n = elegirNombreMasCompleto(cand, (s) =>
+        /olimpica|armando|murillo|acondicionamiento|super\s*tiendas/i.test(s)
+      );
+      return n || emp || cliDest || largoMacro;
+    }
+    if (src.includes('DERIVADOS CARNICOS')) {
+      if (prop && !esEtiquetaOperativa(prop)) return prop;
+      return emp || cliDest || 'DERIVADOS CARNICOS';
+    }
+
+    // Regla principal para esta hoja: agrupar por cliente/persona (propietario) y no por plaza ni texto RETIRAR...
+    if (prop && !esEtiquetaOperativa(prop)) return prop;
+    if (emp && !esEtiquetaOperativa(emp)) return emp;
+    if (cliDest && !esEtiquetaOperativa(cliDest)) return cliDest;
+
+    // Si no hay un nombre limpio, usar cualquier candidato no-operativo.
+    const candidatoLimpio = cand.find((s) => !esEtiquetaOperativa(s));
+    if (candidatoLimpio) return candidatoLimpio;
+
+    // Destino comercial típico en hoja DERIVADOS (último respaldo).
+    if (emp || cliDest) return emp || cliDest;
+    return clienteResumenMacro(d);
+  };
+
+  // En la hoja DERIVADOS del macro, el agrupador principal es el destino comercial
+  // (RUTH CACUA, JUAN CARLOS RUEDA, OLIMPICA, etc.).
+  if (g.includes('DERIVADOS')) {
+    return clienteDerivadosMacro();
+  }
+  return clienteResumenMacro(d);
+}
+
+function clienteResumenMacro(d) {
+  const id = String(d?.id_producto || '').trim();
+  const porId = CLIENTES_RESUMEN_CONFIG?.clientePorIdProducto;
+  if (id && porId && Object.prototype.hasOwnProperty.call(porId, id)) {
+    const v = String(porId[id] ?? '').trim();
+    if (v) return v;
+  }
+
+  const prop = String(d?.propietario || '').trim();
+  const emp = String(d?.empresa_destino || '').trim();
+  const modo = CLIENTES_RESUMEN_CONFIG?.modoClienteResumen || 'auto';
+
+  if (modo === 'propietario') return prop || emp || 'Sin cliente';
+  if (modo === 'empresa_destino') return emp || prop || 'Sin cliente';
+
+  if (!emp) return prop || 'Sin cliente';
+  if (empresaPareceUbicacionResumen(emp)) return prop || emp;
+  const exact = CLIENTES_RESUMEN_CONFIG?.auto?.empresaExactaUsaPropietario || [];
+  const eU = emp.toUpperCase();
+  if (exact.some((x) => String(x).toUpperCase() === eU) && prop) return prop;
+  return emp;
+}
+
+/** Texto corto para notas de reporte según modo de cliente. */
+function notaModoClienteResumenHtml() {
+  const m = CLIENTES_RESUMEN_CONFIG?.modoClienteResumen || 'auto';
+  if (m === 'empresa_destino') {
+    return 'Nivel <strong>CLIENTE</strong> = <code>empresa_destino</code> (columna Empresa en DERIVADOS). <strong>PLAZA</strong> = <code>sucursal</code> de BD.';
+  }
+  if (m === 'propietario') {
+    return 'Nivel <strong>CLIENTE</strong> = <code>propietario</code> (Empresa propietaria, col B DATOS). <strong>PLAZA</strong> = <code>sucursal</code> de BD.';
+  }
+  return 'Modo <strong>auto</strong>: el cliente del resumen es <code>empresa_destino</code> salvo cuando parece ubicación o está en excepciones del JSON → entonces <code>propietario</code>. La plaza es <code>sucursal</code> en BD.';
+}
+
+/**
+ * Tabla de auditoría: ID y valores usados en el pivote (cliente resumen + plaza normalizada).
+ */
+function htmlAuditoriaClientePlaza(items, opts = {}) {
+  const list = [...(items || [])]
+    .filter(Boolean)
+    .sort((a, b) =>
+      String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+    );
+  if (!list.length) return '';
+  const exp = opts.exportInline === true;
+  const border = '#bdbdbd';
+
+  const rows = list
+    .map((d) => {
+      const id = escapeHtml(d.id_producto || '—');
+      const g = grupoPivotParaFila(d, opts?.nombreGrupo || '');
+      const cli = escapeHtml(clientePivotMacro(d, g));
+      const prop = escapeHtml(String(d?.propietario || '').trim() || 'Sin asignar');
+      const plz = escapeHtml(puestoPivotMacro(d));
+      if (exp) {
+        return `<tr style="background:#fafafa;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+          <td style="border:1px solid ${border};padding:5px 8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:#c0392b">${id}</td>
+          <td style="border:1px solid ${border};padding:5px 8px;font-size:11px">${cli}</td>
+          <td style="border:1px solid ${border};padding:5px 8px;font-size:11px">${prop}</td>
+          <td style="border:1px solid ${border};padding:5px 8px;font-size:11px">${plz}</td>
+        </tr>`;
+      }
+      return `<tr class="mov-audit-row">
+        <td class="mov-audit-td-id">${id}</td>
+        <td class="mov-audit-td-cli">${cli}</td>
+        <td class="mov-audit-td-prop">${prop}</td>
+        <td class="mov-audit-td-plz">${plz}</td>
+      </tr>`;
+    })
+    .join('');
+  if (exp) {
+    return `
+      <div style="margin-top:8px">
+        <div style="font-weight:800;font-size:11px;margin-bottom:6px;color:#37474f">Auditoría: cliente / plaza por ID</div>
+        <table style="width:100%;max-width:100%;border-collapse:collapse;font-size:11px;border:1px solid ${border}">
+          <thead>
+            <tr style="background:#eceff1">
+              <th style="border:1px solid ${border};padding:6px 8px;text-align:left">ID</th>
+              <th style="border:1px solid ${border};padding:6px 8px;text-align:left">Cliente resumen</th>
+              <th style="border:1px solid ${border};padding:6px 8px;text-align:left">Propietario</th>
+              <th style="border:1px solid ${border};padding:6px 8px;text-align:left">Plaza / puesto</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+  return `
+    <div class="mov-audit-block">
+      <div class="mov-audit-h">Auditoría: cliente / plaza por ID</div>
+      <div class="mov-audit-scroll">
+        <table class="mov-audit-table dt">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Cliente resumen</th>
+              <th>Propietario</th>
+              <th>Plaza / puesto</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+/**
+ * Conteo por cliente comercial final + puesto/plaza (estilo macro):
+ * - CLIENTE = según clientes-resumen-config.json (modo + overrides)
+ * - PUESTO = plaza desde observación (antes de "(") o sucursal/destino normalizado
+ */
+function grupoPivotParaFila(d, nombreGrupo = '') {
+  const g = String(nombreGrupo || '').trim();
+  if (g) return g;
+  return etiquetaAgrupacionMacro(d);
+}
+
+function contarPorClienteComercialPuesto(items, nombreGrupo = '') {
+  return contarPorClientePuesto(
+    items,
+    d => clientePivotMacro(d, grupoPivotParaFila(d, nombreGrupo)),
+    d => puestoPivotMacro(d)
+  ).map(r => ({
+    cliente: r.cliente,
+    ubicacion: r.puesto,
+    cantidad: r.cantidad
+  }));
+}
+
+/** Conteo por propietario + puesto (útil para crudas/resúmenes operativos internos). */
 function contarPorPropietarioUbicacion(items) {
-  return contarPorClientePuesto(items, d => d.propietario || 'Sin asignar', d => ubicacionPlaza(d)).map(r => ({
-    propietario: r.cliente,
+  return contarPorClientePuesto(
+    items,
+    d => String(d?.propietario || '').trim() || 'Sin asignar',
+    d => ubicacionPlaza(d)
+  ).map(r => ({
+    cliente: r.cliente,
     ubicacion: r.puesto,
     cantidad: r.cantidad
   }));
 }
 
 /**
- * Bloque LISTA LIBRILLOS + fecha: CLIENTE/PLAZA × CANTIDAD y total general (ubicación = destino o sucursal).
+ * Bloque LISTA LIBRILLOS + fecha: CLIENTE/PLAZA × CANTIDAD y total general (plaza = sucursal).
  */
 function htmlListaLibrillosResumenBloque(items, nombreGrupo, fechaISO) {
-  const rows = contarPorPropietarioUbicacion(items || []);
+  const rows = contarPorClienteComercialPuesto(items || [], nombreGrupo);
   if (!rows.length) return '';
   const total = rows.reduce((s, r) => s + r.cantidad, 0);
   const color = 'var(--rojo)';
   const titulo = `LISTA LIBRILLOS ${String(nombreGrupo || '').toUpperCase()}`;
+  const audit = htmlAuditoriaClientePlaza(items || [], { nombreGrupo });
   return `
     <div class="rep-resumen-bloque">
-      <div class="rep-resumen-titlebar">
-        <span class="rep-resumen-bloque-tit">${escapeHtml(titulo)}</span>
-        <span class="rep-resumen-bloque-fecha">${escapeHtml(formatFechaCorta(fechaISO))}</span>
+      <div class="rep-pivot-audit-grid">
+        <div class="tw rep-table-wrap rep-pivot-audit-main">
+          <table class="dt rep-resumen-pivot">
+            <thead>
+              <tr>
+                <th colspan="2" class="rep-resumen-th-titulo">${escapeHtml(titulo)} · ${escapeHtml(formatFechaCorta(fechaISO))}</th>
+              </tr>
+              <tr>
+                <th colspan="2" class="rep-resumen-th-cierre">Cierre de turno: ${escapeHtml(labelFecha(fechaISO))}</th>
+              </tr>
+              <tr>
+                <th class="rep-resumen-th-cols">CLIENTE / PLAZA</th>
+                <th class="rep-resumen-th-cols rep-resumen-th-num">CANTIDAD</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${htmlPivotPropietarioPlaza(rows, color)}
+              <tr class="rep-resumen-total-gen">
+                <td>Total general</td>
+                <td class="rep-resumen-td-num">${total}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        ${audit}
       </div>
-      <div class="tw rep-table-wrap">
-        <table class="dt rep-resumen-pivot">
-          <thead class="rep-resumen-thead"><tr>
-            <th>CLIENTE / PLAZA</th>
-            <th class="rep-resumen-th-num">CANTIDAD</th>
-          </tr></thead>
-          <tbody>
-            ${htmlPivotPropietarioPlaza(rows, color)}
-            <tr class="rep-resumen-total-gen">
-              <td>Total general</td>
-              <td class="rep-resumen-td-num">${total}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="rep-resumen-nota">Fila amarilla = <strong>propietario</strong> (<code>nombre_propietario</code> en vw_pbi01). Fila azul = <strong>plaza</strong>: primero <code>destino</code>, si está vacío <code>sucursal</code>. Solo entran retiros con <strong>cliente destino parseado</strong>, agrupación distinta de Otros/Sin destino, y <strong>fila en vw_pbi01</strong> para el turno.</p>
     </div>`;
 }
 
+/**
+ * Export HTML → Excel: dos tablas independientes (auditoría | LISTA LIBRILLOS), sin filas de relleno.
+ * La vista previa en pantalla no usa esta función (sigue `htmlListaLibrillosResumenBloque`).
+ */
 function htmlListaLibrillosResumenBloqueExport(items, nombreGrupo, fechaISO) {
-  const rows = contarPorPropietarioUbicacion(items || []);
+  const rows = contarPorClienteComercialPuesto(items || [], nombreGrupo);
   if (!rows.length) return '';
   const total = rows.reduce((s, r) => s + r.cantidad, 0);
   const titulo = `LISTA LIBRILLOS ${String(nombreGrupo || '').toUpperCase()}`;
-  const bodyPivot = htmlPivotPropietarioPlaza(rows, '#c0392b', { exportInline: true });
-  return `
-    <div style="margin-bottom:24px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px;margin-bottom:10px;padding:10px 12px;background:linear-gradient(90deg,#a5d6a7,#e8f5e9);border-radius:6px;border-left:4px solid #2e7d32">
-        <span style="font-weight:900;color:#1a2b1e">${escapeHtml(titulo)}</span>
-        <span style="font-weight:700;color:#37474f">${escapeHtml(formatFechaCorta(fechaISO))}</span>
-      </div>
-      <table style="width:100%;max-width:520px;border-collapse:collapse;font-size:12px;border:1px solid #9e9e9e">
-        <thead><tr style="background:#9575cd;color:#fff">
-          <th style="padding:10px;border:1px solid #7e57c2;text-align:left">CLIENTE / PLAZA</th>
-          <th style="padding:10px;border:1px solid #7e57c2;text-align:right;width:100px">CANTIDAD</th>
-        </tr></thead>
-        <tbody>${bodyPivot}
-        <tr style="background:#ffb6c1;font-weight:800;-webkit-print-color-adjust:exact;print-color-adjust:exact">
-          <td style="padding:10px;border:1px solid #bbb">Total general</td>
-          <td style="padding:10px;border:1px solid #bbb;text-align:right">${total}</td>
-        </tr>
-        </tbody>
-      </table>
-    </div>`;
+  /** Rejilla suave como plantilla de referencia (no negra/gruesa). */
+  const grid = '1px solid #c7d1cc';
+  const gridMso = 'mso-border-alt:.5pt solid #c7d1cc';
+  const cellBd = `border-top:${grid};border-right:${grid};border-bottom:${grid};border-left:${grid};${gridMso}`;
+  /** Marco exterior suave, cerrado en los 4 lados. */
+  const outerTable = 'border-collapse:collapse;border:1px solid #c7d1cc';
+  const feCorta = formatFechaCorta(fechaISO);
+  /** Atributos HTML que Excel aplica mejor al abrir .xls desde HTML. */
+  const tblAttr = 'border="1" cellspacing="0" cellpadding="0"';
+
+  const listSorted = [...(items || [])]
+    .filter(Boolean)
+    .sort((a, b) =>
+      String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
+    );
+
+  const leftRows = [];
+  leftRows.push({
+    k: 'head',
+    c: ['Identificación', 'Empresa propietaria', 'Vísceras blancas'].map((x) => escapeHtml(x)),
+  });
+  listSorted.forEach((d, idx) => {
+    const propU = String(d?.propietario || '').trim();
+    leftRows.push({
+      k: 'data',
+      zebra: idx % 2,
+      c: [
+        escapeHtml(d.id_producto || '—'),
+        escapeHtml(propU ? propU.toUpperCase() : 'SIN ASIGNAR'),
+        escapeHtml(puestoPivotMacro(d)),
+      ],
+    });
+  });
+
+  const rightRows = [];
+  rightRows.push({ k: 'top', g: escapeHtml(titulo), h: escapeHtml(feCorta) });
+  rightRows.push({ k: 'purp', g: 'CLIENTE / PLAZA', h: 'CANTIDAD' });
+  const byProp = new Map();
+  rows.forEach((r) => {
+    if (!byProp.has(r.cliente)) byProp.set(r.cliente, []);
+    byProp.get(r.cliente).push(r);
+  });
+  const propsOrden = [...byProp.keys()].sort((a, b) => String(a).localeCompare(String(b)));
+  propsOrden.forEach((prop) => {
+    const sub = byProp.get(prop).sort((a, b) => String(a.ubicacion).localeCompare(String(b.ubicacion)));
+    const totalProp = sub.reduce((s, x) => s + x.cantidad, 0);
+    rightRows.push({ k: 'grp', g: escapeHtml(String(prop).toUpperCase()), h: String(totalProp) });
+    sub.forEach(({ ubicacion, cantidad }) => {
+      rightRows.push({ k: 'ch', g: escapeHtml(ubicacion), h: String(cantidad) });
+    });
+  });
+  rightRows.push({ k: 'tot', g: 'Total general', h: String(total) });
+
+  const blankLeft = `<td style="${cellBd};background:#fafafa">&nbsp;</td><td style="${cellBd};background:#fafafa">&nbsp;</td><td style="${cellBd};background:#fafafa">&nbsp;</td>`;
+  const blankRight = `<td style="${cellBd};background:#fafafa">&nbsp;</td><td style="${cellBd};background:#fafafa">&nbsp;</td>`;
+  const spacer = `<td style="border:none;background:transparent;width:10px;font-size:1px;line-height:1px">&nbsp;</td><td style="border:none;background:transparent;width:10px;font-size:1px;line-height:1px">&nbsp;</td><td style="border:none;background:transparent;width:10px;font-size:1px;line-height:1px">&nbsp;</td>`;
+
+  const renderLeftCells = (L) => {
+    if (!L) return blankLeft;
+    if (L.k === 'head') {
+      return L.c
+        .map((cell) => `<td style="${cellBd};padding:8px 10px;background:#c8e6c9;color:#111;font-weight:800;text-align:center;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact">${cell}</td>`)
+        .join('');
+    }
+    const bg = L.zebra ? '#f5f5f5' : '#ffffff';
+    return `<td style="${cellBd};padding:6px 8px;background:${bg};font-family:Arial,sans-serif;font-weight:700;text-align:center;color:#c0392b;-webkit-print-color-adjust:exact;print-color-adjust:exact">${L.c[0]}</td>
+<td style="${cellBd};padding:6px 8px;background:${bg};font-weight:800;font-size:11px;text-align:center;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact">${L.c[1]}</td>
+<td style="${cellBd};padding:6px 8px;background:${bg};font-size:11px;text-align:center;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact">${L.c[2]}</td>`;
+  };
+
+  const renderRightCells = (R) => {
+    if (!R) return blankRight;
+    if (R.k === 'top') {
+      return `<td style="${cellBd};padding:10px 12px;background:#c8e6c9;color:#111;font-weight:900;font-size:12px;text-align:left;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.g}</td>
+<td style="${cellBd};padding:10px 12px;background:#c8e6c9;color:#111;font-weight:900;font-size:12px;text-align:right;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.h}</td>`;
+    }
+    if (R.k === 'purp') {
+      return `<td style="${cellBd};padding:9px 10px;background:#9575cd;color:#fff;font-weight:800;text-align:left;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.g}</td>
+<td style="${cellBd};padding:9px 10px;background:#9575cd;color:#fff;font-weight:800;text-align:right;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.h}</td>`;
+    }
+    if (R.k === 'grp') {
+      return `<td style="${cellBd};padding:8px 10px;background:#ffb74d;font-weight:800;color:#111;text-align:left;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.g}</td>
+<td style="${cellBd};padding:8px 10px;background:#ffb74d;text-align:right;font-weight:800;color:#c0392b;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.h}</td>`;
+    }
+    if (R.k === 'ch') {
+      const bgCh = '#ffffff';
+      return `<td style="${cellBd};padding:5px 8px 5px 22px;background:${bgCh};font-size:11px;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.g}</td>
+<td style="${cellBd};padding:5px 8px;background:${bgCh};text-align:right;font-weight:600;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.h}</td>`;
+    }
+    return `<td style="${cellBd};padding:9px 10px;background:#e91e63;color:#fff;font-weight:900;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.g}</td>
+<td style="${cellBd};padding:9px 10px;background:#e91e63;text-align:right;font-weight:900;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${R.h}</td>`;
+  };
+
+  const maxRows = Math.max(leftRows.length, rightRows.length);
+  const gridRows = Array.from({ length: maxRows }, (_, i) => {
+    const l = leftRows[i] || null;
+    const r = rightRows[i] || null;
+    return `<tr>${renderLeftCells(l)}${spacer}${renderRightCells(r)}</tr>`;
+  }).join('');
+
+  return `<div style="margin-bottom:24px;overflow-x:auto">
+<table class="rep-lista-excel-grid" style="border-collapse:collapse;font-size:11px;table-layout:fixed;width:100%">
+${gridRows}
+</table>
+</div>`;
 }
 
 /** Pivote jerárquico: total por propietario (fila resaltada), desglose por plaza. */
@@ -2196,7 +5642,7 @@ function htmlPivotPropietarioPlaza(rows, colorTotal, opts = {}) {
   const inline = opts.exportInline === true;
   const byProp = new Map();
   rows.forEach(r => {
-    const p = r.propietario;
+    const p = r.cliente;
     if (!byProp.has(p)) byProp.set(p, []);
     byProp.get(p).push(r);
   });
@@ -2236,109 +5682,87 @@ function htmlPivotPropietarioPlaza(rows, colorTotal, opts = {}) {
 function tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts = {}) {
   const desde = opts?.desde || fechaISO;
   const hasta = opts?.hasta || fechaISO;
+  const modoTotalesSimple = !!opts?.modoTotalesSimple;
+  const modo = opts.vistaReporte || 'ambos';
+  const incluirDetalle = modo !== 'resumen';
+  const incluirResumen = modo !== 'detalle';
+  const dosCols = incluirDetalle && incluirResumen;
+
   const librIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialLibrillos), desde, hasta);
   const crudIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialCrudasSolo), desde, hasta);
 
   const any = librIng.length || crudIng.length;
   if (!any) return '';
 
-  const pivotLib = contarPorPropietarioUbicacion(librIng);
-  const pivotCrud = contarPorPropietarioUbicacion(crudIng);
-
-  function htmlIdsLibrillos(items) {
-    if (!items.length) return '';
-    const sorted = [...items].sort((a, b) => String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
+  if (modoTotalesSimple) {
+    const rows = contarPorPropietarioUbicacion(librIng);
+    const totalGeneral = rows.reduce((a, b) => a + b.cantidad, 0);
+    if (!rows.length) return '';
     return `
-      <div class="mov-sec">
-        <div class="mov-h">${'LISTA LIBRILLOS (procesados)'} </div>
-        <div class="mov-grid">
-          <table class="dt" style="font-size:12px;border:1px solid var(--brd2);border-collapse:collapse">
-            <thead>
-              <tr>
-                <th style="border:1px solid var(--brd2);padding:8px">ID Producto</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Propietario</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Ubicación</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Cliente destino</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Sucursal</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Empresa destino</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Entrada</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Salida</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sorted.map(d => {
-                const sal = salidaUltimaEnRango(d.id_producto, salidas, desde, hasta);
-                return `<tr>
-                  <td style="border:1px solid var(--brd2);padding:8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.propietario || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(ubicacionPlaza(d))}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.cliente_destino || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.sucursal || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.empresa_destino || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${formatFecha(d.fecha_ingreso_cava)}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${sal ? formatFecha(sal) : '—'}</td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-
-          <div class="mov-pivot">
-            <div class="mov-pivot-h">Resumen: propietario → plaza → cantidad</div>
-            <div class="mov-pivot-wrap">
-              <table class="mov-pivot-table" style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #9e9e9e">
-                <thead>
-                  <tr>
-                    <th style="border:1px solid #7e57c2;padding:8px;background:#9575cd;color:#fff">Propietario / Ubicación</th>
-                    <th style="border:1px solid #7e57c2;padding:8px;background:#9575cd;color:#fff;width:110px;text-align:right">Cantidad</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${htmlPivotPropietarioPlaza(pivotLib, 'var(--rojo)')}
-                </tbody>
-              </table>
-            </div>
-            <div class="mov-pivot-total" style="margin-top:6px;font-weight:800;color:#8b0000;text-align:right">Total general: ${pivotLib.reduce((a, b) => a + b.cantidad, 0)}</div>
+      <div class="mov-wrap" style="display:flex;flex-direction:column;gap:12px">
+        <div class="mov-sec">
+          <div class="mov-h">LISTA LIBRILLOS (procesados)</div>
+          <div class="tw">
+            <table class="dt mov-tabla-det" style="font-size:12px;border:1px solid var(--brd2);border-collapse:collapse;width:100%">
+              <thead>
+                <tr>
+                  <th style="border:1px solid var(--brd2);padding:8px">Propietario</th>
+                  <th style="border:1px solid var(--brd2);padding:8px">Plaza</th>
+                  <th style="border:1px solid var(--brd2);padding:8px;text-align:right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((r) => `<tr>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(r.cliente || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(r.ubicacion || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px;text-align:right;font-weight:700">${r.cantidad}</td>
+                </tr>`).join('')}
+                <tr>
+                  <td colspan="2" style="border:1px solid var(--brd2);padding:8px;font-weight:800">TOTAL GENERAL</td>
+                  <td style="border:1px solid var(--brd2);padding:8px;text-align:right;font-weight:900;color:var(--rojo)">${totalGeneral}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
     `;
   }
 
-  function htmlIdsCrudas(items) {
-    if (!items.length) return '';
-    const sorted = [...items].sort((a, b) => String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
-    return `
-      <div class="mov-sec">
-        <div class="mov-h">LISTA CRUDAS (procesados)</div>
-        <div class="mov-grid">
-          <table class="dt" style="font-size:12px;border:1px solid var(--brd2);border-collapse:collapse">
-            <thead>
-              <tr>
-                <th style="border:1px solid var(--brd2);padding:8px">ID Producto</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Propietario</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Ubicación</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Sucursal</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Empresa destino</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Entrada</th>
-                <th style="border:1px solid var(--brd2);padding:8px">Salida</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sorted.map(d => {
-                const sal = salidaUltimaEnRango(d.id_producto, salidas, desde, hasta);
-                return `<tr>
-                  <td style="border:1px solid var(--brd2);padding:8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.propietario || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(ubicacionPlaza(d))}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.sucursal || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.empresa_destino || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${formatFecha(d.fecha_ingreso_cava)}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${sal ? formatFecha(sal) : '—'}</td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
+  const pivotLib = contarPorClienteComercialPuesto(librIng);
+  const pivotCrud = contarPorPropietarioUbicacion(crudIng);
 
+  function bloquePivotLib() {
+    if (!incluirResumen || !pivotLib.length) return '';
+    const tot = pivotLib.reduce((a, b) => a + b.cantidad, 0);
+    const audit = htmlAuditoriaClientePlaza(librIng, { nombreGrupo: '' });
+    return `
+          <div class="mov-pivot">
+            <div class="mov-pivot-h">Resumen: cliente → plaza → cantidad</div>
+            <div class="mov-pivot-audit-grid">
+              <div class="mov-pivot-wrap mov-pivot-wrap-main">
+                <table class="mov-pivot-table" style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #9e9e9e">
+                  <thead>
+                    <tr>
+                      <th style="border:1px solid #7e57c2;padding:8px;background:#9575cd;color:#fff">Cliente / Ubicación</th>
+                      <th style="border:1px solid #7e57c2;padding:8px;background:#9575cd;color:#fff;width:110px;text-align:right">Cantidad</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${htmlPivotPropietarioPlaza(pivotLib, 'var(--rojo)')}
+                  </tbody>
+                </table>
+              </div>
+              ${audit}
+            </div>
+            <div class="mov-pivot-total" style="margin-top:6px;font-weight:800;color:#8b0000;text-align:right">Total general: ${tot}</div>
+          </div>`;
+  }
+
+  function bloquePivotCrud() {
+    if (!incluirResumen || !pivotCrud.length) return '';
+    const tot = pivotCrud.reduce((a, b) => a + b.cantidad, 0);
+    return `
           <div class="mov-pivot">
             <div class="mov-pivot-h">Resumen: propietario → plaza → cantidad</div>
             <div class="mov-pivot-wrap">
@@ -2354,8 +5778,99 @@ function tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts = {}) {
                 </tbody>
               </table>
             </div>
-            <div class="mov-pivot-total" style="margin-top:6px;font-weight:800;color:var(--verde);text-align:right">Total general: ${pivotCrud.reduce((a, b) => a + b.cantidad, 0)}</div>
-          </div>
+            <div class="mov-pivot-total" style="margin-top:6px;font-weight:800;color:var(--verde);text-align:right">Total general: ${tot}</div>
+          </div>`;
+  }
+
+  function htmlIdsLibrillos(items) {
+    if (!items.length) return '';
+    const sorted = [...items].sort((a, b) => String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
+    const tablaHtml = `
+          <table class="dt mov-tabla-det" style="font-size:12px;border:1px solid var(--brd2);border-collapse:collapse;width:100%">
+            <thead>
+              <tr>
+                <th style="border:1px solid var(--brd2);padding:8px">ID Producto</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Propietario</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Ubicación</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Cliente destino</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Sucursal</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Empresa destino</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Entrada</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Salida</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(d => {
+                const sal = salidaDisplayEnRango(d.id_producto, salidas, desde, hasta, d);
+                return `<tr>
+                  <td style="border:1px solid var(--brd2);padding:8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.propietario || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(ubicacionPlaza(d))}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.cliente_destino || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.sucursal || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.empresa_destino || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${formatFecha(d.fecha_ingreso_cava)}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${sal ? formatFecha(sal) : '—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>`;
+
+    const inner = dosCols
+      ? `${tablaHtml}${bloquePivotLib()}`
+      : (incluirDetalle ? tablaHtml : bloquePivotLib());
+    if (!inner.trim()) return '';
+    return `
+      <div class="mov-sec">
+        <div class="mov-h">LISTA LIBRILLOS (procesados)</div>
+        <div class="mov-grid${dosCols ? '' : ' mov-grid-uno'}">
+          ${inner}
+        </div>
+      </div>
+    `;
+  }
+
+  function htmlIdsCrudas(items) {
+    if (!items.length) return '';
+    const sorted = [...items].sort((a, b) => String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
+    const tablaHtml = `
+          <table class="dt mov-tabla-det" style="font-size:12px;border:1px solid var(--brd2);border-collapse:collapse;width:100%">
+            <thead>
+              <tr>
+                <th style="border:1px solid var(--brd2);padding:8px">ID Producto</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Propietario</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Ubicación</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Sucursal</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Empresa destino</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Entrada</th>
+                <th style="border:1px solid var(--brd2);padding:8px">Salida</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(d => {
+                const sal = salidaDisplayEnRango(d.id_producto, salidas, desde, hasta, d);
+                return `<tr>
+                  <td style="border:1px solid var(--brd2);padding:8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.propietario || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(ubicacionPlaza(d))}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.sucursal || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.empresa_destino || '—')}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${formatFecha(d.fecha_ingreso_cava)}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${sal ? formatFecha(sal) : '—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>`;
+
+    const inner = dosCols
+      ? `${tablaHtml}${bloquePivotCrud()}`
+      : (incluirDetalle ? tablaHtml : bloquePivotCrud());
+    if (!inner.trim()) return '';
+    return `
+      <div class="mov-sec">
+        <div class="mov-h">LISTA CRUDAS (procesados)</div>
+        <div class="mov-grid${dosCols ? '' : ' mov-grid-uno'}">
+          ${inner}
         </div>
       </div>
     `;
@@ -2369,73 +5884,32 @@ function tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts = {}) {
         .mov-sec{border:1px dashed rgba(0,0,0,.15);padding:10px;border-radius:8px}
         .mov-h{font-weight:900;color:#1a2b1e;background:rgba(0,0,0,.03);padding:8px 10px;border-radius:6px;margin-bottom:10px}
         .mov-grid{display:grid;grid-template-columns: 1fr 360px;gap:12px;align-items:start}
+        .mov-grid-uno{grid-template-columns:1fr !important}
+        .mov-grid-uno .mov-pivot{border-left:none;padding-left:0;max-width:720px}
         .mov-pivot-h{font-weight:900;margin-bottom:6px}
         .mov-pivot{border-left:3px solid rgba(0,0,0,.06);padding-left:10px}
-        @media print{ .mov-grid{grid-template-columns: 1fr 340px} }
+        @media print{ .mov-grid{grid-template-columns: 1fr 340px} .mov-grid-uno{grid-template-columns:1fr !important} }
         @media(max-width:1100px){ .mov-grid{grid-template-columns: 1fr} .mov-pivot{border-left:none;padding-left:0} }
       </style>
     </div>
   `;
 }
 
-function tablaMovimientoResumenDiaHTMLExport(datos, fechaISO, salidas, opts = {}) {
-  // Export HTML: propietario → plaza; 1 fila de datos = 1 unidad.
-  const desde = opts?.desde || fechaISO;
-  const hasta = opts?.hasta || fechaISO;
-  const librIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialLibrillos), desde, hasta);
-  const crudIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialCrudasSolo), desde, hasta);
-  const pivotLib = contarPorPropietarioUbicacion(librIng);
-  const pivotCrud = contarPorPropietarioUbicacion(crudIng);
-
-  const totalLib = pivotLib.reduce((a, b) => a + b.cantidad, 0);
-  const totalCrud = pivotCrud.reduce((a, b) => a + b.cantidad, 0);
-
-  function pivotTableJerarquico(rows, color) {
-    if (!rows.length) return '';
-    return `<table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #9e9e9e;margin:10px 0">
-      <thead><tr style="background:#9575cd;color:#fff">
-        <th style="padding:10px;border:1px solid #7e57c2;text-align:left">Propietario / Ubicación</th>
-        <th style="padding:10px;border:1px solid #7e57c2;text-align:right;width:110px">Cantidad</th>
-      </tr></thead><tbody>
-      ${htmlPivotPropietarioPlaza(rows, color, { exportInline: true })}
-      </tbody></table>`;
-  }
-
-  return `
-    <div>
-      <div style="font-weight:900;color:#8b0000;margin-top:10px">Movimiento (procesados) — ${desde} a ${hasta}</div>
-      <p style="font-size:12px;color:#666;margin:8px 0">Cada fila del detalle = 1 unidad. Cantidades = conteo por propietario y ubicación (destino o sucursal).</p>
-      <div style="margin-top:8px">Total Librillos: <strong>${totalLib}</strong> · Total Crudas: <strong>${totalCrud}</strong></div>
-
-      <h3 style="color:#8b0000;margin-top:18px">Librillos (crudos)</h3>
-      ${pivotTableJerarquico(pivotLib, '#8b0000')}
-
-      <h3 style="color:#1a7a42;margin-top:18px">Crudas</h3>
-      ${pivotTableJerarquico(pivotCrud, '#1a7a42')}
-    </div>
-  `;
-}
-
 async function generarReporteGeneral() {
-  const fecha = document.getElementById('fecha-rep-gen')?.value;
-  if (!fecha) {
-    await generarReporteGeneralRango();
-    return;
-  }
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  const datos = await fetchPorFecha(fecha);
-  if (!datos.length) { mostrarToast('No hay datos para esa fecha', 'err'); return; }
-  const salidas = await fetchSalidas();
-  mostrarPreview('Reporte General', labelFecha(fecha), fecha, datos, salidas);
+  await actualizarVistaTotales();
 }
 
 function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
   const soloResumen = opts.soloResumen === true;
+  const omitTotalesAside = opts.omitTotalesAside === true;
   const soloEtiqueta = opts.soloEtiqueta ? String(opts.soloEtiqueta) : null;
   let libs = [...datos.filter(esLibrilloParaReporteAgrupacion)].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
   if (soloEtiqueta) {
-    libs = libs.filter(d => etiquetaAgrupacion(d) === soloEtiqueta);
+    const t = String(soloEtiqueta);
+    libs = libs.filter(
+      (d) => etiquetaAgrupacionMacro(d) === t || etiquetaAgrupacion(d) === t
+    );
   }
   if (!libs.length) {
     return '<p style="color:var(--tx3);padding:12px">Sin librillos para esta fecha' +
@@ -2444,11 +5918,11 @@ function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
 
   const byGrupo = new Map();
   libs.forEach(d => {
-    const g = etiquetaAgrupacion(d);
+    const g = etiquetaAgrupacionMacro(d);
     if (!byGrupo.has(g)) byGrupo.set(g, []);
     byGrupo.get(g).push(d);
   });
-  const orden = [...byGrupo.keys()].sort((a, b) => a.localeCompare(b, 'es'));
+  const orden = ordenGruposMacro([...byGrupo.keys()]);
 
   let html = '';
   orden.forEach(grupo => {
@@ -2456,13 +5930,13 @@ function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
     html += htmlListaLibrillosResumenBloque(items, grupo, fechaISO);
     if (soloResumen) return;
 
-    const conSalida = items.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas)).length;
+    const conSalida = items.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas, d)).length;
     html += `<h3 class="rep-sec-title">${escapeHtml(grupo)} — ${items.length} unidad(es) · ${conSalida} con salida registrada <span style="font-size:12px;font-weight:500;color:var(--tx3)">(detalle)</span></h3>`;
     html += `<div class="tw rep-table-wrap"><table class="dt" style="font-size:12px"><thead><tr>
       <th>ID Producto</th><th>Propietario</th><th>Cliente destino</th><th>Sucursal / Plaza</th><th>Empresa destino</th><th>Ingreso Cava</th><th>Salida despacho</th>
     </tr></thead><tbody>`;
     items.forEach(d => {
-      const sal = salidaRegistrada(d.id_producto, fechaISO, salidas);
+      const sal = salidaRegistrada(d.id_producto, fechaISO, salidas, d);
       html += `<tr>
         <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
         <td>${escapeHtml(d.propietario) || '—'}</td>
@@ -2475,9 +5949,9 @@ function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
     });
     html += '</tbody></table></div>';
   });
-  if (soloResumen && orden.length) {
+  if (soloResumen && orden.length && !omitTotalesAside) {
     const total = libs.length;
-    const nSal = libs.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas)).length;
+    const nSal = libs.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas, d)).length;
     const tituloTot = soloEtiqueta
       ? `Total agrupación «${escapeHtml(soloEtiqueta)}»`
       : 'Total librillos del día';
@@ -2495,11 +5969,15 @@ function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
 
 function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
   const soloResumen = opts.soloResumen === true;
+  const omitTotalesAside = opts.omitTotalesAside === true;
   const soloEtiqueta = opts.soloEtiqueta ? String(opts.soloEtiqueta) : null;
   let libs = [...datos.filter(esLibrilloParaReporteAgrupacion)].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
   if (soloEtiqueta) {
-    libs = libs.filter(d => etiquetaAgrupacion(d) === soloEtiqueta);
+    const t = String(soloEtiqueta);
+    libs = libs.filter(
+      (d) => etiquetaAgrupacionMacro(d) === t || etiquetaAgrupacion(d) === t
+    );
   }
   if (!libs.length) {
     return '<p>Sin librillos para esta fecha' + (soloEtiqueta ? ` en «${escapeHtml(soloEtiqueta)}».` : '.') + '</p>';
@@ -2507,11 +5985,11 @@ function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
 
   const byGrupo = new Map();
   libs.forEach(d => {
-    const g = etiquetaAgrupacion(d);
+    const g = etiquetaAgrupacionMacro(d);
     if (!byGrupo.has(g)) byGrupo.set(g, []);
     byGrupo.get(g).push(d);
   });
-  const orden = [...byGrupo.keys()].sort((a, b) => a.localeCompare(b, 'es'));
+  const orden = ordenGruposMacro([...byGrupo.keys()]);
 
   let html = '';
   orden.forEach(grupo => {
@@ -2519,7 +5997,7 @@ function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
     html += htmlListaLibrillosResumenBloqueExport(items, grupo, fechaISO);
     if (soloResumen) return;
 
-    const conSalida = items.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas)).length;
+    const conSalida = items.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas, d)).length;
     html += `<h3 style="font-size:14px;color:#8b0000;margin:20px 0 10px;text-transform:uppercase">${escapeHtml(grupo)} — ${items.length} unidad(es) · ${conSalida} con salida (detalle)</h3>`;
     html += `<table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #bbb;margin-bottom:24px"><thead><tr style="background:#8b0000;color:#fff">
       <th style="padding:10px;border:1px solid #666">ID Producto</th>
@@ -2531,7 +6009,7 @@ function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
       <th style="padding:10px;border:1px solid #666">Salida despacho</th>
     </tr></thead><tbody>`;
     items.forEach(d => {
-      const sal = salidaRegistrada(d.id_producto, fechaISO, salidas);
+      const sal = salidaRegistrada(d.id_producto, fechaISO, salidas, d);
       html += `<tr>
         <td style="padding:8px;border:1px solid #ccc;font-weight:700;color:#8b0000">${escapeHtml(d.id_producto)}</td>
         <td style="padding:8px;border:1px solid #ccc">${escapeHtml(d.propietario) || '—'}</td>
@@ -2544,9 +6022,9 @@ function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
     });
     html += '</tbody></table>';
   });
-  if (soloResumen && orden.length) {
+  if (soloResumen && orden.length && !omitTotalesAside) {
     const total = libs.length;
-    const nSal = libs.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas)).length;
+    const nSal = libs.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas, d)).length;
     const tituloTot = soloEtiqueta ? `Total «${escapeHtml(soloEtiqueta)}»` : 'Total librillos del día';
     const subTot = soloEtiqueta
       ? `${total} unidad(es) · ${nSal} con despacho`
@@ -2564,11 +6042,13 @@ function kpisAgrupacionesResumen(datos, fechaISO, salidas, kopts = {}) {
   let libs = datos.filter(esLibrilloParaReporteAgrupacion);
   if (kopts.soloEtiqueta) {
     const t = String(kopts.soloEtiqueta);
-    libs = libs.filter(d => etiquetaAgrupacion(d) === t);
+    libs = libs.filter(
+      (d) => etiquetaAgrupacionMacro(d) === t || etiquetaAgrupacion(d) === t
+    );
   }
   const total = libs.length;
-  const conSalida = libs.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas)).length;
-  const grupos = new Set(libs.map(d => etiquetaAgrupacion(d))).size;
+  const conSalida = libs.filter(d => salidaRegistrada(d.id_producto, fechaISO, salidas, d)).length;
+  const grupos = new Set(libs.map(d => etiquetaAgrupacionMacro(d))).size;
   const lblLib = kopts.soloEtiqueta ? 'En esta agrupación' : 'Librillos totales';
   const lblGr = kopts.soloEtiqueta ? 'Bloque' : 'Agrupaciones';
   const nGr = kopts.soloEtiqueta ? 1 : grupos;
@@ -2579,177 +6059,27 @@ function kpisAgrupacionesResumen(datos, fechaISO, salidas, kopts = {}) {
   </div>`;
 }
 
-function nombreArchivoAgrupacion(etiqueta) {
-  return String(etiqueta || 'agrupacion')
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .replace(/[^a-zA-Z0-9]+/g, '_')
-    .replace(/^_|_$/g, '')
-    .slice(0, 60) || 'agrupacion';
-}
-
-async function cargarSelectAgrupacionesUna() {
-  const fecha = document.getElementById('fecha-rep-una-agrup')?.value;
-  const sel = document.getElementById('sel-reporte-una-agrup');
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  if (!sel) return;
-  sel.innerHTML = '<option value="">Cargando…</option>';
-  try {
-    const datos = await fetchPorFecha(fecha);
-    const libs = datos.filter(esLibrilloParaReporteAgrupacion);
-    const set = new Set(libs.map(d => etiquetaAgrupacion(d)));
-    const orden = [...set].sort((a, b) => a.localeCompare(b, 'es'));
-    if (!orden.length) {
-      sel.innerHTML = '<option value="">Sin datos para reporte por agrupación</option>';
-      mostrarToast('No hay librillos con vista y cliente destino para este reporte', 'err');
-      return;
-    }
-    sel.innerHTML = '<option value="">— Elige agrupación (según observación / destino) —</option>' +
-      orden.map(e => {
-        const v = String(e).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-        return `<option value="${v}">${escapeHtml(e)}</option>`;
-      }).join('');
-    mostrarToast(`${orden.length} agrupación(es) cargadas`, 'ok');
-  } catch {
-    sel.innerHTML = '<option value="">Error al cargar</option>';
-    mostrarToast('Error al cargar datos', 'err');
-  }
-}
-
-/** Una sola agrupación; mode === 'detalle' incluye tabla por ID */
-async function generarReporteUnaAgrupacion(mode) {
-  const soloResumen = mode !== 'detalle';
-  const fecha = document.getElementById('fecha-rep-una-agrup')?.value;
-  const sel = document.getElementById('sel-reporte-una-agrup');
-  const etiqueta = sel?.value;
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  if (!etiqueta) { mostrarToast('Carga el listado y elige una agrupación', 'err'); return; }
-  const datos = await fetchPorFecha(fecha);
-  const libs = datos.filter(esLibrilloParaReporteAgrupacion).filter(d => etiquetaAgrupacion(d) === etiqueta);
-  if (!libs.length) { mostrarToast('Sin datos para esa agrupación y fecha', 'err'); return; }
-  const salidas = await fetchSalidas();
-  const prev = document.getElementById('rep-preview');
-  const kopts = { soloEtiqueta: etiqueta };
-  const ropts = { soloResumen, soloEtiqueta: etiqueta };
-  document.getElementById('rep-prev-title').textContent = soloResumen
-    ? `Agrupación: ${etiqueta}`
-    : `Agrupación: ${etiqueta} (detalle)`;
-  prev.style.display = 'block';
-  const sub = soloResumen
-    ? etiqueta
-    : `${etiqueta} — con tabla por ID`;
-  document.getElementById('rep-prev-body').innerHTML = `
-    <div class="rep-agrup-layout">
-    <div class="rep-header"><div><div class="rep-co">COLBEEF</div><div class="rep-sub-title">${escapeHtml(sub)}</div></div><div class="rep-meta"><div>${labelFecha(fecha)}</div><div>Generado: ${new Date().toLocaleString('es-CO')}</div></div></div>
-    ${kpisAgrupacionesResumen(datos, fecha, salidas, kopts)}
-    ${htmlReporteAgrupaciones(datos, fecha, salidas, ropts)}
-    <div style="margin-top:20px;font-size:11px;color:var(--tx3);text-align:center;border-top:1px solid var(--brd);padding-top:12px">Colbeef — Control de movimientos · ${new Date().toLocaleDateString('es-CO')}</div>
-    </div>`;
-  prev.scrollIntoView({ behavior: 'smooth' });
-}
-
-async function descargarReporteUnaAgrupacion(mode) {
-  const soloResumen = mode !== 'detalle';
-  const fecha = document.getElementById('fecha-rep-una-agrup')?.value;
-  const sel = document.getElementById('sel-reporte-una-agrup');
-  const etiqueta = sel?.value;
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  if (!etiqueta) { mostrarToast('Carga el listado y elige una agrupación', 'err'); return; }
-  const datos = await fetchPorFecha(fecha);
-  const libs = datos.filter(esLibrilloParaReporteAgrupacion).filter(d => etiquetaAgrupacion(d) === etiqueta);
-  if (!libs.length) { mostrarToast('Sin datos para esa agrupación', 'err'); return; }
-  const salidas = await fetchSalidas();
-  const ropts = { soloResumen, soloEtiqueta: etiqueta };
-  const cuerpo = htmlReporteAgrupacionesExport(datos, fecha, salidas, ropts);
-  const klibs = datos.filter(esLibrilloParaReporteAgrupacion).filter(d => etiquetaAgrupacion(d) === etiqueta);
-  const total = klibs.length;
-  const nSal = klibs.filter(d => salidaRegistrada(d.id_producto, fecha, salidas)).length;
-  const kbox = 'background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:12px 16px;text-align:center;min-width:120px';
-  const kpis = `<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-    <div style="${kbox}"><div style="font-size:24px;font-weight:700;color:#8b0000">${total}</div><div style="font-size:11px;color:#666;margin-top:3px">Unidades (esta agrupación)</div></div>
-    <div style="${kbox}"><div style="font-size:24px;font-weight:700;color:#8b0000">${nSal}</div><div style="font-size:11px;color:#666;margin-top:3px">Con salida registrada</div></div>
-    <div style="${kbox}"><div style="font-size:24px;font-weight:700;color:#8b0000">1</div><div style="font-size:11px;color:#666;margin-top:3px">Agrupación</div></div>
-  </div>`;
-  const suf = soloResumen ? '_resumen' : '_detalle';
-  const slug = nombreArchivoAgrupacion(etiqueta);
-  const tituloDoc = `${etiqueta} · ${soloResumen ? 'resumen' : 'detalle'}`;
-  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${escapeHtml(etiqueta)} — ${fecha}</title><style>
-body{font-family:Arial,sans-serif;margin:32px;color:#1a1a1a}h1{color:#8b0000;font-size:28px}.meta{display:flex;justify-content:space-between;margin-bottom:20px;font-size:12px;color:#666;border-bottom:2px solid #8b0000;padding-bottom:12px}.footer{margin-top:24px;font-size:11px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:12px}</style></head><body>
-  <h1>COLBEEF — ${escapeHtml(etiqueta)}</h1><div class="meta"><div><strong>${escapeHtml(tituloDoc)}</strong> · ${escapeHtml(labelFecha(fecha))}</div><div>Generado: ${new Date().toLocaleString('es-CO')}</div></div>
-  ${kpis}
-  ${cuerpo}
-  <div class="footer">Sistema de Control de Librillos — Colbeef</div></body></html>`;
-  descargarHTML(`Reporte_${slug}_${fecha}${suf}`, html);
-}
-
-/** mode: omitido = solo cuadros resumen; 'detalle' = incluye tablas por ID */
-async function generarReporteAgrupaciones(mode) {
-  const soloResumen = mode !== 'detalle';
-  const fecha = document.getElementById('fecha-rep-agrup')?.value;
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  const datos = await fetchPorFecha(fecha);
-  const libs = datos.filter(esLibrilloParaReporteAgrupacion);
-  if (!libs.length) { mostrarToast('No hay librillos para reporte por agrupación en esa fecha', 'err'); return; }
-  const salidas = await fetchSalidas();
-  const prev = document.getElementById('rep-preview');
-  document.getElementById('rep-prev-title').textContent = soloResumen
-    ? 'Reporte por agrupación'
-    : 'Reporte por agrupación (con detalle)';
-  prev.style.display = 'block';
-  const sub = soloResumen
-    ? 'Cuadros por agrupación y totales'
-    : 'Cuadros resumen + tabla por producto';
-  document.getElementById('rep-prev-body').innerHTML = `
-    <div class="rep-agrup-layout">
-    <div class="rep-header"><div><div class="rep-co">COLBEEF</div><div class="rep-sub-title">${escapeHtml(sub)}</div></div><div class="rep-meta"><div>${labelFecha(fecha)}</div><div>Generado: ${new Date().toLocaleString('es-CO')}</div></div></div>
-    ${kpisAgrupacionesResumen(datos, fecha, salidas)}
-    ${htmlReporteAgrupaciones(datos, fecha, salidas, { soloResumen })}
-    <div style="margin-top:20px;font-size:11px;color:var(--tx3);text-align:center;border-top:1px solid var(--brd);padding-top:12px">Colbeef — Control de movimientos · ${new Date().toLocaleDateString('es-CO')}</div>
-    </div>`;
-  prev.scrollIntoView({ behavior: 'smooth' });
-}
-
-/** mode: omitido = resumen; 'detalle' = HTML con tablas completas */
-async function descargarReporteAgrupaciones(mode) {
-  const soloResumen = mode !== 'detalle';
-  const fecha = document.getElementById('fecha-rep-agrup')?.value;
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  const datos = await fetchPorFecha(fecha);
-  if (!datos.filter(esLibrilloParaReporteAgrupacion).length) { mostrarToast('Sin librillos para reporte por agrupación en esa fecha', 'err'); return; }
-  const salidas = await fetchSalidas();
-  const cuerpo = htmlReporteAgrupacionesExport(datos, fecha, salidas, { soloResumen: soloResumen });
-  const libs = datos.filter(esLibrilloParaReporteAgrupacion);
-  const total = libs.length;
-  const nSal = libs.filter(d => salidaRegistrada(d.id_producto, fecha, salidas)).length;
-  const nGrupos = new Set(libs.map(d => etiquetaAgrupacion(d))).size;
-  const kbox = 'background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:12px 16px;text-align:center;min-width:120px';
-  const kpis = `<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-    <div style="${kbox}"><div style="font-size:24px;font-weight:700;color:#8b0000">${total}</div><div style="font-size:11px;color:#666;margin-top:3px">Librillos totales</div></div>
-    <div style="${kbox}"><div style="font-size:24px;font-weight:700;color:#8b0000">${nSal}</div><div style="font-size:11px;color:#666;margin-top:3px">Con salida registrada</div></div>
-    <div style="${kbox}"><div style="font-size:24px;font-weight:700;color:#8b0000">${nGrupos}</div><div style="font-size:11px;color:#666;margin-top:3px">Agrupaciones</div></div>
-  </div>`;
-  const suf = soloResumen ? '_resumen' : '';
-  const tituloDoc = soloResumen ? 'Resumen por agrupación' : 'Movimientos por agrupación';
-  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Reporte agrupaciones ${fecha}</title><style>
-body{font-family:Arial,sans-serif;margin:32px;color:#1a1a1a}h1{color:#8b0000;font-size:28px}.meta{display:flex;justify-content:space-between;margin-bottom:20px;font-size:12px;color:#666;border-bottom:2px solid #8b0000;padding-bottom:12px}.footer{margin-top:24px;font-size:11px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:12px}</style></head><body>
-  <h1>COLBEEF — Agrupaciones</h1><div class="meta"><div><strong>${escapeHtml(tituloDoc)}</strong> · ${escapeHtml(labelFecha(fecha))}</div><div>Generado: ${new Date().toLocaleString('es-CO')}</div></div>
-  ${kpis}
-  ${cuerpo}
-  <div class="footer">Sistema de Control de Librillos — Colbeef</div></body></html>`;
-  descargarHTML(`Reporte_Agrupaciones_${fecha}${suf}`, html);
-}
-
 async function descargarReporteGeneral() {
-  const fecha = document.getElementById('fecha-rep-gen')?.value;
-  if (!fecha) {
-    await descargarPDFReporteGeneralRango();
+  const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+  const [datos, resumenMacro] = await Promise.all([fetchPorFecha(fecha), fetchResumenMacro(fecha)]);
+  if (!datos.length) {
+    mostrarToast('Sin datos', 'err');
     return;
   }
-  if (!fecha) { mostrarToast('Selecciona una fecha', 'err'); return; }
-  const datos = await fetchPorFecha(fecha);
-  if (!datos.length) { mostrarToast('Sin datos', 'err'); return; }
+  if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
+    mostrarToast('Resumen macro no disponible. No se genera reporte para evitar datos inconsistentes.', 'err');
+    return;
+  }
   const salidas = await fetchSalidas();
-  descargarHTML(`Reporte_General_${fecha}`, generarHTMLReporte('Reporte General', labelFecha(fecha), fecha, datos, salidas));
+  const logoMarcaHtml = await obtenerMarcaExportColbeefImgHtml();
+  descargarHTML(`Totales_${fecha}`, generarHTMLReporte('Totales', labelFecha(fecha), fecha, datos, salidas, {
+    desde: fecha,
+    hasta: fecha,
+    vistaReporte: 'resumen',
+    incluirResumenLibrosChunchullas: true,
+    resumenMacro,
+    logoMarcaHtml,
+  }));
 }
 
 function descargarHTML(nombre, html) {
@@ -2760,65 +6090,378 @@ function descargarHTML(nombre, html) {
   a.click();
   URL.revokeObjectURL(a.href);
   mostrarToast('Reporte guardado', 'ok');
+  enviarEventoAnalytics({
+    eventName: 'export_html',
+    viewName: _analyticsViewActual,
+    meta: { archivo: `${nombre}.html` },
+  });
 }
 
-function generarHTMLReporte(titulo, fechaLabel, fechaISO, datos, salidas) {
-  const cuerpo = cuerpoReporteGeneralExport(datos, fechaISO, salidas);
+/** Vista previa en Totales (#rep-preview) o en Reportes (#rep-preview-rep). */
+function getRepPreviewEls(destino) {
+  const rep = destino === 'reportes';
+  return {
+    prev: document.getElementById(rep ? 'rep-preview-rep' : 'rep-preview'),
+    title: document.getElementById(rep ? 'rep-prev-title-rep' : 'rep-prev-title'),
+    body: document.getElementById(rep ? 'rep-prev-body-rep' : 'rep-prev-body'),
+  };
+}
+
+/** Cuerpo del reporte a imprimir / PDF según la vista activa o el panel con contenido. */
+function repPreviewBodyActivo() {
+  const br = document.getElementById('rep-prev-body-rep');
+  const b = document.getElementById('rep-prev-body');
+  const vr = document.getElementById('vista-reportes')?.classList.contains('active');
+  const vt = document.getElementById('vista-totales')?.classList.contains('active');
+  // Regla estricta: nunca mezclar previews entre vistas.
+  if (vr) return br?.innerHTML?.trim() ? br : null;
+  if (vt) return b?.innerHTML?.trim() ? b : null;
+  // Fallback solo si ninguna vista está activa (caso excepcional).
+  if (br?.innerHTML?.trim()) return br;
+  if (b?.innerHTML?.trim()) return b;
+  return null;
+}
+
+function repPreviewTitleActivo() {
+  const body = repPreviewBodyActivo();
+  if (!body) return null;
+  return body.id === 'rep-prev-body-rep'
+    ? document.getElementById('rep-prev-title-rep')
+    : document.getElementById('rep-prev-title');
+}
+
+/** Estilos mínimos para que el Excel/HTML abierto en Excel se parezca a la vista «Resumen del día». */
+function cssExportVistaTotales() {
+  return `
+.rep-bloque-resumen-lch{margin:12px 0;padding:14px 16px;background:#fafbfa;border:1px solid #c4cfc6;border-radius:12px}
+.rep-bloque-resumen-h{font-size:16px;font-weight:800;margin:0 0 8px;color:#1a1a1a}
+.rep-bloque-resumen-meta{font-size:12px;color:#555;margin:0 0 10px}
+.resumen-dia-table{width:100%;max-width:520px;border-collapse:collapse;font-size:11px}
+.resumen-dia-table th,.resumen-dia-table td{border:1px solid #bbb;padding:8px 10px}
+.resumen-dia-head td{background:#fff34f;font-weight:800}
+.resumen-dia-asur-glo td{background:#e8b5b8}
+.resumen-dia-asur-col td{background:#d6e7f5}
+.resumen-dia-global td{background:#bcd6ee}
+.resumen-dia-asur td{background:#ff2f2f;font-weight:700}
+.resumen-dia-cat td{background:#dc7d1f;font-weight:700}
+.resumen-dia-deriv td{background:#f2e19b;font-weight:700}
+.resumen-dia-coc td{background:#efefef;font-weight:700}
+.resumen-dia-total td{background:#fff;border-top:2px solid #222;font-weight:900}
+.rep-resumen-bloque{margin-bottom:18px}
+.rep-resumen-pivot{width:100%;max-width:520px;border-collapse:collapse;border:1px solid #303030;font-size:11px}
+.rep-resumen-th-titulo{background:#0f5132;color:#fff;border:2px solid #062a1a;padding:12px 14px;text-align:left;font-weight:900;font-size:20px;letter-spacing:.02em}
+.rep-resumen-th-cierre{background:#dcedc8;color:#1a2b1e;border:1px solid #9ccc65;padding:8px 10px;text-align:left;font-weight:700}
+.rep-resumen-th-cols{background:#fff300;color:#111;border:1px solid #303030;padding:7px 10px;font-weight:800}
+.rep-resumen-th-num{text-align:right!important;width:110px}
+.rep-resumen-row-parent td{background:#fff9c4;border:1px solid #303030;padding:8px 10px;font-weight:800;font-size:16px}
+.rep-resumen-row-child td{background:#e3f2fd;border:1px solid #303030;padding:6px 8px}
+.rep-resumen-total-gen td{background:#ff66ff;border:1px solid #303030;padding:8px 10px;font-weight:900}
+.rep-resumen-td-num{text-align:right}
+.rep-global-total{margin:20px 0;padding:20px;background:#ffe4ec;border:2px solid #f48fb1;border-radius:10px;text-align:center}
+.rep-global-total-n{font-size:32px;font-weight:900;color:#8b0000}
+.mov-h{font-weight:900;color:#1a2b1e;background:#f0f0f0;padding:8px 10px;border-radius:6px;margin-bottom:8px}
+.mov-tabla-det,.mov-pivot-table{border-collapse:collapse;width:100%;font-size:11px}
+.mov-tabla-det th,.mov-tabla-det td,.mov-pivot-table th,.mov-pivot-table td{border:1px solid #bbb;padding:6px 8px}
+.mov-pivot-h{font-weight:800;margin:8px 0 4px}
+.rep-lista-excel-dual{width:100%;max-width:1100px}
+.rep-lista-excel-dual>tbody>tr>td{vertical-align:top}
+.rep-lista-excel-dual td table.rep-lista-excel-audit,
+.rep-lista-excel-dual td table.rep-lista-excel-lista{border-collapse:collapse;border:2px solid #212121}
+.rep-lista-excel-dual td table.rep-lista-excel-audit td,
+.rep-lista-excel-dual td table.rep-lista-excel-lista td{border:1px solid #212121}
+`;
+}
+
+function generarHTMLReporte(titulo, fechaLabel, fechaISO, datos, salidas, opts = {}) {
+  const cuerpo = cuerpoReporteGeneralExport(datos, fechaISO, salidas, opts);
+  const extraCss =
+    opts.incluirResumenLibrosChunchullas === true || opts.soloListasLibrillosPorAgrupacion === true
+      ? cssExportVistaTotales()
+      : '';
+  const desde = opts?.desde || fechaISO;
+  const hasta = opts?.hasta || fechaISO;
+  const esListaAgr = opts.soloListasLibrillosPorAgrupacion === true;
+
+  /** Encabezado tipo captura: Colbeef + raya + título/fechas + período ISO + vista; Generado a la derecha. */
+  if (esListaAgr) {
+    const brandLista = `<span style="font-weight:900;color:#2e7d32;font-size:18px;letter-spacing:.02em;font-family:Arial Black,Arial,sans-serif">Colbeef</span>`;
+    const headerLista = `<div class="rep-export-lista-head" style="margin-bottom:22px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap">
+      <div style="flex:1;min-width:280px">
+        ${brandLista}
+        <div style="border-top:2px solid #8b0000;margin:10px 0 14px"></div>
+        <div style="font-size:13px;color:#333;line-height:1.5;margin-bottom:8px"><strong>${escapeHtml(titulo)}</strong> · ${escapeHtml(fechaLabel)}</div>
+        <div style="font-size:12px;color:#555;line-height:1.45">Período: ${escapeHtml(desde)} a ${escapeHtml(hasta)} · Vista tipo «lista por agrupación» (pivote + auditoría).</div>
+      </div>
+      <div style="font-size:12px;color:#666;text-align:right;white-space:nowrap;padding-top:2px">Generado: ${new Date().toLocaleString('es-CO')}</div>
+    </div>
+  </div>`;
+    return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${escapeHtml(titulo)}</title><style>
+body{font-family:Arial,sans-serif;margin:32px;color:#1a1a1a}.kpis{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap}.kpi{background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:120px}.kpi-n{font-size:24px;font-weight:700;color:#8b0000}.kpi-l{font-size:11px;color:#666;margin-top:3px}.footer{margin-top:24px;font-size:11px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:12px}
+${extraCss}
+</style></head><body>
+  ${headerLista}
+  ${cuerpo}
+  <div class="footer">Sistema de Control de Librillos — Colbeef · ${new Date().toLocaleDateString('es-CO')}</div></body></html>`;
+  }
+
+  const logoFrag =
+    opts.logoMarcaHtml ||
+    '<span style="font-weight:900;color:#8b0000;font-size:15px;letter-spacing:.04em">COLBEEF</span>';
   return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${escapeHtml(titulo)}</title><style>
-body{font-family:Arial,sans-serif;margin:32px;color:#1a1a1a}h1{color:#8b0000;font-size:28px}.meta{display:flex;justify-content:space-between;margin-bottom:20px;font-size:12px;color:#666;border-bottom:2px solid #8b0000;padding-bottom:12px}.kpis{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap}.kpi{background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:120px}.kpi-n{font-size:24px;font-weight:700;color:#8b0000}.kpi-l{font-size:11px;color:#666;margin-top:3px}.footer{margin-top:24px;font-size:11px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:12px}</style></head><body>
-  <h1>COLBEEF</h1><div class="meta"><div><strong>${escapeHtml(titulo)}</strong> · ${escapeHtml(fechaLabel)}</div><div>Generado: ${new Date().toLocaleString('es-CO')}</div></div>
+body{font-family:Arial,sans-serif;margin:32px;color:#1a1a1a}.rep-export-dochead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #8b0000;font-size:12px;color:#666}.rep-export-dochead-main{display:flex;align-items:center;gap:10px;flex:1;min-width:220px}.rep-export-logo-img{height:26px;max-width:100px;width:auto;object-fit:contain;vertical-align:middle;border:0;display:inline-block}.kpis{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap}.kpi{background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:120px}.kpi-n{font-size:24px;font-weight:700;color:#8b0000}.kpi-l{font-size:11px;color:#666;margin-top:3px}.footer{margin-top:24px;font-size:11px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:12px}
+${extraCss}
+</style></head><body>
+  <div class="rep-export-dochead">
+    <div class="rep-export-dochead-main">${logoFrag}<div><strong>${escapeHtml(titulo)}</strong> · ${escapeHtml(fechaLabel)}</div></div>
+    <div style="text-align:right;white-space:nowrap">Generado: ${new Date().toLocaleString('es-CO')}</div>
+  </div>
   ${cuerpo}
   <div class="footer">Sistema de Control de Librillos — Colbeef · ${new Date().toLocaleDateString('es-CO')}</div></body></html>`;
 }
 
 function mostrarPreview(titulo, fechaLabel, fechaISO, datos, salidas, opts = {}) {
-  const prev = document.getElementById('rep-preview');
-  document.getElementById('rep-prev-title').textContent = titulo;
+  const destino = opts.destino === 'reportes' ? 'reportes' : 'totales';
+  const { prev, title: titleEl, body } = getRepPreviewEls(destino);
+  if (!prev || !body) return;
+  if (titleEl) titleEl.textContent = titulo;
   prev.style.display = 'block';
-  const kpis = kpisGeneral(datos);
+  const kpis = opts.ocultarKpis ? '' : kpisGeneral(datos, { desde: opts.desde, hasta: opts.hasta });
+  const bloqueLch = opts.incluirResumenLibrosChunchullas
+    ? htmlResumenLibrosChunchullasCrudas(datos, { fechaReporte: fechaISO, resumenMacro: opts.resumenMacro })
+    : '';
   const cuerpo = cuerpoReporteGeneral(datos, fechaISO, salidas, opts);
-  document.getElementById('rep-prev-body').innerHTML = `
+  body.innerHTML = `
     <div class="rep-header"><div><div class="rep-co">COLBEEF</div><div class="rep-sub-title">${escapeHtml(titulo)}</div></div><div class="rep-meta"><div>${fechaLabel}</div><div>Generado: ${new Date().toLocaleString('es-CO')}</div></div></div>
     ${kpis}
+    ${bloqueLch}
     ${cuerpo}
     <div style="margin-top:20px;font-size:11px;color:var(--tx3);text-align:center;border-top:1px solid var(--brd);padding-top:12px">Colbeef — Sistema de Control de Librillos · ${new Date().toLocaleDateString('es-CO')}</div>`;
   prev.scrollIntoView({ behavior: 'smooth' });
 }
 
 function imprimirReporte() {
-  const el = document.getElementById('rep-prev-body');
+  const el = repPreviewBodyActivo();
   if (!el || !el.innerHTML.trim()) {
     mostrarToast('Genera primero una vista previa del reporte', 'err');
     return;
   }
-  window.print();
+  imprimirPreviewEnVentana(el.innerHTML, repPreviewTitleActivo()?.textContent || 'Reporte');
+  enviarEventoAnalytics({
+    eventName: 'print_report',
+    viewName: _analyticsViewActual,
+    meta: { origen: repPreviewTitleActivo()?.textContent || 'Reporte' },
+  });
 }
 
-function descargarPDFReporte() {
-  const el = document.getElementById('rep-prev-body');
+function imprimirPreviewEnVentana(htmlBody, titulo = 'Reporte') {
+  const w = window.open('', '_blank', 'width=1200,height=900');
+  if (!w) {
+    mostrarToast('No se pudo abrir ventana de impresión. Revisa el bloqueador de popups.', 'err');
+    return;
+  }
+  const safeTitle = escapeHtml(String(titulo || 'Reporte'));
+  const stylesHref = new URL('styles.css', window.location.href).href;
+  w.document.open();
+  w.document.write(`<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${safeTitle}</title>
+  <link rel="stylesheet" href="${stylesHref}" />
+  <style>
+    @page { size: A4 portrait; margin: 7mm; }
+    html,body{margin:0;padding:0;background:#fff;color:#111;font-family:Arial,sans-serif}
+    .print-root{
+      padding:0;
+      display:flex;
+      justify-content:center;
+    }
+    .print-scale{transform:none;width:100%}
+    .print-scale{
+      max-width:186mm;
+      margin:0 auto;
+    }
+    .print-scale .prev-wrap{
+      padding:6px!important;
+      margin:0 auto!important;
+      background:#fff!important;
+      border:none!important;
+      box-shadow:none!important;
+    }
+    .print-scale .rep-resumen-nota{display:none!important}
+    .print-scale .tw,
+    .print-scale .rep-table-wrap{
+      overflow:visible!important;
+      max-height:none!important;
+      height:auto!important;
+    }
+    .print-scale .mov-audit-scroll{
+      max-height:none!important;
+      height:auto!important;
+      overflow:visible!important;
+    }
+    .print-scale .mov-audit-table{
+      width:100%!important;
+    }
+    .print-scale .rep-pivot-audit-grid{
+      display:block!important;
+    }
+    .print-scale .rep-pivot-audit-main{
+      width:100%!important;
+      max-width:100%!important;
+    }
+    .print-scale .rep-resumen-pivot{
+      width:100%!important;
+      max-width:100%!important;
+      font-size:10px!important;
+    }
+    .print-scale .rep-resumen-th-titulo{font-size:18px!important;padding:8px 10px!important}
+    .print-scale .rep-resumen-th-cierre{font-size:12px!important;padding:6px 8px!important}
+    .print-scale .rep-resumen-th-cols{font-size:13px!important;padding:6px 8px!important}
+    .print-scale .rep-resumen-row-parent td{font-size:12px!important;padding:5px 7px!important}
+    .print-scale .rep-resumen-row-child td{font-size:11px!important;padding:4px 6px!important}
+    .print-scale .rep-resumen-total-gen td{font-size:14px!important;padding:6px 8px!important}
+    .print-scale .rep-pivot-audit .dt{font-size:9px!important}
+    .print-scale .rep-pivot-audit .dt th,
+    .print-scale .rep-pivot-audit .dt td{padding:3px 5px!important;line-height:1.15!important}
+    .print-scale .mov-tabla-det,
+    .print-scale .mov-pivot-table{
+      width:100%!important;
+      font-size:10px!important;
+    }
+    .print-scale .rep-header{
+      margin-bottom:8px!important;
+      padding-bottom:6px!important;
+    }
+    table{border-collapse:collapse}
+    @media print{
+      body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .print-root{overflow:visible}
+    }
+  </style>
+</head>
+<body>
+  <div class="print-root"><div class="print-scale">${htmlBody || ''}</div></div>
+</body>
+</html>`);
+  w.document.close();
+  w.focus();
+  // Esperar a que el navegador pinte el contenido antes de abrir imprimir.
+  setTimeout(() => {
+    try {
+      w.print();
+    } catch {
+      // ignore
+    }
+  }, 250);
+}
+
+async function descargarPDFReporte() {
+  const el = repPreviewBodyActivo();
   if (!el || !el.innerHTML.trim()) {
     mostrarToast('Genera primero una vista previa del reporte', 'err');
     return;
   }
-  const h2p = typeof html2pdf !== 'undefined' ? html2pdf : window.html2pdf;
-  if (typeof h2p !== 'function') {
-    mostrarToast('Usa Imprimir y elige «Guardar como PDF» en el navegador.', 'err');
-    return;
-  }
-  const title = (document.getElementById('rep-prev-title').textContent || 'reporte').replace(/[^\w\s-]/g, '').replace(/\s+/g, '_');
-  const opt = {
-    margin: 10,
-    filename: `Colbeef_${title}.pdf`,
-    image: { type: 'jpeg', quality: 0.95 },
-    html2canvas: { scale: 2, useCORS: true, logging: false },
-    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-  };
-  const job = h2p().set(opt).from(el).save();
-  if (job && typeof job.then === 'function') {
-    job.then(() => mostrarToast('PDF generado', 'ok')).catch(() => mostrarToast('Error al generar PDF. Usa Imprimir.', 'err'));
-  } else {
+  const title = (repPreviewTitleActivo()?.textContent || 'reporte').replace(/[^\w\s-]/g, '').replace(/\s+/g, '_');
+  let source = null;
+  try {
+    const h2p = await ensureHtml2PdfDisponible();
+    if (typeof h2p !== 'function') throw new Error('html2pdf no disponible');
+    source = crearNodoTemporalParaPdf(el);
+    const opt = {
+      margin: 7,
+      filename: `Colbeef_${title}.pdf`,
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] },
+    };
+    const job = h2p().set(opt).from(source).save();
+    if (job && typeof job.then === 'function') {
+      await Promise.race([
+        job,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('PDF_TIMEOUT')), 45000)),
+      ]);
+    }
     mostrarToast('PDF generado', 'ok');
+    enviarEventoAnalytics({
+      eventName: 'export_pdf',
+      viewName: _analyticsViewActual,
+      meta: { archivo: opt.filename || `Colbeef_${title}.pdf` },
+    });
+  } catch {
+    // Fallback: abrir impresión con diseño para "Guardar como PDF" del navegador.
+    mostrarToast('Se abrió Imprimir. En destino selecciona "Guardar como PDF".', 'ok');
+    try {
+      imprimirReporte();
+    } catch {
+      // ignore
+    }
+  } finally {
+    if (source) {
+      try { source.remove(); } catch { /* ignore */ }
+    }
   }
+}
+
+function crearNodoTemporalParaPdf(previewEl) {
+  const host = document.createElement('div');
+  host.className = 'pdf-export-root';
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  host.style.width = '794px';
+  host.style.background = '#fff';
+  host.style.zIndex = '-1';
+  host.innerHTML = previewEl.innerHTML;
+  const style = document.createElement('style');
+  style.textContent = `
+    .pdf-export-root .tw,
+    .pdf-export-root .rep-table-wrap{overflow:visible!important;max-height:none!important;height:auto!important}
+    .pdf-export-root .mov-audit-scroll{max-height:none!important;height:auto!important;overflow:visible!important}
+    .pdf-export-root .mov-audit-table{width:100%!important}
+    .pdf-export-root .rep-pivot-audit-grid{display:block!important}
+    .pdf-export-root .rep-pivot-audit-main,
+    .pdf-export-root .rep-resumen-pivot{width:100%!important;max-width:100%!important}
+    .pdf-export-root .rep-resumen-nota{display:none!important}
+    .pdf-export-root .rep-resumen-pivot{font-size:10px!important}
+    .pdf-export-root .rep-resumen-row-parent td{font-size:12px!important;padding:5px 7px!important}
+    .pdf-export-root .rep-resumen-row-child td{font-size:11px!important;padding:4px 6px!important}
+    .pdf-export-root .rep-pivot-audit .dt{font-size:9px!important}
+    .pdf-export-root .rep-pivot-audit .dt th,
+    .pdf-export-root .rep-pivot-audit .dt td{padding:3px 5px!important;line-height:1.15!important}
+  `;
+  host.appendChild(style);
+  document.body.appendChild(host);
+  return host;
+}
+
+function ensureHtml2PdfDisponible() {
+  const existing = (typeof html2pdf !== 'undefined' ? html2pdf : window.html2pdf);
+  if (typeof existing === 'function') return Promise.resolve(existing);
+  const urls = [
+    'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js',
+    'https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js',
+  ];
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    const next = () => {
+      if (i >= urls.length) return reject(new Error('html2pdf no cargado'));
+      const s = document.createElement('script');
+      s.src = urls[i++];
+      s.async = true;
+      s.onload = () => {
+        const h2p = (typeof html2pdf !== 'undefined' ? html2pdf : window.html2pdf);
+        if (typeof h2p === 'function') resolve(h2p);
+        else next();
+      };
+      s.onerror = next;
+      document.head.appendChild(s);
+    };
+    next();
+  });
 }
 
 function formatFechaSolo(f) {
@@ -2839,23 +6482,30 @@ function sumarDiasISO(iso, dias) {
 
 function textoSalidaEtiquetaCruda(registro) {
   const idProducto = registro?.id_producto;
-  const s = salidaUltimaRegistrada(idProducto);
+  const s = salidaEfectivaTimestamp(idProducto, registro);
   if (s) return formatFecha(s);
-  const ingreso = registro?.fecha_ingreso_cava;
-  if (ingreso) {
-    const d = new Date(ingreso);
-    if (!Number.isNaN(d.getTime())) {
-      d.setDate(d.getDate() + 1);
-      return `${formatFecha(d.toISOString())} (auto +1 día)`;
-    }
-  }
   return 'Pendiente despacho';
 }
 
 /** Abre ventana de impresión con etiquetas (crudas): código, plaza, propietario, ingreso proceso, salida (al despachar). */
 function abrirVentanaEtiquetasCrudas(crudas) {
+  // Zebra ZD230 según configuración del usuario: 100 x 24 mm.
+  const ZEBRA_LABEL_W_MM = 100;
+  const ZEBRA_LABEL_H_MM = 24;
+  // Fuente del logo suministrada por el usuario en esta sesión + fallback opcional local.
+  const logoEtiquetaSrc =
+    'file:///C:/Users/CAMPUSLANDS/.cursor/projects/c-laragon-www-colbeef/assets/c__Users_CAMPUSLANDS_AppData_Roaming_Cursor_User_workspaceStorage_6c0d8d21b0889b1b6f744157fa715904_images_image-f0207b74-5fdd-443c-ae30-5731fefecd6b.png';
+  const logoEtiquetaFallback = `${window.location.origin}/logo-colbeef.png`;
+  const plazaEtiquetaCruda = (d) => {
+    const principal = limpiarPuestoTxt(ubicacionPlaza(d));
+    if (principal && principal !== '—') return principal;
+    const respaldo = limpiarPuestoTxt(puestoNormalizado(d));
+    if (respaldo && respaldo !== '—') return respaldo;
+    return 'SIN PLAZA';
+  };
+
   const sorted = [...crudas].sort((a, b) => {
-    const sa = String(a.sucursal || 'ZZZ').localeCompare(String(b.sucursal || 'ZZZ'));
+    const sa = String(plazaEtiquetaCruda(a) || 'ZZZ').localeCompare(String(plazaEtiquetaCruda(b) || 'ZZZ'));
     if (sa !== 0) return sa;
     return String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true });
   });
@@ -2863,8 +6513,11 @@ function abrirVentanaEtiquetasCrudas(crudas) {
   const grupos = {};
   const labelsData = [];
   let cardCounter = 0;
+  // Regla operativa CRUDAS: beneficio = fecha plan (selector global), vencimiento = +1 día.
+  const fechaPlanCrudas = document.getElementById('fecha-global')?.value || hoyISO();
+  const fechaVenceCrudas = sumarDiasISO(fechaPlanCrudas, 1) || fechaPlanCrudas;
   sorted.forEach(d => {
-    const s = (d.sucursal || 'SIN PLAZA').trim() || 'SIN PLAZA';
+    const s = plazaEtiquetaCruda(d);
     if (!grupos[s]) grupos[s] = [];
     grupos[s].push(d);
   });
@@ -2876,47 +6529,51 @@ function abrirVentanaEtiquetasCrudas(crudas) {
         const cardId = `lbl-cruda-${++cardCounter}`;
         const codigo = String(d.id_producto || '—');
         const plaza = String(sucursal || '—');
-        const prop = String(d.propietario || '—').trim() || '—';
-        const emp = String(d.empresa_destino || '—').trim() || '—';
-        const ingreso = d.fecha_ingreso_cava ? formatFecha(d.fecha_ingreso_cava) : '—';
-        const fb = d.fecha_ingreso_cava ? formatFechaSolo(diaOperacionISOFromTimestamp(d.fecha_ingreso_cava)) : '—';
-        const fvIso = (() => {
-          const s = salidaUltimaRegistrada(d.id_producto);
-          if (s) return diaOperacionISOFromTimestamp(s);
-          const fi = diaOperacionISOFromTimestamp(d.fecha_ingreso_cava);
-          return fi ? sumarDiasISO(fi, 1) : null;
-        })();
-        const fv = fvIso ? formatFechaSolo(fvIso) : '—';
-        const producto = 'chunchulla cruda';
+        const plazaEtiqueta = plaza.toUpperCase();
+        const fb = formatFechaSolo(fechaPlanCrudas);
+        const fv = formatFechaSolo(fechaVenceCrudas);
+        // Contenido legible al escanear (texto en líneas).
         const qrText = [
-          `Producto: ${producto}`,
-          `Puesto: ${plaza}`,
-          `Codigo: ${codigo}`,
+          'chunchulla cruda',
+          `id:${codigo}`,
+          `puesto: ${plazaEtiqueta}`,
+          `fecha beneficio: ${fb}`,
+          `fecha vencimiento: ${fv}`,
         ].join('\n');
         labelsData.push({ cardId, qrText });
         return `
           <div class="lbl-card" id="${cardId}">
-            <div class="lbl-row">
+            <div class="lbl-main">
               <div class="lbl-left">
                 <div class="lbl-k">PUESTO</div>
+                <div class="lbl-puesto">${escapeHtml(plazaEtiqueta)}</div>
                 <div class="lbl-code">${escapeHtml(codigo)}</div>
               </div>
-              <div class="lbl-mid">
-                <div class="lbl-puesto">${escapeHtml(plaza)}</div>
+              <div class="lbl-center">
                 <div class="lbl-qr-wrap">
                   <img class="lbl-qr-img" id="qr-${cardId}" alt="QR" />
                 </div>
               </div>
               <div class="lbl-right">
-                <div class="lbl-logo">Colbeef</div>
+                <div class="lbl-logo-wrap">
+                  <img
+                    class="lbl-logo-img"
+                    src="${escapeHtml(logoEtiquetaSrc)}"
+                    alt="Colbeef"
+                    onerror="if(this.dataset.f!=='1'){this.dataset.f='1';this.src='${escapeHtml(logoEtiquetaFallback)}';return;}this.style.display='none';this.nextElementSibling.style.display='block';"
+                  />
+                  <div class="lbl-logo" style="display:none">Colbeef</div>
+                </div>
                 <div class="lbl-fechas">
                   <div><strong>F.B.:</strong> ${escapeHtml(fb)}</div>
                   <div><strong>F.V.:</strong> ${escapeHtml(fv)}</div>
                 </div>
-                <div class="lbl-mini">COLBEEF S.A.S</div>
-                <div class="lbl-mini">${escapeHtml(prop)}</div>
-                <div class="lbl-mini">${escapeHtml(emp)}</div>
-                <div class="lbl-mini">Ingreso: ${escapeHtml(ingreso)}</div>
+                <div class="lbl-meta">
+                  <div class="lbl-mini">COLBEEF S.A.S</div>
+                  <div class="lbl-mini lbl-mini-addr">Floridablanca - Santander</div>
+                  <div class="lbl-mini lbl-mini-addr">Via Corredor Rio Frio Cll 210 N9-631</div>
+                  <div class="lbl-mini lbl-mini-addr">Tel: (7) 6917777 · www.colbeef.com</div>
+                </div>
               </div>
             </div>
           </div>`;
@@ -2939,26 +6596,85 @@ function abrirVentanaEtiquetasCrudas(crudas) {
         .lbl-group h3{margin:0 0 6px;font-size:12px;color:#2f5ea8}
         .lbl-grid{display:grid;grid-template-columns:1fr;gap:8px}
         .lbl-card{
-          border:2px solid #0b1f3a;background:#fff;padding:8px 10px;box-sizing:border-box;
-          width:100%;max-width:980px;min-height:190px;
+          border:1px solid #0b1f3a;background:#fff;padding:1.2mm;box-sizing:border-box;
+          width:100%;max-width:980px;min-height:86px;
           page-break-inside:avoid;break-inside:avoid;
         }
-        .lbl-row{display:grid;grid-template-columns:1.2fr .8fr .95fr;gap:8px;align-items:stretch}
-        .lbl-left{display:flex;flex-direction:column;justify-content:flex-start}
-        .lbl-k{font-size:15px;font-weight:900;letter-spacing:.3px}
-        .lbl-prod{margin-top:6px;font-size:44px;font-weight:900;line-height:1;letter-spacing:.3px}
-        .lbl-code{margin-top:8px;font-size:56px;font-weight:900;line-height:1}
-        .lbl-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
-        .lbl-puesto{font-size:64px;font-weight:900;line-height:1}
-        .lbl-qr-wrap{display:flex;align-items:center;justify-content:center}
-        .lbl-qr-img{width:110px;height:110px;border:1px solid #777}
-        .lbl-right{display:flex;flex-direction:column;justify-content:flex-start}
-        .lbl-logo{font-size:58px;font-weight:900;color:#0b8e48;line-height:.95;font-style:italic;text-align:right}
-        .lbl-fechas{margin-top:8px;font-size:22px;line-height:1.3}
-        .lbl-mini{margin-top:4px;font-size:11px;line-height:1.2;text-align:right}
+        .lbl-main{display:grid;grid-template-columns:1.34fr .52fr 1.14fr;gap:.9mm;align-items:stretch;height:100%;width:100%;min-width:0}
+        .lbl-left{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;padding-left:2.2mm;overflow:hidden;min-width:0;height:100%}
+        .lbl-k{font-size:12px;font-weight:900;letter-spacing:.65px;text-align:left}
+        .lbl-puesto{font-size:25px;font-weight:900;line-height:.88;text-align:left;letter-spacing:.18px;margin-top:.8mm}
+        .lbl-code{font-size:12px;font-weight:700;line-height:.95;text-align:left;letter-spacing:.1px;margin-top:1.1mm}
+        .lbl-center{display:flex;align-items:center;justify-content:center;min-width:0}
+        .lbl-qr-wrap{display:flex;align-items:center;justify-content:center;margin-left:20mm}
+        .lbl-qr-img{width:56px;height:56px;border:1px solid #777}
+        .lbl-right{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;overflow:hidden;min-width:0;padding-right:1.1mm;height:100%}
+        .lbl-logo-wrap{display:flex;justify-content:flex-end;align-items:flex-start;min-height:15px;width:100%}
+        .lbl-logo-img{max-width:82px;max-height:13px;object-fit:contain}
+        .lbl-logo{font-size:18px;font-weight:900;color:#0b8e48;line-height:.95;font-style:normal;text-align:right}
+        .lbl-fechas{font-size:12.8px;line-height:1.05;text-align:right;margin-top:.3mm}
+        .lbl-meta{margin-top:.45mm;width:100%}
+        .lbl-mini{font-size:6.7px;font-weight:700;line-height:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
+        .lbl-mini-addr{white-space:normal;overflow:visible;text-overflow:clip}
         @media print{
-          .no-print{display:none}
+          @page{
+            size:${ZEBRA_LABEL_W_MM}mm ${ZEBRA_LABEL_H_MM}mm;
+            margin:0;
+          }
+          html,body{
+            width:${ZEBRA_LABEL_W_MM}mm;
+            min-width:${ZEBRA_LABEL_W_MM}mm;
+            margin:0;
+            padding:0;
+            background:#fff;
+            -webkit-print-color-adjust:exact;
+            print-color-adjust:exact;
+          }
+          h1,.sub,.no-print{display:none!important}
+          .lbl-group{margin:0}
           .lbl-group h3{display:none}
+          .lbl-grid{
+            display:block;
+            gap:0;
+          }
+          .lbl-card{
+            width:${ZEBRA_LABEL_W_MM}mm;
+            min-width:${ZEBRA_LABEL_W_MM}mm;
+            max-width:${ZEBRA_LABEL_W_MM}mm;
+            height:${ZEBRA_LABEL_H_MM}mm;
+            min-height:${ZEBRA_LABEL_H_MM}mm;
+            max-height:${ZEBRA_LABEL_H_MM}mm;
+            margin:0;
+            padding:.7mm;
+            border:0.35mm solid #0b1f3a;
+            box-sizing:border-box;
+            page-break-after:always;
+            break-after:page;
+            overflow:hidden;
+          }
+          .lbl-card:last-child{
+            page-break-after:auto;
+            break-after:auto;
+          }
+          .lbl-main{
+            height:100%;
+            width:100%;
+            min-width:0;
+            grid-template-columns:1.34fr .52fr 1.14fr;
+            gap:.9mm;
+          }
+          .lbl-left{padding-left:1.4mm;min-width:0;height:100%;justify-content:space-between}
+          .lbl-k{font-size:8pt; line-height:1}
+          .lbl-puesto{font-size:16.2pt; line-height:.86; margin-top:.3mm}
+          .lbl-code{font-size:10pt; line-height:.95; margin-top:.4mm}
+          .lbl-center{display:flex;align-items:center;justify-content:center}
+          .lbl-qr-img{width:11.8mm;height:11.8mm}
+          .lbl-logo-img{max-width:18.2mm;max-height:3.7mm}
+          .lbl-fechas{font-size:7.6pt; line-height:1.05; margin-top:.18mm}
+          .lbl-meta{margin-top:.28mm}
+          .lbl-mini{font-size:4.3pt; font-weight:700; line-height:.98}
+          .lbl-right{padding-right:.85mm;min-width:0;height:100%;justify-content:center}
+          .lbl-mini-addr{white-space:normal;overflow:visible;text-overflow:clip}
         }
       </style>
       <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
@@ -2992,14 +6708,14 @@ function abrirVentanaEtiquetasCrudas(crudas) {
               const QR = window.QRCode || window.qrcode;
               const qrText = item.qrText;
               if (!QR) {
-                img.src = qrFallbackUrl(qrText, 110);
+                img.src = qrFallbackUrl(qrText, 256);
                 return resolve();
               }
               const toDataURL = (typeof QR.toDataURL === 'function') ? QR.toDataURL : (QR.default && typeof QR.default.toDataURL === 'function' ? QR.default.toDataURL : null);
               if (toDataURL) {
-                toDataURL(qrText, { errorCorrectionLevel: 'M', margin: 1, width: 112, scale: 6 }, function(err, url){
+                toDataURL(qrText, { errorCorrectionLevel: 'L', margin: 2, width: 256, scale: 8 }, function(err, url){
                   if (!err && url) img.src = url;
-                  else img.src = qrFallbackUrl(qrText, 110);
+                  else img.src = qrFallbackUrl(qrText, 256);
                   resolve();
                 });
                 return;
@@ -3007,12 +6723,12 @@ function abrirVentanaEtiquetasCrudas(crudas) {
               const canvas = document.createElement('canvas');
               const toCanvas = (typeof QR.toCanvas === 'function') ? QR.toCanvas : (QR.default && typeof QR.default.toCanvas === 'function' ? QR.default.toCanvas : null);
               if (!toCanvas) {
-                img.src = qrFallbackUrl(qrText, 110);
+                img.src = qrFallbackUrl(qrText, 256);
                 return resolve();
               }
-              toCanvas(canvas, qrText, { width: 112, margin: 1, errorCorrectionLevel: 'M' }, function(){
+              toCanvas(canvas, qrText, { width: 256, margin: 2, errorCorrectionLevel: 'L' }, function(){
                 try { img.src = canvas.toDataURL('image/png'); }
-                catch (e) { img.src = qrFallbackUrl(qrText, 110); }
+                catch (e) { img.src = qrFallbackUrl(qrText, 256); }
                 resolve();
               });
             });
@@ -3038,6 +6754,28 @@ function imprimirEtiquetasCrudas() {
     return;
   }
   abrirVentanaEtiquetasCrudas(crudas);
+  enviarEventoAnalytics({
+    eventName: 'print_labels_crudas',
+    viewName: _analyticsViewActual,
+    meta: { modo: 'todas', total: crudas.length },
+  });
+}
+
+/** Una sola cruda: mismo layout de etiquetas que el listado completo. */
+function imprimirEtiquetasCrudasUnId(idProducto) {
+  const id = String(idProducto ?? '').trim();
+  if (!id) return;
+  const d = (datosCrudasHist || []).find((x) => String(x.id_producto) === id);
+  if (!d || !esVistaHistorialCrudasSolo(d)) {
+    mostrarToast('No se encontró la cruda en la fecha actual. Actualiza e intenta de nuevo.', 'err');
+    return;
+  }
+  abrirVentanaEtiquetasCrudas([d]);
+  enviarEventoAnalytics({
+    eventName: 'print_labels_crudas',
+    viewName: _analyticsViewActual,
+    meta: { modo: 'una', id_producto: id },
+  });
 }
 
 function imprimirEtiquetasCrudasSeleccion() {
@@ -3051,31 +6789,53 @@ function imprimirEtiquetasCrudasSeleccion() {
     return;
   }
   abrirVentanaEtiquetasCrudas(lista);
+  enviarEventoAnalytics({
+    eventName: 'print_labels_crudas',
+    viewName: _analyticsViewActual,
+    meta: { modo: 'seleccion', total: lista.length },
+  });
 }
 
 function imprimirEtiquetasCrudasDespachadasHoy() {
   const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
-  const salidasDia = (salidasRegistradas || []).filter(
-    s => diaOperacionISOFromTimestamp(s.fecha_salida) === fechaSel
-  );
+  const salidasDiaOperativo = listaSalidasInventarioParaDia(fechaSel);
   const byId = new Map((datosGlobal || []).map(d => [String(d.id_producto), d]));
-  const crudasDesp = salidasDia
+  const crudasDesp = salidasDiaOperativo
     .map(s => byId.get(String(s.id_producto)))
     .filter(Boolean)
     .filter(esVistaHistorialCrudasSolo);
 
   if (!crudasDesp.length) {
-    mostrarToast('No hay crudas despachadas para imprimir en la fecha seleccionada.', 'err');
+    mostrarToast('No hay crudas despachadas para imprimir en la fecha operativa seleccionada.', 'err');
     return;
   }
   abrirVentanaEtiquetasCrudas(crudasDesp);
+  enviarEventoAnalytics({
+    eventName: 'print_labels_crudas',
+    viewName: _analyticsViewActual,
+    meta: { modo: 'despachadas_hoy', total: crudasDesp.length, fecha: fechaSel },
+  });
 }
 
 // ── INICIAR ───────────────────────────────────────────────────────────────────
-document.getElementById('pg-sub').textContent = labelFecha(hoy);
+historialCambiosObs = mergeHistorialCambios(cargarHistorialCambiosObsLS(), historialCambiosObs);
+iniciarAnalyticsUso();
+document.getElementById('pg-sub').textContent = labelFecha(fechaDefectoOperacion);
 actualizarColumnasRol();
+void Promise.all([cargarAliasPlazas(), cargarConfigClienteResumen(), cargarConfigUi()]).then(() => {
+  initListenerUsuarioDesdeInventario();
+  if (document.getElementById('vista-reportes')?.classList.contains('active')) {
+    const prev = document.getElementById('rep-prev-body-rep');
+    if (prev && prev.innerHTML.trim()) {
+      void generarReporteCliente();
+    }
+  }
+});
 renderBotonSonido();
+actualizarLabelCorteTurno();
+void cargarConfigOperacion();
 window.addEventListener('pointerdown', unlockAudio, { once: true });
+aplicarVistaDesdeQueryString();
 cargarDatos();
 iniciarAutoRefreshGlobal();
 iniciarWatchObservaciones();
@@ -3083,14 +6843,18 @@ window.addEventListener('resize', () => {
   if (window.innerWidth > 900) cerrarMenuMovil();
 });
 
-// Si el navegador restaura estado (bfcache), re-forzar la fecha de hoy
+// Si el navegador restaura estado (bfcache), re-forzar la fecha operativa por defecto
 window.addEventListener('pageshow', () => {
-  const h = hoyISO();
+  const defecto = fechaOperativaDefectoISO();
   const el = document.getElementById('fecha-global');
-  if (el && el.value !== h) {
-    el.value = h;
-    el.defaultValue = h;
-    el.setAttribute('value', h);
+  if (el && el.value !== defecto) {
+    el.value = defecto;
+    el.defaultValue = defecto;
+    el.setAttribute('value', defecto);
     cambiarFecha();
   }
+});
+
+window.addEventListener('pagehide', () => {
+  cerrarAnalyticsUso();
 });

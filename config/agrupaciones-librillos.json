@@ -6,9 +6,13 @@
       "alias": [
         "derivados carnicos",
         "derivados cárnicos",
+        "derivados",
         "ruth cacua",
         "carviscol",
         "juan rueda",
+        "juan carlos rueda",
+        "walter arguello",
+        "uriel vargas",
         "maria fernanda",
         "maría fernanda"
       ]
@@ -51,16 +55,21 @@
       "etiqueta": "Asurcarnes GLO",
       "alias": [
         "asurcarnes glo",
-        "asurcarnesglo"
+        "asurcarnesglo",
+        "asurcarnesolo"
       ]
     }
   ],
+  "fallback_comercial": {
+    "codigo": "asurcarnes",
+    "etiqueta": "Asurcarnes"
+  },
   "default": {
-    "codigo": "otros",
-    "etiqueta": "Otros"
+    "codigo": "asurcarnes",
+    "etiqueta": "Asurcarnes"
   },
   "sin_destino": {
-    "codigo": "sin_destino",
-    "etiqueta": "Sin destino (retiro)"
+    "codigo": "asurcarnes",
+    "etiqueta": "Asurcarnes"
   }
 }

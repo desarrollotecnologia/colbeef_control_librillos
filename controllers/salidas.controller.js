@@ -17,11 +17,11 @@ export const getSalidas = async (req, res) => {
 // POST /api/salidas — body: { ids_productos: [...], rol: 'usuario'|'admin' }
 export const postSalidas = async (req, res) => {
   try {
-    const { ids_productos, rol } = req.body;
+    const { ids_productos, rol, usuario } = req.body;
     if (!ids_productos || !Array.isArray(ids_productos) || ids_productos.length === 0) {
       return res.status(400).json({ error: 'ids_productos requerido' });
     }
-    const nuevas = await registrarSalidas(ids_productos, rol || 'usuario');
+    const nuevas = await registrarSalidas(ids_productos, usuario || rol || 'usuario');
     res.json({ registradas: nuevas.length, salidas: nuevas });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -32,8 +32,8 @@ export const postSalidas = async (req, res) => {
 export const putSalida = async (req, res) => {
   try {
     const { id } = req.params;
-    const { fecha_salida, rol } = req.body;
-    const resultado = await editarSalida(id, fecha_salida, rol || 'usuario');
+    const { fecha_salida, rol, usuario } = req.body;
+    const resultado = await editarSalida(id, fecha_salida, usuario || rol || 'usuario');
     if (!resultado) return res.status(404).json({ error: 'Salida no encontrada' });
     if (resultado.error) return res.status(403).json(resultado);
     res.json(resultado);
@@ -46,9 +46,9 @@ export const putSalida = async (req, res) => {
 export const deleteSalida = async (req, res) => {
   try {
     const { id } = req.params;
-    const { rol } = req.body;
+    const { rol, usuario } = req.body;
     if (rol !== 'admin') return res.status(403).json({ error: 'Solo admin puede eliminar' });
-    const ok = await eliminarSalida(id);
+    const ok = await eliminarSalida(id, usuario || rol || 'admin');
     if (!ok) return res.status(404).json({ error: 'Salida no encontrada' });
     res.json({ eliminado: true });
   } catch (e) {

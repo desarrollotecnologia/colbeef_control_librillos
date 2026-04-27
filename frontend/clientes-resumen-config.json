@@ -1,0 +1,12 @@
+{
+  "modoClienteResumen": "propietario",
+  "nota": "modo: auto | empresa_destino | propietario. propietario = cliente del pivote como Excel (Empresa propietaria col B). Plaza en reportes = sucursal (BD). auto = empresa_destino salvo cuando parece ubicación. empresa_destino = columna Empresa DERIVADOS. clientePorIdProducto fuerza el cliente por ID.",
+  "auto": {
+    "regexEmpresaEsUbicacion": [
+      "(PLAZA|BUCARAMANGA|FLORIDABLANCA|PIEDECUESTA|MESA DE LOS SANTOS|GIRON|GUARIN|REAL DE MINAS|CAVA)",
+      "^\\d{2}\\s+PLAZA\\b"
+    ],
+    "empresaExactaUsaPropietario": ["COLBEEF S.A.S"]
+  },
+  "clientePorIdProducto": {}
+}
