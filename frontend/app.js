@@ -2500,28 +2500,19 @@ async function descargarPdfGuiaDespacho() {
     const html = construirHtmlGuiaDespachoPdf(data, {
       logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
     });
-    const host = document.createElement('div');
-    host.style.position = 'fixed';
-    host.style.left = '0';
-    host.style.top = '0';
-    host.style.width = '794px';
-    host.style.pointerEvents = 'none';
-    host.style.zIndex = '9999';
-    host.style.background = '#fff';
-    host.innerHTML = html;
-    document.body.appendChild(host);
     try {
       const h2p = await ensureHtml2PdfDisponible();
+      const htmlForPdf = `<div style="width:794px;background:#fff">${html}</div>`;
       await h2p()
         .set({
           margin: 6,
           filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
           image: { type: 'jpeg', quality: 0.96 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
+          html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
           jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
           pagebreak: { mode: ['css', 'legacy'] },
         })
-        .from(host)
+        .from(htmlForPdf, 'string')
         .save();
       mostrarToast('Guia PDF generada', 'ok');
       enviarEventoAnalytics({
@@ -2531,8 +2522,6 @@ async function descargarPdfGuiaDespacho() {
       });
     } catch (e) {
       mostrarToast(`No se pudo generar PDF: ${e.message || e}`, 'err');
-    } finally {
-      try { host.remove(); } catch { /* ignore */ }
     }
   });
 }
@@ -2714,7 +2703,9 @@ function rowsAsurDualSheet(items, nombreGrupo, fechaISO) {
   const rows = [];
   // Bloque derecho inicia en columnas G/H (7/8), separado del bloque izquierdo.
   rows.push([
-    { v: 'Colbeef', style: 'sMetaBrand', col: 1 },
+    { v: 'Identificación', style: 'sLeftHead', col: 1 },
+    { v: 'Empresa propietaria', style: 'sLeftHead', col: 2 },
+    { v: 'Vísceras blancas', style: 'sLeftHead', col: 3 },
     { v: `LISTA LIBRILLOS ${String(nombreGrupo || '').toUpperCase()}`, style: 'sTitle', col: 7 },
     { v: formatFechaCorta(fechaISO), style: 'sTitleDate', col: 8 },
   ]);
@@ -2792,11 +2783,14 @@ function descargarExcelMultiHojaXml(nombreBase, sheets) {
       .join('');
     return `<Worksheet ss:Name="${escapeXml(sheetName)}">
       <Table>
-        <Column ss:AutoFitWidth="0" ss:Width="320"/>
-        <Column ss:AutoFitWidth="0" ss:Width="110"/>
-        <Column ss:AutoFitWidth="0" ss:Width="240"/>
-        <Column ss:AutoFitWidth="0" ss:Width="240"/>
+        <Column ss:AutoFitWidth="0" ss:Width="130"/>
+        <Column ss:AutoFitWidth="0" ss:Width="230"/>
+        <Column ss:AutoFitWidth="0" ss:Width="175"/>
+        <Column ss:AutoFitWidth="0" ss:Width="20"/>
+        <Column ss:AutoFitWidth="0" ss:Width="20"/>
+        <Column ss:AutoFitWidth="0" ss:Width="20"/>
         <Column ss:AutoFitWidth="0" ss:Width="260"/>
+        <Column ss:AutoFitWidth="0" ss:Width="95"/>
         ${rowsXml}
       </Table>
     </Worksheet>`;
@@ -2818,47 +2812,69 @@ function descargarExcelMultiHojaXml(nombreBase, sheets) {
     </Style>
     <Style ss:ID="sBlank"><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sTitle">
+      <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
       <Font ss:Bold="1" ss:Size="13"/>
       <Interior ss:Color="#C8E6C9" ss:Pattern="Solid"/>
-      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+      <Borders>
+        <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/>
+      </Borders>
     </Style>
     <Style ss:ID="sTitleDate">
       <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
       <Font ss:Bold="1" ss:Size="13"/>
       <Interior ss:Color="#C8E6C9" ss:Pattern="Solid"/>
-      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+      <Borders>
+        <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/>
+      </Borders>
     </Style>
     <Style ss:ID="sMeta"><Font ss:Bold="1"/><Interior ss:Color="#E8F5E9" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sHeadL">
+      <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
       <Font ss:Bold="1" ss:Color="#111111"/>
-      <Interior ss:Color="#E1BEE7" ss:Pattern="Solid"/>
-      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+      <Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/>
+      <Borders>
+        <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/>
+      </Borders>
     </Style>
     <Style ss:ID="sHeadR">
       <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
       <Font ss:Bold="1" ss:Color="#111111"/>
-      <Interior ss:Color="#E1BEE7" ss:Pattern="Solid"/>
-      <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders>
+      <Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/>
+      <Borders>
+        <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/>
+        <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/>
+      </Borders>
     </Style>
-    <Style ss:ID="sGroupL"><Font ss:Bold="1"/><Interior ss:Color="#FFB74D" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sGroupR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Color="#D50000"/><Interior ss:Color="#FFB74D" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sChildL"><Interior ss:Color="#DCEAF7" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sChildR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Interior ss:Color="#DCEAF7" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sTotalL"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1" ss:Size="14"/><Interior ss:Color="#FF66FF" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sTotalR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Size="14"/><Interior ss:Color="#FF66FF" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sCellL"><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E2DC"/></Borders></Style>
-    <Style ss:ID="sCellR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E2DC"/></Borders></Style>
+    <Style ss:ID="sGroupL"><Font ss:Bold="1"/><Interior ss:Color="#FFB74D" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sGroupR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Color="#D50000"/><Interior ss:Color="#FFB74D" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sChildL"><Interior ss:Color="#DCEAF7" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sChildR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Interior ss:Color="#DCEAF7" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sTotalL"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1" ss:Size="14"/><Interior ss:Color="#FF66FF" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sTotalR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Size="14"/><Interior ss:Color="#FF66FF" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sCellL"><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E2DC"/></Borders></Style>
+    <Style ss:ID="sCellR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E2DC"/></Borders></Style>
     <Style ss:ID="sDetBlock"><Font ss:Bold="1"/><Interior ss:Color="#F3E5F5" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sDetHeadL"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#455A64" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sDetHeadR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#455A64" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sDetCellL"><Interior ss:Color="#FAFAFA" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sDetCellR"><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><Interior ss:Color="#FAFAFA" ss:Pattern="Solid"/></Style>
     <Style ss:ID="sMetaBrand"><Font ss:Bold="1" ss:Color="#1A7A42"/></Style>
-    <Style ss:ID="sLeftHead"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#C8E6C9" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sLeftCell"><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sLeftCellAlt"><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sLeftId"><Font ss:Color="#C0392B" ss:Bold="1"/><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="sLeftIdAlt"><Font ss:Color="#C0392B" ss:Bold="1"/><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="sLeftHead"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sLeftCell"><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sLeftCellAlt"><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sLeftId"><Font ss:Color="#C0392B" ss:Bold="1"/><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="sLeftIdAlt"><Font ss:Color="#C0392B" ss:Bold="1"/><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
   </Styles>
   ${xmlSheets}
 </Workbook>`;
@@ -2891,13 +2907,7 @@ async function descargarExcelAsurEspecial(modo = 'resumen') {
     ];
     const sheets = grupos.map((g) => {
       const items = base.filter((d) => agrCodigoNorm(d) === g.code);
-      const resumen = rowsResumenAsurSheet(items, g.name);
-      let rows;
-      if (modo === 'resumen_detalle') {
-        rows = rowsAsurDualSheet(items, g.name, hasta);
-      } else {
-        rows = [[`LISTA LIBRILLOS ${g.name}`, formatFechaCorta(hasta)], ...resumen.rows];
-      }
+      const rows = rowsAsurDualSheet(items, g.name, hasta);
       return { name: g.name, rows };
     });
     const totalData = sheets.reduce((s, sh) => s + (sh.rows.length > 5 ? 1 : 0), 0);
