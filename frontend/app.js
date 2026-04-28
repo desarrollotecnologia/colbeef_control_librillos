@@ -5175,6 +5175,11 @@ function limpiarPuestoTxt(v) {
   return String(v || '').replace(/\s+/g, ' ').trim();
 }
 
+function esPlaceholderTexto(v) {
+  const t = String(v || '').trim().toUpperCase();
+  return !t || t === '-' || t === '--' || t === '—' || t === 'N/A' || t === 'NA' || t === 'NULL';
+}
+
 function esEtiquetaInstruccionOperativa(txt) {
   const u = String(txt || '').toUpperCase();
   if (!u) return false;
@@ -5284,8 +5289,8 @@ function puestoNormalizado(d) {
   const dest = limpiarPuestoTxt(d?.destino);
   // Regla de negocio: plaza se maneja por sucursal.
   // Solo si no hay sucursal, se usa destino como respaldo.
-  const sucOk = esEtiquetaInstruccionOperativa(suc) ? '' : suc;
-  const destOk = esEtiquetaInstruccionOperativa(dest) ? '' : dest;
+  const sucOk = (esPlaceholderTexto(suc) || esEtiquetaInstruccionOperativa(suc)) ? '' : suc;
+  const destOk = (esPlaceholderTexto(dest) || esEtiquetaInstruccionOperativa(dest)) ? '' : dest;
   const base = sucOk || destOk || '—';
   return aplicarMapaPlazasAlias(base, [suc, dest, base]);
 }
@@ -5297,11 +5302,14 @@ function puestoNormalizado(d) {
  * 3) último fallback: detección dentro de observación completa
  */
 function ubicacionPlaza(d) {
-  const apiPlaza = limpiarPuestoTxt(d?.plaza);
-  const suc = limpiarPuestoTxt(d?.sucursal);
+  const apiPlazaRaw = limpiarPuestoTxt(d?.plaza);
+  const apiPlaza = esPlaceholderTexto(apiPlazaRaw) ? '' : apiPlazaRaw;
+  const sucRaw = limpiarPuestoTxt(d?.sucursal);
+  const suc = esPlaceholderTexto(sucRaw) ? '' : sucRaw;
   const obsFull = textoObservacionFuente(d);
-  const obsPlaza = plazaOperativaDesdeObservacion(obsFull) || plazaDesdeTextoObservacion(obsFull);
-  const base = apiPlaza || suc || limpiarPuestoTxt(obsPlaza);
+  const obsPlazaRaw = plazaOperativaDesdeObservacion(obsFull) || plazaDesdeTextoObservacion(obsFull);
+  const obsPlaza = esPlaceholderTexto(obsPlazaRaw) ? '' : limpiarPuestoTxt(obsPlazaRaw);
+  const base = apiPlaza || suc || obsPlaza;
   if (!base) return '—';
   if (esEtiquetaInstruccionOperativa(base)) return '—';
   return aplicarMapaPlazasAlias(base, [apiPlaza, suc, obsPlaza, base]);
@@ -5309,18 +5317,14 @@ function ubicacionPlaza(d) {
 
 function destinoTabla(d) {
   const limpio = (v) => String(v || '').trim();
-  const esPlaceholder = (v) => {
-    const t = limpio(v).toUpperCase();
-    return !t || t === '-' || t === '--' || t === '—' || t === 'N/A' || t === 'NA' || t === 'NULL';
-  };
   const destino = limpio(d?.destino);
-  if (!esPlaceholder(destino)) return destino;
+  if (!esPlaceholderTexto(destino)) return destino;
   const sucursal = limpio(d?.sucursal);
-  if (!esPlaceholder(sucursal)) return sucursal;
+  if (!esPlaceholderTexto(sucursal)) return sucursal;
   const plaza = limpio(ubicacionPlaza(d));
-  if (!esPlaceholder(plaza)) return plaza;
+  if (!esPlaceholderTexto(plaza)) return plaza;
   const empresa = limpio(d?.empresa_destino);
-  if (!esPlaceholder(empresa)) return empresa;
+  if (!esPlaceholderTexto(empresa)) return empresa;
   return '—';
 }
 
