@@ -5315,6 +5315,8 @@ function destinoTabla(d) {
   };
   const destino = limpio(d?.destino);
   if (!esPlaceholder(destino)) return destino;
+  const sucursal = limpio(d?.sucursal);
+  if (!esPlaceholder(sucursal)) return sucursal;
   const plaza = limpio(ubicacionPlaza(d));
   if (!esPlaceholder(plaza)) return plaza;
   const empresa = limpio(d?.empresa_destino);
