@@ -40,6 +40,11 @@ const VISTA_CHUNK = (() => {
   if (Number.isFinite(n) && n >= 15 && n <= 300) return n;
   return 120;
 })();
+const CHUNK_CONCURRENCY = (() => {
+  const n = parseInt(String(process.env.VISTA_CHUNK_CONCURRENCY || ''), 10);
+  if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
+  return 3;
+})();
 
 // ── PARSEAR OBSERVACIÓN ───────────────────────────────────────────────────────
 /**
@@ -126,6 +131,14 @@ function chunks(arr, n) {
   const result = [];
   for (let i = 0; i < arr.length; i += n) result.push(arr.slice(i, i + n));
   return result;
+}
+
+async function procesarGruposConLimite(grupos, worker, concurrency = 3) {
+  const lim = Math.max(1, Number(concurrency) || 1);
+  for (let i = 0; i < grupos.length; i += lim) {
+    const tramo = grupos.slice(i, i + lim);
+    await Promise.all(tramo.map((g) => worker(g)));
+  }
 }
 
 const keyCodigo = (c) => String(c);
@@ -663,9 +676,15 @@ async function metaRaizPorIds(idsTexto) {
 }
 
 function textoNoVacio(...vals) {
+  const esPlaceholderVacio = (txt) => {
+    const t = String(txt || '').trim().toUpperCase();
+    if (!t) return true;
+    if (['-', '--', '—', 'N/A', 'NA', 'NULL', 'SIN DESTINO', 'SIN CLIENTE', 'SIN PLAZA'].includes(t)) return true;
+    return false;
+  };
   for (const v of vals) {
     const t = String(v || '').trim();
-    if (t) return t;
+    if (!esPlaceholderVacio(t)) return t;
   }
   return null;
 }
@@ -760,20 +779,26 @@ const consultarLibrillos = async (fecha = null) => {
 
     const grupos = chunks(idProductos, VISTA_CHUNK);
     const vistaMapUltimo = {};
-    for (const grupo of grupos) {
-      try {
-        const m = await metaRaizPorIds(grupo.map(String));
-        Object.assign(vistaMapUltimo, m);
-      } catch (err) {
-        console.warn(`⚠️ Error en metadatos raíz por IDs: ${err.message}`);
-      }
-    }
+    await procesarGruposConLimite(
+      grupos,
+      async (grupo) => {
+        try {
+          const m = await metaRaizPorIds(grupo.map(String));
+          Object.assign(vistaMapUltimo, m);
+        } catch (err) {
+          console.warn(`⚠️ Error en metadatos raíz por IDs: ${err.message}`);
+        }
+      },
+      CHUNK_CONCURRENCY
+    );
 
     /** Último movimiento real de CAVA para parte 13 (librillos) por código. */
     const cavaParte13Map = {};
-    for (const grupo of grupos) {
-      try {
-        const resCava13 = await pool.query(`
+    await procesarGruposConLimite(
+      grupos,
+      async (grupo) => {
+        try {
+          const resCava13 = await pool.query(`
           SELECT DISTINCT ON (pp.id_producto)
             pp.id_producto::text AS codigo,
             pcr.fecha_ingreso AS fecha_ingreso_cava,
@@ -790,17 +815,19 @@ const consultarLibrillos = async (fecha = null) => {
           WHERE pp.id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
             AND pp.id_producto::text = ANY($1)
           ORDER BY pp.id_producto
-        `, [grupo.map(String)]);
-        resCava13.rows.forEach((r) => {
-          cavaParte13Map[keyCodigo(r.codigo)] = {
-            fecha_ingreso_cava: r.fecha_ingreso_cava || null,
-            fecha_salida_cava: r.fecha_salida_cava || null,
-          };
-        });
-      } catch (err) {
-        console.warn(`⚠️ Error en chunk cava parte 13: ${err.message}`);
-      }
-    }
+          `, [grupo.map(String)]);
+          resCava13.rows.forEach((r) => {
+            cavaParte13Map[keyCodigo(r.codigo)] = {
+              fecha_ingreso_cava: r.fecha_ingreso_cava || null,
+              fecha_salida_cava: r.fecha_salida_cava || null,
+            };
+          });
+        } catch (err) {
+          console.warn(`⚠️ Error en chunk cava parte 13: ${err.message}`);
+        }
+      },
+      CHUNK_CONCURRENCY
+    );
 
     if (COLBEEF_DEBUG) {
       console.log(`✅ Metadatos raíz: ${Object.keys(vistaMapUltimo).length} · cava parte 13: ${Object.keys(cavaParte13Map).length}`);
@@ -921,10 +948,12 @@ export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillo
 export async function obtenerResumenMacroPorFecha(fecha) {
   const datos = await consultarLibrillos(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
-  // El resumen macro operativo (Excel) se arma sobre producción efectiva del día.
-  // Excluimos filas de respaldo sin registro de parte en la fecha consultada,
-  // que se traen para trazabilidad pero inflan TOTAL/ASURCARNES.
-  const rows = rowsAll.filter((d) => !Boolean(d?.pendiente_registro_parte));
+  // Macro consolidado para operación diaria:
+  // debe cuadrar contra el universo planillado del día.
+  // Por eso clasificamos TODO rowsAll (incluye pendientes de parte),
+  // manteniendo métricas de pendientes para auditoría.
+  const rows = rowsAll;
+  const pendientes = rowsAll.filter((d) => Boolean(d?.pendiente_registro_parte)).length;
   const countCod = new Map();
   const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
   const esCruda = (d) => /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''));
@@ -964,6 +993,8 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   return {
     fecha,
     total_registros: rows.length,
+    total_planillados: rowsAll.length,
+    total_pendientes_registro_parte: pendientes,
     categorias,
     resumen_libros: resumenLibros,
   };
