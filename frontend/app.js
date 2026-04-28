@@ -2396,13 +2396,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   }
 
   return `
-<!doctype html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <title>Guia ${escapeHtml(c.codigo || '')}</title>
   <style>
-    body{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:12px}
+    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:12px;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start}
     .logo{font-size:64px;font-weight:800;line-height:1}
     .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
@@ -2418,8 +2413,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .firma{margin-top:8px}
     .nota{font-size:10px;margin-top:8px}
   </style>
-</head>
-<body>
+<div class="guia-pdf-root">
   <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
   <div class="h-top">
     <div>
@@ -2474,8 +2468,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     Esta guía se expide bajo responsabilidad de la planta de beneficio y su alteración, modificación o sustitución,
     será objeto de las acciones penales correspondientes conforme a la Ley 906 de 2004.
   </div>
-</body>
-</html>
+</div>
 `;
 }
 
