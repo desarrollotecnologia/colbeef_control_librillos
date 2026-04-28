@@ -2612,19 +2612,34 @@ async function descargarExcelReporteCliente() {
   return runWithAppLoader('Generando archivo Excel...', async () => {
     const ctx = await obtenerContextoReporteCliente();
     if (!ctx) return;
-    const opts = buildOptsReporteEstiloTotales(ctx);
-    const logoMarcaHtml = await obtenerMarcaExportColbeefImgHtml({ paraExcel: true });
-    const html = generarHTMLReporte(
-      ctx.titulo,
-      `${labelFecha(ctx.desde)} a ${labelFecha(ctx.hasta)}`,
-      ctx.hasta,
-      ctx.filtrados,
-      ctx.salidas,
-      { ...opts, logoMarcaHtml }
-    );
+    // Unificar diseño para todas las exportaciones por agrupación:
+    // una hoja por grupo con formato tipo Asur (IDs + pivote cliente/plaza).
+    const byGrupo = new Map();
+    (ctx.filtrados || []).forEach((d) => {
+      const g = String(etiquetaAgrupacionMacro(d) || 'AGRUPACION').trim().toUpperCase();
+      if (!byGrupo.has(g)) byGrupo.set(g, []);
+      byGrupo.get(g).push(d);
+    });
+    const orden = ordenGruposMacro([...byGrupo.keys()]);
+    const sheets = orden.map((g) => ({
+      name: String(g || 'AGRUPACION').slice(0, 31),
+      rows: rowsAsurDualSheet(byGrupo.get(g) || [], g, ctx.hasta),
+    }));
+    if (!sheets.length) {
+      mostrarToast('Sin datos para exportar en el rango seleccionado', 'err');
+      return;
+    }
     const slug = ctx.agrupacionCodigo ? String(ctx.agrupacionCodigo).replace(/[^\w\-]+/g, '_') : 'Todos';
     const nombre = `Reporte_Agrupacion_${slug}_${ctx.desde}_a_${ctx.hasta}`;
-    descargarExcel(nombre, html);
+    descargarExcelMultiHojaXml(nombre, sheets);
+    const metaArchivo = ctx.agrupacionCodigo
+      ? `Agrupación individual (${sheets[0]?.name || 'AGRUPACION'})`
+      : `Agrupaciones (${sheets.length} hojas)`;
+    enviarEventoAnalytics({
+      eventName: 'export_excel',
+      viewName: _analyticsViewActual,
+      meta: { archivo: metaArchivo, desde: ctx.desde, hasta: ctx.hasta },
+    });
   });
 }
 
