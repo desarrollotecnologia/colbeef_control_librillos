@@ -52,6 +52,20 @@ function diaOperativoSalidaISO(fechaSalida) {
   return cal;
 }
 
+function esDespachadoEnFecha(d, fechaIso, mapSalida) {
+  const id = String(d?.id_producto || '').trim();
+  if (id && mapSalida.has(id)) return true;
+  const tsTraz = d?.fecha_salida_cava || null;
+  return diaOperativoSalidaISO(tsTraz) === fechaIso;
+}
+
+function salidaEfectivaRegistro(d, mapSalida) {
+  const id = String(d?.id_producto || '').trim();
+  const sal = id ? mapSalida.get(id) : null;
+  if (sal?.fecha_salida) return sal.fecha_salida;
+  return d?.fecha_salida_cava || null;
+}
+
 function normalizarCategoriaGuia(raw) {
   const c = String(raw || '').trim().toLowerCase();
   if (!c) return null;
@@ -333,10 +347,8 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
   const mapSalida = new Map(salidasDia.map((s) => [s.id_producto, s]));
 
   const detalleBase = listaDia.filter((d) => {
-    const id = String(d?.id_producto || '').trim();
-    if (!id || !mapSalida.has(id)) return false;
     const cod = String(d?.agrupacion_codigo || '').trim().toLowerCase();
-    return def.codigos.has(cod);
+    return def.codigos.has(cod) && esDespachadoEnFecha(d, fechaIso, mapSalida);
   });
 
   if (!detalleBase.length) {
@@ -347,12 +359,12 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
 
   const detalle = detalleBase.map((d) => {
     const id = String(d?.id_producto || '').trim();
-    const sal = mapSalida.get(id);
+    const fechaSalidaEff = salidaEfectivaRegistro(d, mapSalida);
     return {
       id_producto: id,
       identificacion: txt(d?.identificacion),
       observaciones: txt(d?.observacion || d?.observaciones),
-      fecha_registro: iso(sal?.fecha_salida),
+      fecha_registro: iso(fechaSalidaEff),
       peso_despacho: null,
       nombre_parte: 'Librillo',
       especie: null,
@@ -378,10 +390,9 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
   });
 
   const pendientesHoy = listaDia.filter((d) => {
-    const id = String(d?.id_producto || '').trim();
-    if (!id || mapSalida.has(id)) return false;
     const cod = String(d?.agrupacion_codigo || '').trim().toLowerCase();
-    return def.codigos.has(cod);
+    if (!def.codigos.has(cod)) return false;
+    return !esDespachadoEnFecha(d, fechaIso, mapSalida);
   }).length;
 
   const destinos = [...new Set(detalle.map((d) => d.destino).filter(Boolean))].join(', ') || null;
@@ -499,12 +510,10 @@ export async function verificarFuentesGuiaPorFechaYCategoria(fecha, categoria) {
     return def.codigos.has(cod);
   });
   const categoriaDespachados = categoriaDia.filter((d) => {
-    const id = String(d?.id_producto || '').trim();
-    return id && salidasDiaSet.has(id);
+    return esDespachadoEnFecha(d, fechaIso, salidasDiaSet);
   });
   const categoriaPendientes = categoriaDia.filter((d) => {
-    const id = String(d?.id_producto || '').trim();
-    return id && !salidasDiaSet.has(id);
+    return !esDespachadoEnFecha(d, fechaIso, salidasDiaSet);
   });
 
   return {
