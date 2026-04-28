@@ -1448,6 +1448,8 @@ const fechaRepCliDesdeEl = document.getElementById('fecha-rep-cli-desde');
 const fechaRepCliHastaEl = document.getElementById('fecha-rep-cli-hasta');
 if (fechaRepCliDesdeEl) fechaRepCliDesdeEl.value = fechaDefectoOperacion;
 if (fechaRepCliHastaEl) fechaRepCliHastaEl.value = fechaDefectoOperacion;
+const fechaGuiaEl = document.getElementById('inp-guia-fecha');
+if (fechaGuiaEl) fechaGuiaEl.value = fechaDefectoOperacion;
 
 const DEFAULT_COLBEEF_UI = {
   navHistorialHint: 'Plan faena · parte Colbeef',
@@ -2341,30 +2343,56 @@ function fmtKg(v) {
   return `${n.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} kg`;
 }
 
+function fechaGuiaSolo(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
 function construirHtmlGuiaDespachoPdf(data) {
   const c = data?.cabecera || {};
   const detalle = Array.isArray(data?.detalle) ? data.detalle : [];
-  const fechaExp = fechaGuiaTexto(c.fecha_creacion);
+  const fechaExp = fechaGuiaSolo(c.fecha_creacion);
   const fechaVig = fechaGuiaTexto(c.fecha_fin_vigencia);
   const conductor = c.conductor_nombre || (c.id_conductor != null ? `ID ${c.id_conductor}` : '—');
   const guiaTransporte = c.numero_guia_transporte_completo || c.numero_guia_transporte || '—';
-  const destinoTxt = c.destinos || (detalle.find((x) => x?.destino)?.destino || '—');
-  const empresaDestino = detalle.find((x) => x?.empresa_destino)?.empresa_destino || '—';
-  const sucursal = detalle.find((x) => x?.sucursal)?.sucursal || '—';
-  const rows = detalle.length
-    ? detalle.map((d, idx) => `
-      <tr>
-        <td>${idx + 1}</td>
-        <td>${escapeHtml(d.id_producto || '—')}</td>
-        <td>${escapeHtml(d.identificacion || '—')}</td>
-        <td>${escapeHtml(d.nombre_parte || '—')}</td>
-        <td>${escapeHtml(d.especie || '—')}</td>
-        <td>${escapeHtml(d.destino || '—')}</td>
-        <td>${escapeHtml(d.sucursal || '—')}</td>
-        <td>${fmtKg(d.peso_despacho)}</td>
-      </tr>
-    `).join('')
-    : `<tr><td colspan="8" style="text-align:center;color:#666">Sin detalle enlazado para esta guía. Se imprime resumen oficial.</td></tr>`;
+  const destinoTxt = c.destino_principal || c.destinos || (detalle.find((x) => x?.destino)?.destino || '—');
+  const especie = c.especie_producto || detalle.find((x) => x?.especie)?.especie || 'bovina';
+  const observacionProducto = c.observacion_producto || 'LIBROS CRUDOS';
+  const r = c.resumen_categoria || {};
+  const pendientesHoy = Number(r.pendientes_hoy || 0);
+  const tipo = String(c.tipo_despacho_nombre || '').toUpperCase();
+  const horaDespacho = c.hora_salida || '—';
+  const fechaHoraDesp = `${fechaExp} ${horaDespacho}`.trim();
+  const cantidadDespachados = Number(c.total_productos || 0);
+
+  let bloqueTotales = '';
+  if (tipo.includes('CAT')) {
+    bloqueTotales = `
+      <div class="resumen">
+        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span> <span class="v" style="margin-left:60px">${pendientesHoy} PENDIENTES</span></div>
+        <div style="margin-top:8px">CAT: <span class="v">${Number(r.cat || 0)}</span></div>
+        <div>ASURCARNESCOL: <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
+      </div>
+    `;
+  } else if (tipo.includes('DERIVADOS')) {
+    bloqueTotales = `
+      <div class="resumen">
+        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span> <span class="v" style="margin-left:60px">${pendientesHoy} PENDIENTES</span></div>
+        <div style="margin-top:8px">DERIVADOS: <span class="v">${Number(r.derivados || 0)}</span></div>
+        <div>ASURCARNES: <span class="v">${Number(r.asurcarnes || 0)}</span></div>
+      </div>
+    `;
+  } else {
+    bloqueTotales = `
+      <div class="resumen">
+        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span> <span class="v" style="margin-left:60px">${pendientesHoy} PENDIENTES</span></div>
+        <div style="margin-top:8px">GLOBAL HIDES: <span class="v">${Number(r.global_hides || 0)}</span></div>
+        <div>ASURCARNESGLO: <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
+      </div>
+    `;
+  }
 
   return `
 <!doctype html>
@@ -2373,72 +2401,74 @@ function construirHtmlGuiaDespachoPdf(data) {
   <meta charset="utf-8" />
   <title>Guia ${escapeHtml(c.codigo || '')}</title>
   <style>
-    body{font-family:Arial,sans-serif;color:#111;margin:0;padding:18px}
-    .top{display:flex;justify-content:space-between;gap:14px}
-    .brand{font-size:34px;font-weight:800;line-height:1}
-    .brand .a{color:#2c9f45}.brand .b{color:#d43636}
-    .box{border:1px solid #333;padding:8px;font-size:12px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-    .t{width:100%;border-collapse:collapse;margin-top:12px;font-size:11px}
-    .t th,.t td{border:1px solid #333;padding:4px 6px;vertical-align:top}
-    .t th{background:#efefef}
-    .strong{font-weight:700}
-    .tot{margin-top:10px;border:1px solid #333;padding:8px;font-size:12px}
-    .foot{margin-top:18px;font-size:11px}
+    body{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:12px}
+    .h-top{display:flex;justify-content:space-between;align-items:flex-start}
+    .logo{font-size:64px;font-weight:800;line-height:1}
+    .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
+    .cap{font-size:12px;margin-bottom:6px}
+    .t{width:100%;border-collapse:collapse}
+    .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
+    .t th{font-weight:600;background:#f2f2f2}
+    .sec{margin-top:10px}
+    .sec-title{font-size:28px;margin:6px 0 4px}
+    .k{font-weight:700}
+    .v{font-weight:800;color:#c00}
+    .resumen{font-size:34px;margin-top:8px}
+    .firma{margin-top:8px}
+    .nota{font-size:10px;margin-top:8px}
   </style>
 </head>
 <body>
-  <div class="top">
+  <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
+  <div class="h-top">
     <div>
-      <div class="brand"><span class="a">Col</span><span class="b">beef</span></div>
-      <div style="font-size:12px;margin-top:4px">Guia de transporte de subproductos no comestibles</div>
+      <div class="logo"><span class="a">Col</span><span class="b">beef</span></div>
     </div>
-    <div class="box">
-      <div><span class="strong">Codigo:</span> ${escapeHtml(c.codigo || '—')}</div>
-      <div><span class="strong">Expedicion:</span> ${escapeHtml(fechaExp)}</div>
-      <div><span class="strong">Vigencia:</span> ${escapeHtml(fechaVig)}</div>
-      <div><span class="strong">Guia transporte:</span> ${escapeHtml(String(guiaTransporte))}</div>
-    </div>
+    <table class="t" style="max-width:420px">
+      <tr><th>FECHA DE EXPEDICION</th><th>Numero</th></tr>
+      <tr><td>${escapeHtml(fechaExp)}</td><td>${escapeHtml(String(guiaTransporte))}</td></tr>
+    </table>
   </div>
 
-  <div class="grid">
-    <div class="box">
-      <div><span class="strong">Responsable:</span> ${escapeHtml(c.responsable || '—')}</div>
-      <div><span class="strong">Usuario registro:</span> ${escapeHtml(c.usuario_guia || '—')}</div>
-      <div><span class="strong">Conservacion:</span> ${escapeHtml(c.conservacion || '—')}</div>
-      <div><span class="strong">Tipo despacho:</span> ${escapeHtml(c.tipo_despacho_nombre || '—')}</div>
-    </div>
-    <div class="box">
-      <div><span class="strong">Conductor:</span> ${escapeHtml(conductor)}</div>
-      <div><span class="strong">Placa:</span> ${escapeHtml(c.placa || '—')}</div>
-      <div><span class="strong">Precinto:</span> ${escapeHtml(c.precinto || '—')}</div>
-      <div><span class="strong">Destino:</span> ${escapeHtml(destinoTxt)}</div>
-    </div>
-  </div>
-
+  <div class="sec sec-title">1. IDENTIFICACION DE LA PLANTA DE BENEFICIO DE PROCEDENCIA</div>
   <table class="t">
-    <thead>
-      <tr>
-        <th>#</th><th>ID Producto</th><th>ID Animal</th><th>Producto</th><th>Especie</th><th>Destino</th><th>Sucursal</th><th>Peso</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
+    <tr><td>Planta de Beneficio</td><td>${escapeHtml(c.planta_beneficio || 'Colbeef S.A.S')}</td></tr>
+    <tr><td>Direccion o ubicacion</td><td>${escapeHtml(c.direccion_planta || '—')}</td></tr>
+    <tr><td>Fecha (dd/mm/aaaa) y Hora (hh:mm) despacho</td><td>${escapeHtml(fechaHoraDesp)}</td></tr>
+    <tr><td>Código Invima</td><td>${escapeHtml(c.codigo_invima || '—')}</td></tr>
+    <tr><td>Departamento</td><td>${escapeHtml(c.departamento_planta || '—')}</td></tr>
+    <tr><td>Ciudad</td><td>${escapeHtml(c.ciudad_planta || '—')}</td></tr>
   </table>
 
-  <div class="tot">
-    <div><span class="strong">Total productos:</span> ${Number(c.total_productos || 0)}</div>
-    <div><span class="strong">Cantidad canal:</span> ${Number(c.cantidad_canal || 0)} &nbsp; | &nbsp;
-         <span class="strong">Cuarto canal:</span> ${Number(c.cantidad_cuarto_canal || 0)} &nbsp; | &nbsp;
-         <span class="strong">Lengua:</span> ${Number(c.cantidad_lengua || 0)}</div>
-    <div><span class="strong">Hallazgos:</span> ${Number(c.hallazgos_productos || 0)}</div>
-    <div><span class="strong">Empresa destino:</span> ${escapeHtml(empresaDestino)} &nbsp; | &nbsp;
-         <span class="strong">Sucursal:</span> ${escapeHtml(sucursal)}</div>
-    <div><span class="strong">Observaciones:</span> ${escapeHtml(c.observaciones_guia || '—')}</div>
-  </div>
+  <div class="sec sec-title">2. TIPO DE PRODUCTO</div>
+  <table class="t">
+    <tr><th style="width:26px"></th><th>Producto</th><th>Especie</th><th>Peso</th><th>observación</th></tr>
+    <tr><td>1</td><td>Sub-Productos no comestibles libros crudos</td><td>${escapeHtml(especie)}</td><td></td><td>${escapeHtml(observacionProducto)}</td></tr>
+  </table>
 
-  <div class="foot">
-    <div><span class="strong">Texto guia:</span> ${escapeHtml(c.texto_guia_tipo || '—')}</div>
-    <div style="margin-top:8px">Documento generado por Colbeef para control interno de despacho.</div>
+  <div class="sec sec-title">3. VEHICULO TRANSPORTADOR</div>
+  <table class="t">
+    <tr><td>Nombre del Conductor</td><td>${escapeHtml(conductor)}</td></tr>
+    <tr><td>Cedula de ciudadanía</td><td>${escapeHtml(String(c.id_conductor || '—'))}</td></tr>
+    <tr><td>Tipo de vehículo</td><td>${escapeHtml(c.tipo_vehiculo || 'TRANSPORTE DE ALIMENTO NO COMESTIBLE')}</td></tr>
+    <tr><td>Placas</td><td>${escapeHtml(c.placa || '—')}</td></tr>
+    <tr><td>Precinto</td><td>${escapeHtml(c.precinto || '—')}</td></tr>
+    ${String(tipo).includes('CAT') ? `<tr><td>Isotermo</td><td>${escapeHtml(c.isotermo || '')}</td></tr>` : ''}
+  </table>
+
+  <div class="sec sec-title">4. DESTINO: ${escapeHtml(destinoTxt)}${tipo ? `, ${escapeHtml(tipo)}` : ''}</div>
+  ${bloqueTotales}
+  <div class="resumen" style="margin-top:6px">TOTAL: <span class="v">${cantidadDespachados}</span></div>
+
+  <table class="t firma">
+    <tr><td style="width:50%">FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
+    <tr><td>CEDULA DE CIUDADANIA:</td><td>${escapeHtml(c.firma_cedula || '—')}</td></tr>
+    <tr><td>CARGO:</td><td>${escapeHtml(c.firma_cargo || '—')}</td></tr>
+  </table>
+
+  <div class="nota">
+    Esta guía se expide bajo responsabilidad de la planta de beneficio y su alteración, modificación o sustitución,
+    será objeto de las acciones penales correspondientes conforme a la Ley 906 de 2004.
   </div>
 </body>
 </html>
@@ -2447,16 +2477,21 @@ function construirHtmlGuiaDespachoPdf(data) {
 
 async function descargarPdfGuiaDespacho() {
   return runWithAppLoader('Generando guia de despacho en PDF...', async () => {
-    const input = document.getElementById('inp-guia-codigo');
-    const codigo = String(input?.value || '').trim();
-    if (!codigo) {
-      mostrarToast('Ingresa un codigo de guia', 'err');
+    const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+    const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+    if (!fecha) {
+      mostrarToast('Selecciona la fecha de salida', 'err');
+      return;
+    }
+    if (!categoria) {
+      mostrarToast('Selecciona la categoria', 'err');
       return;
     }
 
     let data = null;
     try {
-      const r = await fetch(`${GUIAS_URL}/${encodeURIComponent(codigo)}`);
+      const qs = new URLSearchParams({ fecha, categoria }).toString();
+      const r = await fetch(`${GUIAS_URL}/generar?${qs}`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       data = j;
@@ -2478,7 +2513,7 @@ async function descargarPdfGuiaDespacho() {
       await h2p()
         .set({
           margin: 6,
-          filename: `Guia_Despacho_${codigo.replace(/[^\w\-]+/g, '_')}.pdf`,
+          filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
           image: { type: 'jpeg', quality: 0.96 },
           html2canvas: { scale: 2, useCORS: true, logging: false },
           jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
@@ -2490,7 +2525,7 @@ async function descargarPdfGuiaDespacho() {
       enviarEventoAnalytics({
         eventName: 'export_pdf',
         viewName: _analyticsViewActual,
-        meta: { archivo: `Guia_Despacho_${codigo}` },
+        meta: { archivo: `Guia_Despacho_${categoria}_${fecha}` },
       });
     } catch (e) {
       mostrarToast(`No se pudo generar PDF: ${e.message || e}`, 'err');

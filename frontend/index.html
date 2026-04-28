@@ -435,8 +435,20 @@
             </div>
           </div>
           <div class="rep-mini-form">
-            <label class="fl">Código guía</label>
-            <input class="fi" id="inp-guia-codigo" type="text" placeholder="Ej: 068PD-35999-25" autocomplete="off">
+            <div class="rep-mini-fechas">
+              <div>
+                <label class="fl">Fecha salida</label>
+                <input class="fi" id="inp-guia-fecha" type="date">
+              </div>
+              <div>
+                <label class="fl">Categoría</label>
+                <select class="fs" id="sel-guia-categoria">
+                  <option value="cat">CAT</option>
+                  <option value="derivados">DERIVADOS</option>
+                  <option value="global_hides">GLOBAL HIDES</option>
+                </select>
+              </div>
+            </div>
             <div class="rep-mini-actions">
               <button type="button" class="btn-gen btn-gen-sec" onclick="descargarPdfGuiaDespacho()">
                 <span class="btn-ico">
@@ -445,7 +457,7 @@
                     <path d="M10 6v7M7.5 10.5L10 13l2.5-2.5"></path>
                   </svg>
                 </span>
-                Descargar PDF guía
+                Generar PDF guía
               </button>
             </div>
           </div>
@@ -593,6 +605,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="./colbeef-logo-data.js?v=20260417"></script>
-  <script src="./app.js?v=20260414"></script>
+  <script src="./app.js?v=20260428-guia"></script>
 </body>
 </html>

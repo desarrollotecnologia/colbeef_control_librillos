@@ -757,11 +757,16 @@ const consultarLibrillos = async (fecha = null) => {
           obsParte
         );
         const { observacion, cliente_destino } = parsearObservacion(obsFuente);
-        const ag = agrupacionDesdeObservacionCompleta(obsFuente, cliente_destino);
+        // Para clasificar, usar el mejor candidato de cliente:
+        // 1) cliente parseado desde "RETIRAR LIBRILLOS"
+        // 2) propietario de la vista cuando el parseo viene vacío.
+        // Esto evita inflar ASURCARNES por fallback en retiros sin cliente explícito.
+        const clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
+        const ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
         const destinoFinal = textoNoVacio(v.destino);
         /** Plaza operativa = sucursal en BD (vista), no destino. */
         const plazaFinal = textoNoVacio(v.sucursal);
-        const clienteDestinoFinal = textoNoVacio(cliente_destino, v.nombre_propietario);
+        const clienteDestinoFinal = clienteClasificacion;
         return {
           id_producto: l.id_producto,
           identificacion: l.identificacion,
@@ -846,7 +851,11 @@ export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillo
 
 export async function obtenerResumenMacroPorFecha(fecha) {
   const datos = await consultarLibrillos(fecha);
-  const rows = Array.isArray(datos) ? datos : [];
+  const rowsAll = Array.isArray(datos) ? datos : [];
+  // El resumen macro operativo (Excel) se arma sobre producción efectiva del día.
+  // Excluimos filas de respaldo sin registro de parte en la fecha consultada,
+  // que se traen para trazabilidad pero inflan TOTAL/ASURCARNES.
+  const rows = rowsAll.filter((d) => !Boolean(d?.pendiente_registro_parte));
   const countCod = new Map();
   const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
   const esCruda = (d) => /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''));
