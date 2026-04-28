@@ -2502,9 +2502,13 @@ async function descargarPdfGuiaDespacho() {
     });
     const host = document.createElement('div');
     host.style.position = 'fixed';
-    host.style.left = '-10000px';
+    host.style.left = '0';
     host.style.top = '0';
     host.style.width = '794px';
+    host.style.opacity = '0';
+    host.style.pointerEvents = 'none';
+    host.style.zIndex = '-1';
+    host.style.background = '#fff';
     host.innerHTML = html;
     document.body.appendChild(host);
     try {
