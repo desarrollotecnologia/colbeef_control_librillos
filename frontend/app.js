@@ -1781,7 +1781,7 @@ function poblarSelectReporteCliente(lista = datosGlobal) {
   const prev = sel.value || '';
   const porCodigo = new Map();
   (lista || []).forEach((d) => {
-    const cod = String(d?.agrupacion_codigo != null && d.agrupacion_codigo !== '' ? d.agrupacion_codigo : 'asurcarnes').trim() || 'asurcarnes';
+    const cod = codigoAgrupacionMacro(d);
     const etiqueta = etiquetaAgrupacionMacro(d);
     if (!porCodigo.has(cod)) porCodigo.set(cod, etiqueta);
   });
@@ -1890,6 +1890,10 @@ function resumenAgrupacionesClienteDestino(lista = datosGlobal) {
 /** HTML del cuadro «Resumen de libros y chunchullas crudas» (solo Reporte general / export). */
 function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const rm = opts?.resumenMacro || null;
+  const usarSoloLibrillos = opts?.soloLibrillos === true;
+  const baseLista = usarSoloLibrillos
+    ? (lista || []).filter(esLibrilloParaReporteAgrupacion)
+    : (lista || []);
   // En macro, varios "cocidos" llegan sin observacion y el backend los deja como
   // asurcarnes por default. Para que el cuadro cuadre con la hoja operativa,
   // reclasificamos localmente esos casos al generar este bloque.
@@ -1910,7 +1914,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     if (!c) return;
     conteoAgr.set(c, Number(conteoAgr.get(c) || 0) + Number(n || 0));
   };
-  (lista || []).forEach((d) => {
+  (baseLista || []).forEach((d) => {
     const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
     const obs = textoObservacionFuente(d);
     const obsVacia = !obs;
@@ -1918,9 +1922,9 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     sumarAgr(codigosBase.has(codAjustado) ? codAjustado : codRaw, 1);
   });
   const mapAgr = conteoAgr;
-  const totalCrudas = rm
+  const totalCrudas = (rm && !usarSoloLibrillos)
     ? Number(rm?.categorias?.chunchullas_crudas || 0)
-    : (lista || []).filter((d) =>
+    : (baseLista || []).filter((d) =>
         /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''))
       ).length;
 
@@ -1934,7 +1938,9 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const vOtros = mapAgr.get('otros') || 0;
   const vSinDestino = mapAgr.get('sin_destino') || 0;
 
-  const totalLibros = rm ? Number(rm?.categorias?.total || 0) : (lista || []).length;
+  const totalLibros = (rm && !usarSoloLibrillos)
+    ? Number(rm?.categorias?.total || 0)
+    : (baseLista || []).length;
   const totalGeneral = totalLibros;
   const fechaSel =
     String(opts.fechaReporte || opts.fechaISO || '').trim() ||
@@ -1998,33 +2004,32 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   /**
    * Partición disjunta operativa (para columnas Pendientes/Salió/Despachado).
    */
-  const listaCocidos = (lista || []).filter(
-    (d) => String(d?.agrupacion_codigo || '') === 'cocidos'
+  const listaCocidos = (baseLista || []).filter((d) => codigoAgrupacionMacro(d) === 'cocidos');
+  const listaDerivados = (baseLista || []).filter(
+    (d) => esVistaHistorialLibrillos(d) && codigoAgrupacionMacro(d) === 'derivados_carnicos'
   );
-  const listaDerivados = (lista || []).filter(
-    (d) => esVistaHistorialLibrillos(d) && String(d?.agrupacion_codigo || '') === 'derivados_carnicos'
-  );
-  const listaCrudosLib = (lista || []).filter(
+  const listaCrudosLib = (baseLista || []).filter(
     (d) =>
       esVistaHistorialLibrillos(d) &&
-      String(d?.agrupacion_codigo || '') !== 'cocidos' &&
-      String(d?.agrupacion_codigo || '') !== 'derivados_carnicos'
+      codigoAgrupacionMacro(d) !== 'cocidos' &&
+      codigoAgrupacionMacro(d) !== 'derivados_carnicos'
   );
   const cubiertos = new Set(
     [...listaCrudosLib, ...listaCocidos, ...listaDerivados].map((d) => String(d?.id_producto ?? ''))
   );
-  const listaRestoLib = (lista || []).filter((d) => !cubiertos.has(String(d?.id_producto ?? '')));
+  const listaRestoLib = (baseLista || []).filter((d) => !cubiertos.has(String(d?.id_producto ?? '')));
   const estCr = resumenEstado(listaCrudosLib);
   const estCo = resumenEstado(listaCocidos);
   const estDe = resumenEstado(listaDerivados);
   const estRe = resumenEstado(listaRestoLib);
-  const listaLibrillosHoy = (lista || []).filter(esVistaHistorialLibrillos);
-  const listaCrudasHoy = (lista || []).filter(esVistaHistorialCrudasSolo);
+  const listaLibrillosHoy = (baseLista || []).filter(esVistaHistorialLibrillos);
+  const listaCrudasHoy = (baseLista || []).filter(esVistaHistorialCrudasSolo);
   const estLibrillosHoy = resumenEstado(listaLibrillosHoy);
   const estCrudasHoy = resumenEstado(listaCrudasHoy);
 
+  const sumaCategoriasComercial =
+    vAsurGlo + vAsurCol + vGlobal + vAsur + vCat + vDeriv + totalCocidos + vOtros + vSinDestino;
   const tbody = `
-    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td>${totalCrudas}</td></tr>
     <tr class="resumen-dia-asur-glo"><td>ASURCARNESGLO</td><td>${vAsurGlo}</td></tr>
     <tr class="resumen-dia-asur-col"><td>ASURCARNESCOL</td><td>${vAsurCol}</td></tr>
     <tr class="resumen-dia-global"><td>GLOBAL HIDES SAS</td><td>${vGlobal}</td></tr>
@@ -2033,12 +2038,14 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <tr class="resumen-dia-deriv"><td>DERIVADOS</td><td>${vDeriv}</td></tr>
     ${(vOtros || vSinDestino) ? `<tr><td>OTROS / SIN DESTINO</td><td>${vOtros + vSinDestino}</td></tr>` : ''}
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
-    <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
+    <tr class="resumen-dia-total"><td>TOTAL (categorías comerciales, 1 animal = 1)</td><td>${totalGeneral}</td></tr>
+    <tr class="resumen-dia-head"><td colspan="2" style="font-size:11px;color:var(--tx3);font-weight:600;padding-top:10px">CHUNCHULLAS CRUDAS — conteo paralelo (marca CRUDAS en observación; puede solaparse con filas anteriores y no suma al TOTAL)</td></tr>
+    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td>${totalCrudas}</td></tr>
   `;
   return `
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
-      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
+      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong>${sumaCategoriasComercial === totalGeneral ? '' : ` <span style="font-size:11px;color:#b71c1c">(verificar: suma categorías = ${sumaCategoriasComercial})</span>`}</p>
       <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
           <thead><tr><th>Categoría</th><th>Total</th></tr></thead>
@@ -2291,7 +2298,7 @@ async function obtenerContextoReporteCliente() {
   ]);
   const filtrados = codFiltro
     ? datos.filter((d) => {
-        const c = String(d?.agrupacion_codigo != null && d.agrupacion_codigo !== '' ? d.agrupacion_codigo : 'asurcarnes').trim() || 'asurcarnes';
+        const c = codigoAgrupacionMacro(d);
         return c === codFiltro;
       })
     : datos;
@@ -2653,9 +2660,7 @@ function escapeXml(v) {
 }
 
 function agrCodigoNorm(d) {
-  return String(d?.agrupacion_codigo != null && d.agrupacion_codigo !== '' ? d.agrupacion_codigo : 'asurcarnes')
-    .trim()
-    .toLowerCase() || 'asurcarnes';
+  return String(codigoAgrupacionMacro(d)).trim().toLowerCase() || 'asurcarnes';
 }
 
 function rowsResumenAsurSheet(items, nombreGrupo) {
@@ -3891,10 +3896,17 @@ const ORDEN_MACRO_REPORTE = [
 ];
 
 function etiquetaAgrupacionMacro(d) {
-  const cod = String(d?.agrupacion_codigo ?? '').trim();
+  const cod = codigoAgrupacionMacro(d);
   if (cod && ETIQUETA_MACRO_EXCEL[cod]) return ETIQUETA_MACRO_EXCEL[cod];
   const t = etiquetaAgrupacion(d);
   return t && t !== '—' ? t : cod || '—';
+}
+
+function codigoAgrupacionMacro(d) {
+  const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
+  const obsTxt = String(d?.observaciones ?? d?.observacion ?? '').trim();
+  // Regla macro histórica: observación vacía en asurcarnes se reporta como cocidos.
+  return (codRaw === 'asurcarnes' && !obsTxt) ? 'cocidos' : codRaw;
 }
 
 function ordenGruposMacro(etiquetas) {
@@ -5139,7 +5151,11 @@ function cuerpoReporteGeneralExport(datos, fechaISO, salidas, opts = {}) {
   const totalLib = contarPorClienteComercialPuesto(librIng).reduce((a, b) => a + b.cantidad, 0);
   const totalCrud = contarPorPropietarioUbicacion(crudIng).reduce((a, b) => a + b.cantidad, 0);
   const bloqueLch = opts.incluirResumenLibrosChunchullas
-    ? htmlResumenLibrosChunchullasCrudas(datos, { fechaReporte: fechaISO, resumenMacro: opts.resumenMacro })
+    ? htmlResumenLibrosChunchullasCrudas(datos, {
+        fechaReporte: fechaISO,
+        resumenMacro: opts.resumenMacro,
+        soloLibrillos: opts?.destino === 'reportes',
+      })
     : '';
   return `
     <div>
@@ -6351,7 +6367,11 @@ function mostrarPreview(titulo, fechaLabel, fechaISO, datos, salidas, opts = {})
   prev.style.display = 'block';
   const kpis = opts.ocultarKpis ? '' : kpisGeneral(datos, { desde: opts.desde, hasta: opts.hasta });
   const bloqueLch = opts.incluirResumenLibrosChunchullas
-    ? htmlResumenLibrosChunchullasCrudas(datos, { fechaReporte: fechaISO, resumenMacro: opts.resumenMacro })
+    ? htmlResumenLibrosChunchullasCrudas(datos, {
+        fechaReporte: fechaISO,
+        resumenMacro: opts.resumenMacro,
+        soloLibrillos: opts?.destino === 'reportes',
+      })
     : '';
   const cuerpo = cuerpoReporteGeneral(datos, fechaISO, salidas, opts);
   body.innerHTML = `
