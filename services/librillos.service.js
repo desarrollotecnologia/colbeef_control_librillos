@@ -1,4 +1,4 @@
-import { pool, poolVista } from '../config/db.js';
+import { pool } from '../config/db.js';
 import { ID_TIPO_PARTE_COLBEEF } from '../config/tipo-parte.js';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -34,11 +34,11 @@ const localPlanObsCache = new Map();
 const localRetiroObsCache = new Map();
 const planSnapshotCache = new Map();
 const PLAN_SNAPSHOT_DIR = path.resolve(process.cwd(), 'data', 'plan-faena-historico');
-/** IDs por lote a vw_pbi01. Menor = consultas más pequeñas (mejor para réplica lenta); mayor = menos ida/vuelta. */
+/** Lotes para consultas por IDs. */
 const VISTA_CHUNK = (() => {
   const n = parseInt(String(process.env.VISTA_CHUNK_SIZE || ''), 10);
-  if (Number.isFinite(n) && n >= 15 && n <= 100) return n;
-  return 50;
+  if (Number.isFinite(n) && n >= 15 && n <= 300) return n;
+  return 120;
 })();
 
 // ── PARSEAR OBSERVACIÓN ───────────────────────────────────────────────────────
@@ -561,16 +561,16 @@ async function filasParteProductoDia(fechaISO) {
 }
 
 /**
- * Unifica datos descriptivos de la vista con el último movimiento real de cava
+ * Unifica datos descriptivos raíz con el último movimiento real de cava
  * de la parte tipo Colbeef (librillos), evitando mezclar fechas de otras partes.
  */
-function mergeVistaRow(idProducto, vistaMapUltimo, cavaParte13Map) {
+function mergeVistaRow(idProducto, metaMapUltimo, cavaParte13Map) {
   const k = keyCodigo(idProducto);
-  const ult = vistaMapUltimo[k];
+  const ult = metaMapUltimo[k];
   const u = ult || {};
   const c13 = cavaParte13Map[k] || {};
   const nombre = String(u.nombre_propietario || '').trim() || null;
-  const propietario_origen = nombre ? 'vista_ultimo' : null;
+  const propietario_origen = nombre ? 'raiz_ultimo' : null;
 
   return {
     nombre_propietario: nombre,
@@ -582,6 +582,84 @@ function mergeVistaRow(idProducto, vistaMapUltimo, cavaParte13Map) {
     propietario_origen,
     enriquecido: !!(nombre || u.destino || u.sucursal || u.empresa_destino),
   };
+}
+
+async function metaRaizPorIds(idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!ids.length) return {};
+  const sql = `
+    WITH ids AS (
+      SELECT unnest($1::text[]) AS id_producto
+    ),
+    pp_vb_ult AS (
+      SELECT DISTINCT ON (pp.id_producto::text)
+        pp.id_producto::text AS id_producto,
+        pp.id AS id_parte_producto
+      FROM trazabilidad_proceso.parte_producto pp
+      WHERE pp.id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
+        AND pp.id_producto::text = ANY($1::text[])
+      ORDER BY pp.id_producto::text, pp.fecha_registro DESC, pp.id DESC
+    ),
+    ppe_ult AS (
+      SELECT DISTINCT ON (ppe.id_producto::text)
+        ppe.id_producto::text AS id_producto,
+        ppe.id AS id_parte_producto_empresa
+      FROM trazabilidad_proceso.parte_producto_empresa ppe
+      JOIN pp_vb_ult ppv
+        ON ppv.id_producto = ppe.id_producto::text
+       AND ppv.id_parte_producto = ppe.id_parte_producto
+      ORDER BY ppe.id_producto::text, ppe.id DESC
+    ),
+    ppel_ult AS (
+      SELECT DISTINCT ON (ppel.id_parte_producto_empresa)
+        ppel.id_parte_producto_empresa,
+        ppel.id_local
+      FROM trazabilidad_proceso.parte_producto_empresa_local ppel
+      ORDER BY ppel.id_parte_producto_empresa, ppel.id DESC
+    ),
+    prop_ult AS (
+      SELECT DISTINCT ON (pe.id_producto::text)
+        pe.id_producto::text AS id_producto,
+        e.nombre AS nombre_propietario
+      FROM trazabilidad_proceso.producto_empresa pe
+      JOIN organizaciones.empresa e ON e.id = pe.id_empresa
+      WHERE pe.id_producto::text = ANY($1::text[])
+        AND pe.activo = true
+      ORDER BY pe.id_producto::text, pe.id DESC
+    )
+    SELECT
+      i.id_producto,
+      p.nombre_propietario,
+      s.nombre AS sucursal,
+      de.nombre AS destino,
+      e1.nombre AS empresa_destino
+    FROM ids i
+    LEFT JOIN prop_ult p
+      ON p.id_producto = i.id_producto
+    LEFT JOIN ppe_ult ppe
+      ON ppe.id_producto = i.id_producto
+    LEFT JOIN ppel_ult ppel
+      ON ppel.id_parte_producto_empresa = ppe.id_parte_producto_empresa
+    LEFT JOIN organizaciones.sucursal s
+      ON s.id = ppel.id_local
+    LEFT JOIN trazabilidad_proceso.destino de
+      ON de.id = s.id_destino
+    LEFT JOIN trazabilidad_proceso.parte_producto_empresa ppe_full
+      ON ppe_full.id = ppe.id_parte_producto_empresa
+    LEFT JOIN organizaciones.empresa e1
+      ON e1.id = ppe_full.id_empresa
+  `;
+  const res = await pool.query(sql, [ids]);
+  const out = {};
+  (res.rows || []).forEach((r) => {
+    out[keyCodigo(r.id_producto)] = {
+      nombre_propietario: r.nombre_propietario || null,
+      sucursal: r.sucursal || null,
+      destino: r.destino || null,
+      empresa_destino: r.empresa_destino || null,
+    };
+  });
+  return out;
 }
 
 function textoNoVacio(...vals) {
@@ -674,29 +752,20 @@ const consultarLibrillos = async (fecha = null) => {
       return [];
     }
 
-    // PASO 2: Vista en chunks (tamaño configurable; menos carga por query en réplica si baja VISTA_CHUNK_SIZE)
+    // PASO 2: Metadatos raíz por IDs + último movimiento real de cava.
     const idProductos = [...new Set(librillos.map(l => l.id_producto))];
     if (COLBEEF_DEBUG) {
-      console.log(`📦 ${idProductos.length} IDs únicos — vista en grupos de ${VISTA_CHUNK}…`);
+      console.log(`📦 ${idProductos.length} IDs únicos — consulta raíz en lotes de ${VISTA_CHUNK}…`);
     }
 
     const grupos = chunks(idProductos, VISTA_CHUNK);
-    /** Último registro por código en la vista (sin filtro de día) — completa propietario y plaza. */
     const vistaMapUltimo = {};
     for (const grupo of grupos) {
       try {
-        const resUlt = await poolVista.query(`
-          SELECT DISTINCT ON (codigo)
-            codigo, nombre_propietario,
-            destino, sucursal, empresa_destino,
-            fecha_ingreso_cava, fecha_salida_cava
-          FROM trazabilidad_proceso.vw_pbi01
-          WHERE codigo = ANY($1)
-          ORDER BY codigo, fecha_ingreso_cava DESC NULLS LAST, fecha_salida_cava DESC NULLS LAST
-        `, [grupo]);
-        resUlt.rows.forEach(v => { vistaMapUltimo[keyCodigo(v.codigo)] = v; });
+        const m = await metaRaizPorIds(grupo.map(String));
+        Object.assign(vistaMapUltimo, m);
       } catch (err) {
-        console.warn(`⚠️ Error en chunk vista (último registro): ${err.message}`);
+        console.warn(`⚠️ Error en metadatos raíz por IDs: ${err.message}`);
       }
     }
 
@@ -734,7 +803,7 @@ const consultarLibrillos = async (fecha = null) => {
     }
 
     if (COLBEEF_DEBUG) {
-      console.log(`✅ Último en vista: ${Object.keys(vistaMapUltimo).length} · cava parte 13: ${Object.keys(cavaParte13Map).length}`);
+      console.log(`✅ Metadatos raíz: ${Object.keys(vistaMapUltimo).length} · cava parte 13: ${Object.keys(cavaParte13Map).length}`);
     }
 
     const retiroObsMap = mapaTextoRetiroLocalPorFecha(fechaISO);
@@ -756,17 +825,17 @@ const consultarLibrillos = async (fecha = null) => {
           textoBase,
           obsParte
         );
-        const { observacion, cliente_destino } = parsearObservacion(obsFuente);
+        const { observacion, cliente_destino, plaza } = parsearObservacion(obsFuente);
         // Para clasificar, usar el mejor candidato de cliente:
         // 1) cliente parseado desde "RETIRAR LIBRILLOS"
         // 2) propietario de la vista cuando el parseo viene vacío.
         // Esto evita inflar ASURCARNES por fallback en retiros sin cliente explícito.
         const clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
         const ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
-        const destinoFinal = textoNoVacio(v.destino);
-        /** Plaza operativa = sucursal en BD (vista), no destino. */
-        const plazaFinal = textoNoVacio(v.sucursal);
-        const clienteDestinoFinal = clienteClasificacion;
+        const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion, 'SIN DESTINO');
+        /** Plaza operativa: primero la plaza parseada desde observación (p.ej. "01014 CAVA"), luego sucursal BD. */
+        const plazaFinal = textoNoVacio(plaza, v.sucursal, 'SIN PLAZA');
+        const clienteDestinoFinal = textoNoVacio(clienteClasificacion, v.empresa_destino, 'SIN CLIENTE');
         return {
           id_producto: l.id_producto,
           identificacion: l.identificacion,

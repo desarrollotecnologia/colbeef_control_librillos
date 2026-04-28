@@ -5269,15 +5269,20 @@ function puestoNormalizado(d) {
 }
 
 /**
- * Plaza para UI y reportes: igual a `sucursal` de BD (mismo criterio que el API en `plaza`).
+ * Plaza para UI y reportes:
+ * 1) `plaza` del API (parseada desde observación; p.ej. "01014 CAVA")
+ * 2) fallback `sucursal` de BD
+ * 3) último fallback: detección dentro de observación completa
  */
 function ubicacionPlaza(d) {
   const apiPlaza = limpiarPuestoTxt(d?.plaza);
   const suc = limpiarPuestoTxt(d?.sucursal);
-  const base = suc || apiPlaza;
+  const obsFull = textoObservacionFuente(d);
+  const obsPlaza = plazaOperativaDesdeObservacion(obsFull) || plazaDesdeTextoObservacion(obsFull);
+  const base = apiPlaza || suc || limpiarPuestoTxt(obsPlaza);
   if (!base) return '—';
   if (esEtiquetaInstruccionOperativa(base)) return '—';
-  return aplicarMapaPlazasAlias(base, [suc, apiPlaza, base]);
+  return aplicarMapaPlazasAlias(base, [apiPlaza, suc, obsPlaza, base]);
 }
 
 function destinoTabla(d) {
