@@ -1109,6 +1109,9 @@ let datosLibrillos = [];  // RETIRAR LIBRILLOS (historial librillos)
 let datosCrudasHist = []; // observación solo CRUDAS/CRUDA
 let datosClientes  = [];
 let salidasRegistradas = [];
+const cacheRangoFront = new Map();
+let cacheSalidasFront = { ts: 0, data: null };
+const CACHE_FRONT_MS = 60000;
 let inventarioSubtab = 'lib'; // 'lib' | 'crud'
 let _autoInvSnapshot = '';
 let _autoGlobalTimer = null;
@@ -1654,11 +1657,16 @@ async function fetchPorFecha(fecha) {
 }
 
 async function fetchSalidas() {
+  if ((Date.now() - Number(cacheSalidasFront.ts || 0)) <= CACHE_FRONT_MS && Array.isArray(cacheSalidasFront.data)) {
+    return cacheSalidasFront.data;
+  }
   try {
     const res = await fetch(SALIDAS_URL);
     if (!res.ok) return [];
     const data = await res.json();
-    return normalizarListaSalidas(data);
+    const out = normalizarListaSalidas(data);
+    cacheSalidasFront = { ts: Date.now(), data: out };
+    return out;
   } catch {
     return [];
   }
@@ -1803,9 +1811,18 @@ function rangoFechasISO(desde, hasta) {
 }
 
 async function fetchDatosRango(desde, hasta) {
+  const key = `${String(desde || '').trim()}|${String(hasta || '').trim()}`;
+  const hit = cacheRangoFront.get(key);
+  if (hit && (Date.now() - Number(hit.ts || 0)) <= CACHE_FRONT_MS && Array.isArray(hit.data)) {
+    return hit.data;
+  }
   try {
     const res = await fetch(`${API_URL}?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`);
-    if (res.ok) return res.json();
+    if (res.ok) {
+      const data = await res.json();
+      cacheRangoFront.set(key, { ts: Date.now(), data: Array.isArray(data) ? data : [] });
+      return data;
+    }
   } catch {
     /* sin endpoint / red */
   }
@@ -1817,7 +1834,9 @@ async function fetchDatosRango(desde, hasta) {
     const k = `${String(d.id_producto || '')}|${String(d.fecha || '')}`;
     if (!m.has(k)) m.set(k, d);
   });
-  return [...m.values()];
+  const out = [...m.values()];
+  cacheRangoFront.set(key, { ts: Date.now(), data: out });
+  return out;
 }
 
 function tipoOperacionTexto(d) {
@@ -2899,7 +2918,7 @@ async function descargarExcelAsurEspecial(modo = 'resumen') {
       return;
     }
     const datos = await fetchDatosRango(desde, hasta);
-    const base = (datos || []).filter(esVistaHistorialLibrillos);
+    const base = (datos || []).filter(esLibrilloParaReporteAgrupacion);
     const grupos = [
       { code: 'asurcarnes', name: 'ASURCARNES' },
       { code: 'asurcarnesglo', name: 'ASURCARNESGLO' },
@@ -3982,7 +4001,10 @@ function esVistaHistorialCrudasSolo(d) {
  * (mismos buckets que pivots ASURCARNES / DERIVADOS / …); no se exige cliente parseado ni vw_pbi01.
  */
 function esLibrilloParaReporteAgrupacion(d) {
-  return esVistaHistorialLibrillos(d);
+  const obs = normalizarObs(String(d?.observaciones ?? d?.observacion ?? ''));
+  const cliente = String(d?.cliente_destino || '').trim();
+  // Solo retiros explícitos de librillos para el reporte por agrupación.
+  return Boolean(cliente) || RX_RETIRO_LIBRILLO_FRONT.test(obs) || /\bRETIRA(R)?\b/.test(obs);
 }
 
 function colorPorClave(str) {
@@ -5286,9 +5308,18 @@ function ubicacionPlaza(d) {
 }
 
 function destinoTabla(d) {
-  const destino = String(d?.destino || '').trim();
-  if (destino) return destino;
-  return ubicacionPlaza(d);
+  const limpio = (v) => String(v || '').trim();
+  const esPlaceholder = (v) => {
+    const t = limpio(v).toUpperCase();
+    return !t || t === '-' || t === '--' || t === '—' || t === 'N/A' || t === 'NA' || t === 'NULL';
+  };
+  const destino = limpio(d?.destino);
+  if (!esPlaceholder(destino)) return destino;
+  const plaza = limpio(ubicacionPlaza(d));
+  if (!esPlaceholder(plaza)) return plaza;
+  const empresa = limpio(d?.empresa_destino);
+  if (!esPlaceholder(empresa)) return empresa;
+  return '—';
 }
 
 /**

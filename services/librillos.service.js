@@ -14,6 +14,8 @@ let cache = { datos: [], ultimaActualizacion: null };
 let cacheTurnoFecha = null;
 let cacheTurnoSnapshot = new Map();
 let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no existe
+const cachePorFecha = new Map();
+const cachePorRango = new Map();
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -44,6 +46,21 @@ const CHUNK_CONCURRENCY = (() => {
   const n = parseInt(String(process.env.VISTA_CHUNK_CONCURRENCY || ''), 10);
   if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
   return 3;
+})();
+const RANGE_CONCURRENCY = (() => {
+  const n = parseInt(String(process.env.RANGO_CONCURRENCY || ''), 10);
+  if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
+  return 3;
+})();
+const CACHE_FECHA_MS = (() => {
+  const n = parseInt(String(process.env.CACHE_FECHA_MS || ''), 10);
+  if (Number.isFinite(n) && n >= 5000 && n <= 900000) return n;
+  return 90000;
+})();
+const CACHE_RANGO_MS = (() => {
+  const n = parseInt(String(process.env.CACHE_RANGO_MS || ''), 10);
+  if (Number.isFinite(n) && n >= 5000 && n <= 900000) return n;
+  return 90000;
 })();
 
 // ── PARSEAR OBSERVACIÓN ───────────────────────────────────────────────────────
@@ -145,6 +162,42 @@ const keyCodigo = (c) => String(c);
 
 function hoyBogotaISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
+function leerCacheFecha(fechaISO) {
+  const k = String(fechaISO || '').trim();
+  if (!k) return null;
+  const hit = cachePorFecha.get(k);
+  if (!hit) return null;
+  if ((Date.now() - Number(hit.ts || 0)) > CACHE_FECHA_MS) {
+    cachePorFecha.delete(k);
+    return null;
+  }
+  return Array.isArray(hit.data) ? hit.data : null;
+}
+
+function guardarCacheFecha(fechaISO, data) {
+  const k = String(fechaISO || '').trim();
+  if (!k) return;
+  cachePorFecha.set(k, { ts: Date.now(), data: Array.isArray(data) ? data : [] });
+}
+
+function leerCacheRango(desde, hasta) {
+  const k = `${String(desde || '').trim()}|${String(hasta || '').trim()}`;
+  if (!k || k === '|') return null;
+  const hit = cachePorRango.get(k);
+  if (!hit) return null;
+  if ((Date.now() - Number(hit.ts || 0)) > CACHE_RANGO_MS) {
+    cachePorRango.delete(k);
+    return null;
+  }
+  return Array.isArray(hit.data) ? hit.data : null;
+}
+
+function guardarCacheRango(desde, hasta, data) {
+  const k = `${String(desde || '').trim()}|${String(hasta || '').trim()}`;
+  if (!k || k === '|') return;
+  cachePorRango.set(k, { ts: Date.now(), data: Array.isArray(data) ? data : [] });
 }
 
 const HORA_CORTE_TURNO_BOGOTA = (() => {
@@ -904,6 +957,15 @@ const consultarLibrillos = async (fecha = null) => {
   }
 };
 
+async function consultarLibrillosConCache(fechaISO) {
+  const f = String(fechaISO || '').trim() || hoyBogotaISO();
+  const hit = leerCacheFecha(f);
+  if (hit) return hit;
+  const data = await consultarLibrillos(f);
+  guardarCacheFecha(f, data);
+  return data;
+}
+
 // ── CACHE ─────────────────────────────────────────────────────────────────────
 const actualizarCache = async () => {
   try {
@@ -919,6 +981,7 @@ const actualizarCache = async () => {
     cacheTurnoSnapshot = nextSnap;
     cache.datos = datos;
     cache.ultimaActualizacion = new Date();
+    guardarCacheFecha(turnoFecha, datos);
     if (COLBEEF_DEBUG) console.log(`✅ Cache actualizado — ${datos.length} registros (día completo)`);
   } catch (error) {
     console.error('Error cache:', error.message);
@@ -943,10 +1006,10 @@ export const obtenerLibrillos = () => ({
   total: cache.datos.length,
 });
 
-export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillos(fecha);
+export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillosConCache(fecha);
 
 export async function obtenerResumenMacroPorFecha(fecha) {
-  const datos = await consultarLibrillos(fecha);
+  const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
   // Macro consolidado para operación diaria:
   // debe cuadrar contra el universo planillado del día.
@@ -1018,6 +1081,8 @@ function listaFechasDesdeHasta(desde, hasta) {
  * Días en serie (sin Promise.all) para no disparar muchas consultas pesadas a la vez en la réplica.
  */
 export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
+  const hit = leerCacheRango(desde, hasta);
+  if (hit) return hit;
   const fechas = listaFechasDesdeHasta(desde, hasta);
   const MAX_DIAS = 95;
   if (fechas.length > MAX_DIAS) {
@@ -1026,16 +1091,19 @@ export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
   if (!fechas.length) return [];
 
   const merged = [];
-  for (const f of fechas) {
-    const part = await consultarLibrillos(f);
-    merged.push(...part);
+  for (let i = 0; i < fechas.length; i += RANGE_CONCURRENCY) {
+    const tramo = fechas.slice(i, i + RANGE_CONCURRENCY);
+    const partes = await Promise.all(tramo.map((f) => consultarLibrillosConCache(f)));
+    partes.forEach((p) => merged.push(...p));
   }
   const m = new Map();
   merged.forEach((row) => {
     const k = `${String(row.id_producto)}|${String(row.fecha || '')}`;
     if (!m.has(k)) m.set(k, row);
   });
-  return [...m.values()];
+  const out = [...m.values()];
+  guardarCacheRango(desde, hasta, out);
+  return out;
 }
 
 export const obtenerObservacionesPorFecha = async (fecha) => {
