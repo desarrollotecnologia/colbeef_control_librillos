@@ -2350,7 +2350,7 @@ function fechaGuiaSolo(iso) {
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
-function construirHtmlGuiaDespachoPdf(data) {
+function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const c = data?.cabecera || {};
   const detalle = Array.isArray(data?.detalle) ? data.detalle : [];
   const fechaExp = fechaGuiaSolo(c.fecha_creacion);
@@ -2366,6 +2366,7 @@ function construirHtmlGuiaDespachoPdf(data) {
   const horaDespacho = c.hora_salida || '—';
   const fechaHoraDesp = `${fechaExp} ${horaDespacho}`.trim();
   const cantidadDespachados = Number(c.total_productos || 0);
+  const logoDataUrl = opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null);
 
   let bloqueTotales = '';
   if (tipo.includes('CAT')) {
@@ -2422,7 +2423,9 @@ function construirHtmlGuiaDespachoPdf(data) {
   <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
   <div class="h-top">
     <div>
-      <div class="logo"><span class="a">Col</span><span class="b">beef</span></div>
+      ${logoDataUrl
+        ? `<img src="${logoDataUrl}" alt="Colbeef" style="height:78px;max-width:340px;object-fit:contain" />`
+        : '<div class="logo"><span class="a">Col</span><span class="b">beef</span></div>'}
     </div>
     <table class="t" style="max-width:420px">
       <tr><th>FECHA DE EXPEDICION</th><th>Numero</th></tr>
@@ -2458,6 +2461,7 @@ function construirHtmlGuiaDespachoPdf(data) {
 
   <div class="sec sec-title">4. DESTINO: ${escapeHtml(destinoTxt)}${tipo ? `, ${escapeHtml(tipo)}` : ''}</div>
   ${bloqueTotales}
+  ${Number(c.decomiso || 0) > 0 ? `<div class="resumen">DECOMISO: <span class="v">${Number(c.decomiso || 0)}</span></div>` : ''}
   <div class="resumen" style="margin-top:6px">TOTAL: <span class="v">${cantidadDespachados}</span></div>
 
   <table class="t firma">
@@ -2500,7 +2504,9 @@ async function descargarPdfGuiaDespacho() {
       return;
     }
 
-    const html = construirHtmlGuiaDespachoPdf(data);
+    const html = construirHtmlGuiaDespachoPdf(data, {
+      logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
+    });
     const host = document.createElement('div');
     host.style.position = 'fixed';
     host.style.left = '-10000px';

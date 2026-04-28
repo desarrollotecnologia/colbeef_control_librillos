@@ -77,6 +77,38 @@ function definicionCategoriaGuia(categoriaRaw) {
   };
 }
 
+function palabrasCategoria(def) {
+  if (!def?.key) return [];
+  if (def.key === 'cat') return ['CAT', 'ASURCARNESCOL'];
+  if (def.key === 'derivados') return ['DERIVADOS', 'ASURCARNES'];
+  return ['GLOBAL HIDES', 'ASURCARNESGLO'];
+}
+
+async function obtenerCabeceraRealPorFechaYCategoria(fechaIso, def) {
+  const keys = palabrasCategoria(def);
+  if (!keys.length) return null;
+  const likes = keys.map((k, i) => `UPPER(COALESCE(gd.texto_guia_tipo::text, gd.tipo_despacho::text, gd.observaciones::text, gd.codigo::text, '')) LIKE $${i + 2}`);
+  const sql = `
+    SELECT gd.*
+    FROM desposte.guia_desposte gd
+    WHERE (
+      DATE(COALESCE(gd.fecha_creacion, gd.created_at) AT TIME ZONE 'America/Bogota') = $1::date
+      OR DATE(COALESCE(gd.fecha_salida, gd.fecha_creacion, gd.created_at) AT TIME ZONE 'America/Bogota') = $1::date
+    )
+    AND (${likes.join(' OR ')})
+    ORDER BY gd.id DESC
+    LIMIT 1
+  `;
+  const params = [fechaIso, ...keys.map((k) => `%${k}%`)];
+  try {
+    const res = await pool.query(sql, params);
+    if (res?.rowCount) return res.rows[0];
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 const GUIA_PLANTA_DEFAULT = {
   planta_beneficio: 'Colbeef S.A.S',
   direccion: 'Vía Corredor Río Frío Calle 210 No. 9 - 631',
@@ -285,9 +317,10 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
     throw err;
   }
 
-  const [rowsDia, salidas] = await Promise.all([
+  const [rowsDia, salidas, cabeceraReal] = await Promise.all([
     obtenerLibrillosPorFecha(fechaIso),
     obtenerSalidas(),
+    obtenerCabeceraRealPorFechaYCategoria(fechaIso, def),
   ]);
   const listaDia = Array.isArray(rowsDia) ? rowsDia : [];
   const salidasDia = (Array.isArray(salidas) ? salidas : [])
@@ -353,25 +386,37 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
 
   const destinos = [...new Set(detalle.map((d) => d.destino).filter(Boolean))].join(', ') || null;
   const fechaCreacion = new Date(`${fechaIso}T12:00:00-05:00`).toISOString();
-  const codigoGuia = `AUTO-${def.key.toUpperCase()}-${fechaIso.replaceAll('-', '')}`;
+  const codigoGuia = txt(cabeceraReal?.codigo) || `AUTO-${def.key.toUpperCase()}-${fechaIso.replaceAll('-', '')}`;
   const principalDestino =
     def.key === 'cat' ? 'Piedecuesta' : 'Bucaramanga';
   const observacionProducto = 'LIBROS CRUDOS';
   const especie = 'bovina';
-  const horaDespacho = extraerHoraBogota(fechaCreacion);
+  const fechaSalidaReal = iso(first(cabeceraReal, ['fecha_salida', 'fecha_creacion', 'created_at']));
+  const horaDespacho = txt(first(cabeceraReal, ['hora_salida'])) || extraerHoraBogota(fechaSalidaReal || fechaCreacion);
+  const placaReal = txt(first(cabeceraReal, ['placa', 'placa_vehiculo', 'id_vehiculo']));
+  const conductorReal = txt(first(cabeceraReal, ['conductor_nombre', 'nombre_conductor', 'conductor']));
+  const idConductorReal = first(cabeceraReal, ['id_conductor']) ?? null;
+  const precintoReal = txt(first(cabeceraReal, ['precinto', 'numero_precinto']));
+  const numeroGuiaReal = txt(
+    first(cabeceraReal, ['numero_guia_transporte_completo', 'numero_guia_transporte', 'guia_transporte'])
+  ) || GUIA_PLANTA_DEFAULT.numero_guia_default;
+  const conservacionReal = txt(first(cabeceraReal, ['conservacion'])) || 'Refrigerado';
+  const tipoVehiculoReal = txt(first(cabeceraReal, ['tipo_vehiculo'])) || GUIA_PLANTA_DEFAULT.tipo_vehiculo_default;
+  const isotermoReal = txt(first(cabeceraReal, ['isotermo']));
+  const decomisoReal = num(first(cabeceraReal, ['decomiso', 'cantidad_decomiso']));
 
   return {
     cabecera: {
       id: null,
       codigo: codigoGuia,
-      fecha_creacion: fechaCreacion,
+      fecha_creacion: fechaSalidaReal || fechaCreacion,
       fecha_fin_vigencia: null,
-      conservacion: 'Refrigerado',
+      conservacion: conservacionReal,
       id_empresa: null,
       id_especie: null,
-      placa: null,
-      id_conductor: null,
-      conductor_nombre: null,
+      placa: placaReal,
+      id_conductor: idConductorReal,
+      conductor_nombre: conductorReal,
       responsable: 'COLBEEF',
       observaciones_guia: `Guía generada automáticamente por fecha de salida (${fechaIso}) para ${def.etiqueta}.`,
       total_productos: detalle.length,
@@ -381,24 +426,26 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
       cantidad_lengua: 0,
       usuario_guia: 'sistema',
       id_vehiculo_asignado: null,
-      precinto: null,
+      precinto: precintoReal,
       destinos,
       elaborado_por: 'COLBEEF',
-      fecha_salida: fechaCreacion,
+      fecha_salida: fechaSalidaReal || fechaCreacion,
       hora_salida: horaDespacho,
       tipo_despacho_nombre: def.etiqueta,
       texto_guia_tipo: `Despacho ${def.etiqueta}`,
-      numero_guia_transporte: GUIA_PLANTA_DEFAULT.numero_guia_default,
-      numero_guia_transporte_completo: GUIA_PLANTA_DEFAULT.numero_guia_default,
+      numero_guia_transporte: numeroGuiaReal,
+      numero_guia_transporte_completo: numeroGuiaReal,
       planta_beneficio: GUIA_PLANTA_DEFAULT.planta_beneficio,
       direccion_planta: GUIA_PLANTA_DEFAULT.direccion,
       codigo_invima: GUIA_PLANTA_DEFAULT.codigo_invima,
       departamento_planta: GUIA_PLANTA_DEFAULT.departamento,
       ciudad_planta: GUIA_PLANTA_DEFAULT.ciudad,
-      tipo_vehiculo: GUIA_PLANTA_DEFAULT.tipo_vehiculo_default,
+      tipo_vehiculo: tipoVehiculoReal,
       especie_producto: especie,
       observacion_producto: observacionProducto,
       destino_principal: principalDestino,
+      isotermo: isotermoReal,
+      decomiso: decomisoReal,
       resumen_categoria: {
         pendientes_hoy: pendientesHoy,
         cat: subconteos.cat,
@@ -411,8 +458,85 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
       firma_responsable: GUIA_PLANTA_DEFAULT.responsable_firma,
       firma_cedula: GUIA_PLANTA_DEFAULT.cedula_responsable,
       firma_cargo: GUIA_PLANTA_DEFAULT.cargo_responsable,
+      fuentes: {
+        productos_despachados: 'obtenerLibrillosPorFecha + obtenerSalidas',
+        conteos_categoria: 'agrupacion_codigo en librillos del dia',
+        cabecera_transporte: cabeceraReal ? 'desposte.guia_desposte' : 'fallback interno',
+      },
     },
     detalle,
+  };
+}
+
+export async function verificarFuentesGuiaPorFechaYCategoria(fecha, categoria) {
+  const fechaIso = String(fecha || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaIso)) {
+    const err = new Error('Fecha inválida. Use formato YYYY-MM-DD.');
+    err.status = 400;
+    throw err;
+  }
+  const def = definicionCategoriaGuia(categoria);
+  if (!def) {
+    const err = new Error('Categoría inválida. Use CAT, DERIVADOS o GLOBAL HIDES.');
+    err.status = 400;
+    throw err;
+  }
+
+  const [rowsDia, salidas, cabeceraReal] = await Promise.all([
+    obtenerLibrillosPorFecha(fechaIso),
+    obtenerSalidas(),
+    obtenerCabeceraRealPorFechaYCategoria(fechaIso, def),
+  ]);
+  const listaDia = Array.isArray(rowsDia) ? rowsDia : [];
+  const salidasDia = (Array.isArray(salidas) ? salidas : [])
+    .filter((s) => diaOperativoSalidaISO(s?.fecha_salida) === fechaIso)
+    .map((s) => String(s?.id_producto || '').trim())
+    .filter(Boolean);
+  const salidasDiaSet = new Set(salidasDia);
+
+  const categoriaDia = listaDia.filter((d) => {
+    const cod = String(d?.agrupacion_codigo || '').trim().toLowerCase();
+    return def.codigos.has(cod);
+  });
+  const categoriaDespachados = categoriaDia.filter((d) => {
+    const id = String(d?.id_producto || '').trim();
+    return id && salidasDiaSet.has(id);
+  });
+  const categoriaPendientes = categoriaDia.filter((d) => {
+    const id = String(d?.id_producto || '').trim();
+    return id && !salidasDiaSet.has(id);
+  });
+
+  return {
+    fecha: fechaIso,
+    categoria: def.etiqueta,
+    fuentes: {
+      librillos_dia: 'obtenerLibrillosPorFecha(fecha)',
+      salidas_dia: 'obtenerSalidas() filtrado por diaOperativoSalidaISO',
+      cabecera_transporte: cabeceraReal ? 'desposte.guia_desposte (match por fecha+categoria)' : 'fallback',
+    },
+    resumen: {
+      total_librillos_dia: listaDia.length,
+      total_salidas_dia: salidasDiaSet.size,
+      total_categoria_dia: categoriaDia.length,
+      total_categoria_despachados: categoriaDespachados.length,
+      total_categoria_pendientes: categoriaPendientes.length,
+    },
+    cabecera_real: cabeceraReal
+      ? {
+          id: cabeceraReal.id ?? null,
+          codigo: txt(cabeceraReal.codigo),
+          fecha_creacion: iso(first(cabeceraReal, ['fecha_creacion', 'created_at'])),
+          fecha_salida: iso(first(cabeceraReal, ['fecha_salida'])),
+          conductor: txt(first(cabeceraReal, ['conductor_nombre', 'nombre_conductor', 'conductor'])),
+          placa: txt(first(cabeceraReal, ['placa', 'placa_vehiculo', 'id_vehiculo'])),
+          precinto: txt(first(cabeceraReal, ['precinto', 'numero_precinto'])),
+        }
+      : null,
+    muestra_ids: {
+      despachados: categoriaDespachados.slice(0, 20).map((d) => String(d?.id_producto || '').trim()),
+      pendientes: categoriaPendientes.slice(0, 20).map((d) => String(d?.id_producto || '').trim()),
+    },
   };
 }
 
