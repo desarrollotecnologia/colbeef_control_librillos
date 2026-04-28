@@ -1,4 +1,4 @@
-import { pool } from '../config/db.js';
+import { pool, poolVista } from '../config/db.js';
 import { obtenerLibrillosPorFecha } from './librillos.service.js';
 import { obtenerSalidas } from './salidas.service.js';
 
@@ -96,6 +96,55 @@ function palabrasCategoria(def) {
   if (def.key === 'cat') return ['CAT', 'ASURCARNESCOL'];
   if (def.key === 'derivados') return ['DERIVADOS', 'ASURCARNES'];
   return ['GLOBAL HIDES', 'ASURCARNESGLO'];
+}
+
+function valorDecomisoDesdeVista(v) {
+  if (v == null) return 0;
+  if (typeof v === 'number') return v > 0 ? 1 : 0;
+  const s = String(v).trim().toLowerCase();
+  if (!s) return 0;
+  if (['0', 'false', 'no', 'n', 'ninguno', 'na', 'n/a'].includes(s)) return 0;
+  const n = Number(s);
+  if (Number.isFinite(n)) return n > 0 ? n : 0;
+  return 1;
+}
+
+async function contarDecomisosVistaPorIds(ids) {
+  const clean = [...new Set((ids || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!clean.length) return 0;
+  try {
+    const res = await poolVista.query(
+      `
+      SELECT DISTINCT codigo::text AS codigo, decomiso
+      FROM trazabilidad_proceso.vw_pbi01
+      WHERE codigo = ANY($1::text[])
+        AND decomiso IS NOT NULL
+      `,
+      [clean]
+    );
+    return (res.rows || []).reduce((acc, r) => acc + Math.max(0, valorDecomisoDesdeVista(r?.decomiso)), 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function contarDecomisosSaiPorFecha(fechaIso, tiposParte = [13]) {
+  const tipos = (tiposParte || []).map((x) => Number(x)).filter(Number.isFinite);
+  if (!tipos.length) return 0;
+  try {
+    const res = await pool.query(
+      `
+      SELECT COUNT(*)::int AS total
+      FROM sai.decomiso d
+      WHERE DATE(COALESCE(d.fecha_salida, d.fecha_registro)) = $1::date
+        AND d.id_tipo_parte_producto = ANY($2::int[])
+      `,
+      [fechaIso, tipos]
+    );
+    return Number(res?.rows?.[0]?.total || 0);
+  } catch {
+    return 0;
+  }
 }
 
 async function obtenerCabeceraRealPorFechaYCategoria(fechaIso, def) {
@@ -414,7 +463,12 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
   const conservacionReal = txt(first(cabeceraReal, ['conservacion'])) || 'Refrigerado';
   const tipoVehiculoReal = txt(first(cabeceraReal, ['tipo_vehiculo'])) || GUIA_PLANTA_DEFAULT.tipo_vehiculo_default;
   const isotermoReal = txt(first(cabeceraReal, ['isotermo']));
-  const decomisoReal = num(first(cabeceraReal, ['decomiso', 'cantidad_decomiso']));
+  const decomisoCabecera = num(first(cabeceraReal, ['decomiso', 'cantidad_decomiso', 'hallazgos_productos']));
+  const decomisoSai = await contarDecomisosSaiPorFecha(fechaIso, [13]);
+  const decomisoVista = await contarDecomisosVistaPorIds(detalle.map((x) => x.id_producto));
+  const decomisoReal = decomisoCabecera > 0
+    ? decomisoCabecera
+    : (decomisoSai > 0 ? decomisoSai : decomisoVista);
 
   return {
     cabecera: {
@@ -473,6 +527,11 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
         productos_despachados: 'obtenerLibrillosPorFecha + obtenerSalidas',
         conteos_categoria: 'agrupacion_codigo en librillos del dia',
         cabecera_transporte: cabeceraReal ? 'desposte.guia_desposte' : 'fallback interno',
+        decomiso: decomisoCabecera > 0
+          ? 'desposte.guia_desposte.hallazgos_productos'
+          : (decomisoSai > 0
+              ? 'sai.decomiso (id_tipo_parte_producto=13 Visceras Blancas)'
+              : 'trazabilidad_proceso.vw_pbi01.decomiso'),
       },
     },
     detalle,
