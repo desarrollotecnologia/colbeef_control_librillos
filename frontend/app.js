@@ -2679,7 +2679,7 @@ function rowsDetalleAsurSheet(items, nombreGrupo) {
       String(d?.id_producto || '—'),
       String(d?.propietario || 'SIN ASIGNAR').toUpperCase(),
       String(cli || 'SIN ASIGNAR').toUpperCase(),
-      String(puestoPivotMacro(d) || '—'),
+      String(resolverPlazaReporte(d) || '—'),
       String(d?.observacion || d?.observaciones || '—'),
     ]);
   });
@@ -2700,7 +2700,7 @@ function rowsAsurDualSheet(items, nombreGrupo, fechaISO) {
     ...listSorted.map((d, idx) => ([
       { v: String(d?.id_producto || '—'), style: idx % 2 ? 'sLeftIdAlt' : 'sLeftId' },
       { v: String(d?.propietario || 'SIN ASIGNAR').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
-      { v: String(puestoPivotMacro(d) || '—').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
+      { v: String(resolverPlazaReporte(d) || '—').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
     ])),
   ];
 
@@ -2921,7 +2921,7 @@ async function descargarExcelAsurEspecial(modo = 'resumen') {
     const base = (datos || []).filter(esLibrilloParaReporteAgrupacion);
     const grupos = [
       { code: 'asurcarnes', name: 'ASURCARNES' },
-      { code: 'asurcarnesglo', name: 'ASURCARNESGLO' },
+      { code: 'asurcarnes_glo', name: 'ASURCARNESGLO' },
       { code: 'asurcarnescol', name: 'ASURCARNESCOL' },
     ];
     const sheets = grupos.map((g) => {
@@ -4003,8 +4003,9 @@ function esVistaHistorialCrudasSolo(d) {
 function esLibrilloParaReporteAgrupacion(d) {
   const obs = normalizarObs(String(d?.observaciones ?? d?.observacion ?? ''));
   const cliente = String(d?.cliente_destino || '').trim();
+  const clienteValido = cliente && !esPlaceholderTexto(cliente) && !/^SIN\s+CLIENTE$/i.test(cliente);
   // Solo retiros explícitos de librillos para el reporte por agrupación.
-  return Boolean(cliente) || RX_RETIRO_LIBRILLO_FRONT.test(obs) || /\bRETIRA(R)?\b/.test(obs);
+  return Boolean(clienteValido) || RX_RETIRO_LIBRILLO_FRONT.test(obs) || /\bRETIRA(R)?\b/.test(obs);
 }
 
 function colorPorClave(str) {
@@ -5337,6 +5338,24 @@ function puestoPivotMacro(d) {
   return ubicacionPlaza(d);
 }
 
+function resolverPlazaReporte(d) {
+  const candidatos = [
+    puestoPivotMacro(d),
+    d?.sucursal,
+    d?.plaza,
+    d?.destino,
+    d?.empresa_destino,
+  ];
+  for (const c of candidatos) {
+    const t = limpiarPuestoTxt(c);
+    if (!t) continue;
+    if (esPlaceholderTexto(t)) continue;
+    if (esEtiquetaInstruccionOperativa(t)) continue;
+    return aplicarMapaPlazasAlias(t, candidatos);
+  }
+  return '—';
+}
+
 /** Para pivote DERIVADOS: nombres tal como vienen en BD (empresa / propietario / cliente parseado), no etiquetas cortas. */
 function candidatosNombreCliente(d) {
   return [
@@ -5479,7 +5498,7 @@ function htmlAuditoriaClientePlaza(items, opts = {}) {
       const g = grupoPivotParaFila(d, opts?.nombreGrupo || '');
       const cli = escapeHtml(clientePivotMacro(d, g));
       const prop = escapeHtml(String(d?.propietario || '').trim() || 'Sin asignar');
-      const plz = escapeHtml(puestoPivotMacro(d));
+      const plz = escapeHtml(resolverPlazaReporte(d));
       if (exp) {
         return `<tr style="background:#fafafa;-webkit-print-color-adjust:exact;print-color-adjust:exact">
           <td style="border:1px solid ${border};padding:5px 8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:#c0392b">${id}</td>
@@ -5547,7 +5566,7 @@ function contarPorClienteComercialPuesto(items, nombreGrupo = '') {
   return contarPorClientePuesto(
     items,
     d => clientePivotMacro(d, grupoPivotParaFila(d, nombreGrupo)),
-    d => puestoPivotMacro(d)
+    d => resolverPlazaReporte(d)
   ).map(r => ({
     cliente: r.cliente,
     ubicacion: r.puesto,
@@ -5560,7 +5579,7 @@ function contarPorPropietarioUbicacion(items) {
   return contarPorClientePuesto(
     items,
     d => String(d?.propietario || '').trim() || 'Sin asignar',
-    d => ubicacionPlaza(d)
+    d => resolverPlazaReporte(d)
   ).map(r => ({
     cliente: r.cliente,
     ubicacion: r.puesto,
@@ -5647,7 +5666,7 @@ function htmlListaLibrillosResumenBloqueExport(items, nombreGrupo, fechaISO) {
       c: [
         escapeHtml(d.id_producto || '—'),
         escapeHtml(propU ? propU.toUpperCase() : 'SIN ASIGNAR'),
-        escapeHtml(puestoPivotMacro(d)),
+        escapeHtml(resolverPlazaReporte(d)),
       ],
     });
   });
@@ -5894,7 +5913,7 @@ function tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts = {}) {
                 return `<tr>
                   <td style="border:1px solid var(--brd2);padding:8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.propietario || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(ubicacionPlaza(d))}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(resolverPlazaReporte(d))}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.cliente_destino || '—')}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.sucursal || '—')}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.empresa_destino || '—')}</td>
@@ -5941,7 +5960,7 @@ function tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts = {}) {
                 return `<tr>
                   <td style="border:1px solid var(--brd2);padding:8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.propietario || '—')}</td>
-                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(ubicacionPlaza(d))}</td>
+                  <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(resolverPlazaReporte(d))}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.sucursal || '—')}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${escapeHtml(d.empresa_destino || '—')}</td>
                   <td style="border:1px solid var(--brd2);padding:8px">${formatFecha(d.fecha_ingreso_cava)}</td>
@@ -6030,7 +6049,7 @@ function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
         <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto)}</td>
         <td>${escapeHtml(d.propietario) || '—'}</td>
         <td>${escapeHtml(d.cliente_destino) || '—'}</td>
-        <td>${escapeHtml(ubicacionPlaza(d))}</td>
+        <td>${escapeHtml(resolverPlazaReporte(d))}</td>
         <td>${escapeHtml(d.empresa_destino) || '—'}</td>
         <td>${formatFecha(d.fecha_ingreso_cava)}</td>
         <td>${sal ? formatFecha(sal) : '—'}</td>
@@ -6103,7 +6122,7 @@ function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
         <td style="padding:8px;border:1px solid #ccc;font-weight:700;color:#8b0000">${escapeHtml(d.id_producto)}</td>
         <td style="padding:8px;border:1px solid #ccc">${escapeHtml(d.propietario) || '—'}</td>
         <td style="padding:8px;border:1px solid #ccc">${escapeHtml(d.cliente_destino) || '—'}</td>
-        <td style="padding:8px;border:1px solid #ccc">${escapeHtml(ubicacionPlaza(d))}</td>
+        <td style="padding:8px;border:1px solid #ccc">${escapeHtml(resolverPlazaReporte(d))}</td>
         <td style="padding:8px;border:1px solid #ccc">${escapeHtml(d.empresa_destino) || '—'}</td>
         <td style="padding:8px;border:1px solid #ccc">${formatFecha(d.fecha_ingreso_cava)}</td>
         <td style="padding:8px;border:1px solid #ccc">${sal ? formatFecha(sal) : '—'}</td>

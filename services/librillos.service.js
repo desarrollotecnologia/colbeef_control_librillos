@@ -912,10 +912,10 @@ const consultarLibrillos = async (fecha = null) => {
         // Esto evita inflar ASURCARNES por fallback en retiros sin cliente explícito.
         const clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
         const ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
-        const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion, 'SIN DESTINO');
+        const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion);
         /** Plaza operativa: primero la plaza parseada desde observación (p.ej. "01014 CAVA"), luego sucursal BD. */
-        const plazaFinal = textoNoVacio(plaza, v.sucursal, 'SIN PLAZA');
-        const clienteDestinoFinal = textoNoVacio(clienteClasificacion, v.empresa_destino, 'SIN CLIENTE');
+        const plazaFinal = textoNoVacio(plaza, v.sucursal);
+        const clienteDestinoFinal = textoNoVacio(clienteClasificacion, v.empresa_destino);
         return {
           id_producto: l.id_producto,
           identificacion: l.identificacion,
