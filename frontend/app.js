@@ -2374,8 +2374,72 @@ function fechaGuiaSolo(iso) {
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+function normalizarCategoriaGuiaCodigo(valor) {
+  const t = String(valor || '').trim().toLowerCase();
+  if (!t) return '';
+  if (t.includes('deriv')) return 'derivados';
+  if (t.includes('global')) return 'global_hides';
+  if (t.includes('cat')) return 'cat';
+  return t;
+}
+
+function plantillaGuiaPredeterminada(categoria) {
+  const basePlanta = {
+    planta_beneficio: 'Colbeef S.A.S',
+    direccion_planta: 'Via Corredor Río Frío Calle 210 No. 9 - 631',
+    codigo_invima: '696BD',
+    departamento_planta: 'Santander',
+    ciudad_planta: 'Florida Blanca',
+    tipo_vehiculo: 'TRANSPORTE DE ALIMENTO NO COMESTIBLE',
+  };
+  const baseFirma = {
+    firma_responsable: 'YERSON JAVIER RINCON BOTELLO',
+    firma_cedula: '1.127.947.335',
+  };
+  if (categoria === 'cat') {
+    return {
+      ...basePlanta,
+      ...baseFirma,
+      conductor_nombre: 'GILBERTO ZAMBRANO ROJAS',
+      id_conductor: '1100220267',
+      placa: 'UFW 238',
+      isotermo: '',
+      firma_cargo: 'COORDINADOR DE SUBPRODUCTOS',
+    };
+  }
+  if (categoria === 'derivados') {
+    return {
+      ...basePlanta,
+      ...baseFirma,
+      conductor_nombre: 'Jorge Parra',
+      placa: 'CRA-782',
+      firma_cargo: 'COORDINADOR DE PRODUCTOS CARNICOS COMESTIBLES',
+    };
+  }
+  if (categoria === 'global_hides') {
+    return {
+      ...basePlanta,
+      ...baseFirma,
+      conductor_nombre: 'Franki Alexis Gamarra',
+      id_conductor: '91534708',
+      placa: 'SUF-086',
+      firma_cargo: 'COORDINADOR DE PRODUCTOS CARNICOS COMESTIBLES',
+    };
+  }
+  return { ...basePlanta, ...baseFirma };
+}
+
+function valorEnteroGuia(id) {
+  const raw = String(document.getElementById(id)?.value || '').trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
 function construirHtmlGuiaDespachoPdf(data, opts = {}) {
-  const c = data?.cabecera || {};
+  const cRaw = data?.cabecera || {};
+  const categoria = normalizarCategoriaGuiaCodigo(opts.categoria || cRaw?.tipo_despacho_nombre);
+  const c = { ...cRaw, ...plantillaGuiaPredeterminada(categoria) };
   const detalle = Array.isArray(data?.detalle) ? data.detalle : [];
   const fechaExp = fechaGuiaSolo(c.fecha_creacion);
   const fechaVig = fechaGuiaTexto(c.fecha_fin_vigencia);
@@ -2385,12 +2449,28 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const especie = c.especie_producto || detalle.find((x) => x?.especie)?.especie || 'bovina';
   const observacionProducto = c.observacion_producto || 'LIBROS CRUDOS';
   const r = c.resumen_categoria || {};
-  const pendientesHoy = Number(r.pendientes_hoy || 0);
+  const manual = opts.manual || {};
+  const pendientesHoyApi = Number(r.pendientes_hoy || 0);
+  const pendientesHoy = Number.isFinite(manual.pendientesHoy) ? manual.pendientesHoy : pendientesHoyApi;
+  const ajusteValor = Number.isFinite(manual.ajusteValor) ? manual.ajusteValor : 0;
+  const ajusteTipo = manual.ajusteTipo === 'adicionales' ? 'adicionales' : 'pendientes';
+  const ajusteFecha = String(manual.ajusteFecha || '').trim();
+  const decomisoManual = Number.isFinite(manual.decomiso) ? manual.decomiso : Number(c.decomiso || 0);
   const tipo = String(c.tipo_despacho_nombre || '').toUpperCase();
   const horaDespacho = c.hora_salida || '—';
   const fechaHoraDesp = `${fechaExp} ${horaDespacho}`.trim();
   const cantidadDespachados = Number(c.total_productos || 0);
+  const totalBase = cantidadDespachados + pendientesHoy;
+  const totalConAjuste = ajusteTipo === 'adicionales'
+    ? totalBase - ajusteValor
+    : totalBase + ajusteValor;
+  const totalFinal = totalConAjuste - decomisoManual;
   const logoDataUrl = opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null);
+  const ajusteLabel = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
+  const fechaAjusteTexto = ajusteFecha ? fechaGuiaSolo(ajusteFecha) : '';
+  const ajusteBloque = ajusteValor > 0
+    ? ` ${ajusteTipo === 'adicionales' ? '-' : '+'} ${ajusteValor} ${ajusteLabel}${fechaAjusteTexto ? ` DEL ${fechaAjusteTexto}` : ''}`
+    : '';
 
   let bloqueTotales = '';
   if (tipo.includes('CAT')) {
@@ -2479,8 +2559,10 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   <div class="sec sec-title">4. DESTINO: ${escapeHtml(destinoTxt)}${tipo ? `, ${escapeHtml(tipo)}` : ''}</div>
   ${bloqueTotales}
-  ${Number(c.decomiso || 0) > 0 ? `<div class="resumen">DECOMISO: <span class="v">${Number(c.decomiso || 0)}</span></div>` : ''}
-  <div class="resumen" style="margin-top:6px">TOTAL: <span class="v">${cantidadDespachados}</span></div>
+  ${decomisoManual > 0 ? `<div class="resumen">DECOMISO: <span class="v">${decomisoManual}</span></div>` : ''}
+  <div class="resumen" style="margin-top:6px">
+    TOTAL: <span class="v">${totalBase}${escapeHtml(ajusteBloque)}${decomisoManual > 0 ? ` - DECOMISO ${decomisoManual}` : ''} = ${totalFinal}</span>
+  </div>
 
   <table class="t firma">
     <tr><td style="width:50%">FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
@@ -2500,6 +2582,11 @@ async function descargarPdfGuiaDespacho() {
   return runWithAppLoader('Generando guia de despacho en PDF...', async () => {
     const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
     const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+    const pendientesHoy = valorEnteroGuia('inp-guia-pendientes');
+    const ajusteValor = valorEnteroGuia('inp-guia-ajuste-valor');
+    const decomiso = valorEnteroGuia('inp-guia-decomiso');
+    const ajusteTipo = String(document.getElementById('sel-guia-ajuste-tipo')?.value || 'pendientes').trim();
+    const ajusteFecha = String(document.getElementById('inp-guia-ajuste-fecha')?.value || '').trim();
     if (!fecha) {
       mostrarToast('Selecciona la fecha de salida', 'err');
       return;
@@ -2523,6 +2610,8 @@ async function descargarPdfGuiaDespacho() {
 
     const html = construirHtmlGuiaDespachoPdf(data, {
       logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
+      categoria,
+      manual: { pendientesHoy, ajusteValor, ajusteTipo, ajusteFecha, decomiso },
     });
     try {
       const h2p = await ensureHtml2PdfDisponible();

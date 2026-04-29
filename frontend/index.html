@@ -476,6 +476,35 @@
                 Generar PDF guía
               </button>
             </div>
+            <div class="rep-mini-fechas" style="margin-top:10px">
+              <div>
+                <label class="fl">Pendientes hoy (editable)</label>
+                <input class="fi" id="inp-guia-pendientes" type="number" min="0" step="1" placeholder="0">
+              </div>
+              <div>
+                <label class="fl">Ajuste (editable)</label>
+                <input class="fi" id="inp-guia-ajuste-valor" type="number" min="0" step="1" placeholder="0">
+              </div>
+            </div>
+            <div class="rep-mini-fechas" style="margin-top:8px">
+              <div>
+                <label class="fl">Tipo de ajuste</label>
+                <select class="fs" id="sel-guia-ajuste-tipo">
+                  <option value="pendientes">Pendientes del día anterior</option>
+                  <option value="adicionales">Adicionales del día anterior</option>
+                </select>
+              </div>
+              <div>
+                <label class="fl">Fecha del ajuste</label>
+                <input class="fi" id="inp-guia-ajuste-fecha" type="date">
+              </div>
+            </div>
+            <div class="rep-mini-fechas" style="margin-top:8px">
+              <div>
+                <label class="fl">Decomiso (editable)</label>
+                <input class="fi" id="inp-guia-decomiso" type="number" min="0" step="1" placeholder="0">
+              </div>
+            </div>
           </div>
         </div>
       </div>
