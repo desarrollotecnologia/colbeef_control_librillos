@@ -2027,9 +2027,8 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const estLibrillosHoy = resumenEstado(listaLibrillosHoy);
   const estCrudasHoy = resumenEstado(listaCrudasHoy);
 
-  const sumaCategoriasComercial =
-    vAsurGlo + vAsurCol + vGlobal + vAsur + vCat + vDeriv + totalCocidos + vOtros + vSinDestino;
   const tbody = `
+    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td>${totalCrudas}</td></tr>
     <tr class="resumen-dia-asur-glo"><td>ASURCARNESGLO</td><td>${vAsurGlo}</td></tr>
     <tr class="resumen-dia-asur-col"><td>ASURCARNESCOL</td><td>${vAsurCol}</td></tr>
     <tr class="resumen-dia-global"><td>GLOBAL HIDES SAS</td><td>${vGlobal}</td></tr>
@@ -2038,14 +2037,12 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <tr class="resumen-dia-deriv"><td>DERIVADOS</td><td>${vDeriv}</td></tr>
     ${(vOtros || vSinDestino) ? `<tr><td>OTROS / SIN DESTINO</td><td>${vOtros + vSinDestino}</td></tr>` : ''}
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
-    <tr class="resumen-dia-total"><td>TOTAL (categorías comerciales, 1 animal = 1)</td><td>${totalGeneral}</td></tr>
-    <tr class="resumen-dia-head"><td colspan="2" style="font-size:11px;color:var(--tx3);font-weight:600;padding-top:10px">CHUNCHULLAS CRUDAS — conteo paralelo (marca CRUDAS en observación; puede solaparse con filas anteriores y no suma al TOTAL)</td></tr>
-    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td>${totalCrudas}</td></tr>
+    <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
   `;
   return `
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
-      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong>${sumaCategoriasComercial === totalGeneral ? '' : ` <span style="font-size:11px;color:#b71c1c">(verificar: suma categorías = ${sumaCategoriasComercial})</span>`}</p>
+      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
       <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
           <thead><tr><th>Categoría</th><th>Total</th></tr></thead>
