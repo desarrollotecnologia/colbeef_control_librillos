@@ -2992,8 +2992,14 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
   ids.forEach((id) => {
     const p = prevMap.get(id);
     const n = nextMap.get(id);
-    const antes = p ? String(p.observacion || '').trim() : '';
-    const despues = n ? String(n.observacion || '').trim() : '';
+    // Priorizar siempre texto completo de observación desde backend (/observaciones),
+    // y usar el texto de fila solo como respaldo.
+    const antesMap = String(obsMapPrev.get(id) || '').trim();
+    const despuesMap = String(obsMapNow.get(id) || '').trim();
+    const antesFila = p ? String(p.observaciones || p.observacion || '').trim() : '';
+    const despuesFila = n ? String(n.observaciones || n.observacion || '').trim() : '';
+    const antes = antesMap || antesFila;
+    const despues = despuesMap || despuesFila;
 
     // Caso 1: sigue en la vista, pero cambió observación.
     if (p && n && antes !== despues) {
@@ -3002,8 +3008,8 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
     }
     // Caso 2: salió de la vista actual por cambio de observación (no cuenta en librillo/cruda).
     if (p && !n) {
-      const obsNueva = String(obsMapNow.get(id) || '').trim();
-      const obsAnterior = String(obsMapPrev.get(id) || antes || '').trim();
+      const obsNueva = despuesMap;
+      const obsAnterior = antesMap || antesFila;
       cambios.push({
         id,
         tipo: 'OBSERVACION',
@@ -3014,7 +3020,7 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
     }
     // Caso 3: entró a la vista actual por cambio/alta.
     if (!p && n) {
-      const obsAnterior = String(obsMapPrev.get(id) || '').trim();
+      const obsAnterior = antesMap;
       cambios.push({
         id,
         tipo: tipoRegistroNotificacion(n),
