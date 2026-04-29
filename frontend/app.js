@@ -5212,7 +5212,7 @@ function esPlaceholderTexto(v) {
 function esEtiquetaInstruccionOperativa(txt) {
   const u = String(txt || '').toUpperCase();
   if (!u) return false;
-  return /\bRETIRAR?\s+LIBRIL+OS?\b|\bCRUDAS?\b|\bDERIVADOS?\b|\bCARNICOS?\b|\bOBSERVA?CION\b/.test(u);
+  return /\bRETIRAR?\s+LIBRIL+OS?\b|\bCRUDAS?\b|\bDERIVADOS?\b|\bCARNICOS?\b|\bOBSERVA?CION\b|\bACONDICIONAMIENTO\b|\bDESPOSTE\b|\bCONGELACION\b|\bCABEZA\b|\bCUAJOS\b|\bCANUTAS\b|\bLENGUAS\b/.test(u);
 }
 
 /**
@@ -5367,16 +5367,9 @@ function puestoPivotMacro(d) {
 }
 
 function resolverPlazaReporte(d, nombreGrupo = '') {
-  const grupoU = String(nombreGrupo || '').toUpperCase();
-  const sufijoPorGrupo = (() => {
-    if (grupoU.includes('ASURCARNESCOL')) return '/MxJ/';
-    if (grupoU.includes('DERIVADOS')) return '/JxV/';
-    return '';
-  })();
-
   const sucRaw = limpiarPuestoTxt(d?.sucursal);
   if (sucRaw && !esPlaceholderTexto(sucRaw) && !esEtiquetaInstruccionOperativa(sucRaw)) {
-    if (/^\d{4,6}$/.test(sucRaw) && sufijoPorGrupo) return `${sucRaw} ${sufijoPorGrupo}`;
+    // Regla operativa: en la columna PLAZA mostrar primero el dato real de sucursal.
     return sucRaw;
   }
 
@@ -5391,11 +5384,20 @@ function resolverPlazaReporte(d, nombreGrupo = '') {
     if (!t) continue;
     if (esPlaceholderTexto(t)) continue;
     if (esEtiquetaInstruccionOperativa(t)) continue;
-    const norm = aplicarMapaPlazasAlias(t, candidatos);
-    if (/^\d{4,6}$/.test(norm) && sufijoPorGrupo) return `${norm} ${sufijoPorGrupo}`;
-    return norm;
+    return aplicarMapaPlazasAlias(t, candidatos);
   }
-  return '—';
+  // Fallback forzado: nunca dejar plaza vacía en reportes.
+  const emergencia = [
+    d?.sucursal,
+    d?.plaza,
+    d?.destino,
+    d?.empresa_destino,
+    d?.cliente_destino,
+    d?.propietario,
+  ]
+    .map((x) => limpiarPuestoTxt(x))
+    .find((x) => x && !esPlaceholderTexto(x));
+  return emergencia || 'SIN PLAZA';
 }
 
 /** Para pivote DERIVADOS: nombres tal como vienen en BD (empresa / propietario / cliente parseado), no etiquetas cortas. */

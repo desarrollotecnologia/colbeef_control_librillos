@@ -27,8 +27,11 @@ const PLAN_FAENA_FALLBACK_ON_EMPTY =
   process.env.PLAN_FAENA_FALLBACK_ON_EMPTY === '0' ? false : true;
 /** Activar solo si hay archivos en data/ y scripts Python (extract_*.py). Por defecto: solo BD. */
 const USE_LOCAL_PLAN_FILES =
-  process.env.USE_LOCAL_PLAN_FILES === '1' ||
-  process.env.USE_LOCAL_PLAN_FILES === 'true';
+  process.env.USE_LOCAL_PLAN_FILES === '0'
+    ? false
+    : (process.env.USE_LOCAL_PLAN_FILES === '1' ||
+       process.env.USE_LOCAL_PLAN_FILES === 'true' ||
+       fs.existsSync(path.resolve(process.cwd(), 'data', 'PLAN FAENA CONSOLIDADO.xls')));
 const USE_LOCAL_RETIRO_FILES =
   process.env.USE_LOCAL_RETIRO_FILES === '1' ||
   process.env.USE_LOCAL_RETIRO_FILES === 'true';
