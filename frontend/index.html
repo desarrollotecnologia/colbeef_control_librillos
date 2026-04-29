@@ -42,6 +42,10 @@
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h8l4 4v10a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="10" x2="13" y2="10" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="13" x2="13" y2="13" stroke="currentColor" stroke-width="1.8"/></svg>
         <span class="nav-item-label"><span class="nav-item-title">Reportes</span><span class="nav-item-hint">Agrupación · Excel/PDF</span></span>
       </button>
+      <button type="button" class="nav-item" data-vista="guias" onclick="irVista('guias',this)">
+        <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 2.5h8.5L16.5 6v11.5a1 1 0 01-1 1H4a1 1 0 01-1-1V3.5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12.5 2.5V6h4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 8v6M7.7 11.7L10 14l2.3-2.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span class="nav-item-label"><span class="nav-item-title">Guía despacho</span><span class="nav-item-hint">PDF por fecha/categoría</span></span>
+      </button>
       <button type="button" class="nav-item" data-vista="historico" onclick="irVista('historico',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5a6.5 6.5 0 106.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 1.8v3.4M10 10V6.3M10 10l2.7 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <span class="nav-item-label"><span class="nav-item-title">Histórico cambios</span><span class="nav-item-hint">Auditoría · reimpresión</span></span>
@@ -427,6 +431,18 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="panel" id="rep-preview-rep" style="margin-top:24px;display:none">
+        <div class="ph">
+          <span class="pt" id="rep-prev-title-rep">Vista Previa</span>
+        </div>
+        <div id="rep-prev-body-rep" class="prev-wrap"></div>
+      </div>
+    </section>
+
+    <!-- ═══ GUÍAS DESPACHO ═══ -->
+    <section class="vista" id="vista-guias">
+      <div class="rep-mini-grid">
         <div class="rep-mini-card rep-mini-card-rojo">
           <div class="rep-mini-head">
             <div class="rep-mini-ico">📄</div>
@@ -462,12 +478,6 @@
             </div>
           </div>
         </div>
-      </div>
-      <div class="panel" id="rep-preview-rep" style="margin-top:24px;display:none">
-        <div class="ph">
-          <span class="pt" id="rep-prev-title-rep">Vista Previa</span>
-        </div>
-        <div id="rep-prev-body-rep" class="prev-wrap"></div>
       </div>
     </section>
 

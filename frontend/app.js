@@ -1546,7 +1546,7 @@ function aplicarVistaDesdeQueryString() {
     const q = new URLSearchParams(window.location.search || '');
     const v = (q.get('vista') || '').trim().toLowerCase();
     if (!v) return;
-    const permitidas = new Set(['historial', 'inventario', 'clientes', 'totales', 'reportes', 'historico']);
+    const permitidas = new Set(['historial', 'inventario', 'clientes', 'totales', 'reportes', 'guias', 'historico']);
     if (!permitidas.has(v)) return;
     const nav = document.querySelector(`.nav-item[data-vista="${v}"]`);
     if (nav) irVista(v, nav);
@@ -1569,6 +1569,7 @@ function irVista(nombre, btn) {
     clientes: 'Por cliente',
     totales: 'Resumen del día',
     reportes: 'Reportes',
+    guias: 'Guía de despacho',
     historico: 'Historico de cambios',
   };
   document.getElementById('pg-title').textContent = titulos[nombre] || nombre;
