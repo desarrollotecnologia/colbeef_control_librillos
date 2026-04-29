@@ -5420,7 +5420,7 @@ function clientePivotMacro(d, nombreGrupo = '') {
     }
     if (src.includes('RUTH CACUA') || cand.some((s) => /ruth/i.test(s) && /cacua/i.test(s))) {
       const n = elegirNombreMasCompleto(cand, (s) => /ruth/i.test(s) && /cacua/i.test(s));
-      return prop || n || cliDest || 'RUTH CACUA';
+      return n || cliDest || 'RUTH CACUA';
     }
     if (
       src.includes('JUAN CARLOS RUEDA') ||
@@ -5428,11 +5428,11 @@ function clientePivotMacro(d, nombreGrupo = '') {
       cand.some((s) => /rueda/i.test(s))
     ) {
       const n = elegirNombreMasCompleto(cand, (s) => /rueda/i.test(s));
-      return prop || n || cliDest || 'JUAN CARLOS RUEDA';
+      return n || cliDest || 'JUAN CARLOS RUEDA';
     }
     if (src.includes('WALTER ARGUELLO') || cand.some((s) => /walter/i.test(s) && /arguello/i.test(s))) {
       const n = elegirNombreMasCompleto(cand, (s) => /walter/i.test(s) || /arguello/i.test(s));
-      return prop || n || cliDest || 'WALTER ARGUELLO';
+      return n || cliDest || 'WALTER ARGUELLO';
     }
     if (
       src.includes('DERIVADOS CARNICOS VISCERAS PARA ACONDICIONAMIENTO') ||
