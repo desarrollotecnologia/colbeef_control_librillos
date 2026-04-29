@@ -2696,7 +2696,7 @@ function rowsDetalleAsurSheet(items, nombreGrupo) {
       String(d?.id_producto || '—'),
       String(d?.propietario || 'SIN ASIGNAR').toUpperCase(),
       String(cli || 'SIN ASIGNAR').toUpperCase(),
-      String(resolverPlazaReporte(d) || '—'),
+      String(resolverPlazaReporte(d, nombreGrupo) || '—'),
       String(d?.observacion || d?.observaciones || '—'),
     ]);
   });
@@ -2717,7 +2717,7 @@ function rowsAsurDualSheet(items, nombreGrupo, fechaISO) {
     ...listSorted.map((d, idx) => ([
       { v: String(d?.id_producto || '—'), style: idx % 2 ? 'sLeftIdAlt' : 'sLeftId' },
       { v: String(d?.propietario || 'SIN ASIGNAR').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
-      { v: String(resolverPlazaReporte(d) || '—').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
+      { v: String(resolverPlazaReporte(d, nombreGrupo) || '—').toUpperCase(), style: idx % 2 ? 'sLeftCellAlt' : 'sLeftCell' },
     ])),
   ];
 
@@ -5366,10 +5366,22 @@ function puestoPivotMacro(d) {
   return ubicacionPlaza(d);
 }
 
-function resolverPlazaReporte(d) {
+function resolverPlazaReporte(d, nombreGrupo = '') {
+  const grupoU = String(nombreGrupo || '').toUpperCase();
+  const sufijoPorGrupo = (() => {
+    if (grupoU.includes('ASURCARNESCOL')) return '/MxJ/';
+    if (grupoU.includes('DERIVADOS')) return '/JxV/';
+    return '';
+  })();
+
+  const sucRaw = limpiarPuestoTxt(d?.sucursal);
+  if (sucRaw && !esPlaceholderTexto(sucRaw) && !esEtiquetaInstruccionOperativa(sucRaw)) {
+    if (/^\d{4,6}$/.test(sucRaw) && sufijoPorGrupo) return `${sucRaw} ${sufijoPorGrupo}`;
+    return sucRaw;
+  }
+
   const candidatos = [
     puestoPivotMacro(d),
-    d?.sucursal,
     d?.plaza,
     d?.destino,
     d?.empresa_destino,
@@ -5379,7 +5391,9 @@ function resolverPlazaReporte(d) {
     if (!t) continue;
     if (esPlaceholderTexto(t)) continue;
     if (esEtiquetaInstruccionOperativa(t)) continue;
-    return aplicarMapaPlazasAlias(t, candidatos);
+    const norm = aplicarMapaPlazasAlias(t, candidatos);
+    if (/^\d{4,6}$/.test(norm) && sufijoPorGrupo) return `${norm} ${sufijoPorGrupo}`;
+    return norm;
   }
   return '—';
 }
@@ -5427,12 +5441,15 @@ function clientePivotMacro(d, nombreGrupo = '') {
       src.includes('JUAN RUEDA') ||
       cand.some((s) => /rueda/i.test(s))
     ) {
-      const n = elegirNombreMasCompleto(cand, (s) => /rueda/i.test(s));
-      return n || cliDest || 'JUAN CARLOS RUEDA';
+      // Canonizar RUEDA en una sola etiqueta comercial (evita partirlo por razón social).
+      return 'JUAN CARLOS RUEDA';
     }
     if (src.includes('WALTER ARGUELLO') || cand.some((s) => /walter/i.test(s) && /arguello/i.test(s))) {
       const n = elegirNombreMasCompleto(cand, (s) => /walter/i.test(s) || /arguello/i.test(s));
       return n || cliDest || 'WALTER ARGUELLO';
+    }
+    if (cand.some((s) => /carnes/i.test(s) && /santacruz/i.test(s))) {
+      return 'WALTER ARGUELLO';
     }
     if (
       src.includes('DERIVADOS CARNICOS VISCERAS PARA ACONDICIONAMIENTO') ||
@@ -5526,7 +5543,7 @@ function htmlAuditoriaClientePlaza(items, opts = {}) {
       const g = grupoPivotParaFila(d, opts?.nombreGrupo || '');
       const cli = escapeHtml(clientePivotMacro(d, g));
       const prop = escapeHtml(String(d?.propietario || '').trim() || 'Sin asignar');
-      const plz = escapeHtml(resolverPlazaReporte(d));
+      const plz = escapeHtml(resolverPlazaReporte(d, g));
       if (exp) {
         return `<tr style="background:#fafafa;-webkit-print-color-adjust:exact;print-color-adjust:exact">
           <td style="border:1px solid ${border};padding:5px 8px;font-family:'Barlow Condensed',sans-serif;font-weight:700;color:#c0392b">${id}</td>
@@ -5594,7 +5611,7 @@ function contarPorClienteComercialPuesto(items, nombreGrupo = '') {
   return contarPorClientePuesto(
     items,
     d => clientePivotMacro(d, grupoPivotParaFila(d, nombreGrupo)),
-    d => resolverPlazaReporte(d)
+    d => resolverPlazaReporte(d, nombreGrupo)
   ).map(r => ({
     cliente: r.cliente,
     ubicacion: r.puesto,
@@ -5694,7 +5711,7 @@ function htmlListaLibrillosResumenBloqueExport(items, nombreGrupo, fechaISO) {
       c: [
         escapeHtml(d.id_producto || '—'),
         escapeHtml(propU ? propU.toUpperCase() : 'SIN ASIGNAR'),
-        escapeHtml(resolverPlazaReporte(d)),
+        escapeHtml(resolverPlazaReporte(d, nombreGrupo)),
       ],
     });
   });
