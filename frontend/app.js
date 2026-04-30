@@ -2475,6 +2475,32 @@ async function fetchGuiaData(fecha, categoria) {
   return j;
 }
 
+function construirGuiaVaciaFallback(fecha, categoria) {
+  const catNorm = normalizarCategoriaGuiaCodigo(categoria);
+  const tipo = catNorm === 'cat'
+    ? 'CAT'
+    : (catNorm === 'derivados' ? 'DERIVADOS' : 'GLOBAL HIDES');
+  const resumen = catNorm === 'cat'
+    ? { cat: 0, asurcarnescol: 0, pendientes_hoy: 0 }
+    : (catNorm === 'derivados'
+      ? { derivados: 0, asurcarnes: 0, pendientes_hoy: 0 }
+      : { global_hides: 0, asurcarnes_glo: 0, pendientes_hoy: 0 });
+  return {
+    cabecera: {
+      fecha_creacion: fecha ? `${fecha}T12:00:00` : new Date().toISOString(),
+      fecha_fin_vigencia: null,
+      tipo_despacho_nombre: tipo,
+      total_productos: 0,
+      decomiso: 0,
+      destino_principal: '',
+      destinos: '',
+      observacion_producto: 'LIBROS CRUDOS',
+      resumen_categoria: resumen,
+    },
+    detalle: [],
+  };
+}
+
 async function autocompletarAjusteGuiaDesdeDiaAnterior() {
   const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
   const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
@@ -2674,8 +2700,14 @@ async function descargarPdfGuiaDespacho() {
     try {
       data = await fetchGuiaData(fecha, categoria);
     } catch (e) {
-      mostrarToast(`No se pudo cargar la guia: ${e.message || e}`, 'err');
-      return;
+      const msg = String(e?.message || e || '');
+      if (/No hay productos despachados/i.test(msg)) {
+        data = construirGuiaVaciaFallback(fecha, categoria);
+        mostrarToast('No hay despachos en esa fecha: se genera guía base en ceros', 'ok');
+      } else {
+        mostrarToast(`No se pudo cargar la guia: ${msg}`, 'err');
+        return;
+      }
     }
 
     const html = construirHtmlGuiaDespachoPdf(data, {
