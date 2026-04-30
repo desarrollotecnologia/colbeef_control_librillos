@@ -487,9 +487,9 @@
             </div>
             <div class="rep-mini-fechas" style="margin-top:10px">
               <div>
-                <label class="fl">Pendientes hoy (editable)</label>
-                <input class="fi" id="inp-guia-pendientes" type="number" min="0" step="1" placeholder="0">
-                <small style="display:block;color:var(--tx2);margin-top:4px">Si hoy faltaron libros por despachar, pon la cantidad.</small>
+                <label class="fl">Pendientes del día (automático)</label>
+                <input class="fi" id="inp-guia-pendientes" type="number" min="0" step="1" placeholder="0" readonly>
+                <small style="display:block;color:var(--tx2);margin-top:4px">Se calcula automáticamente según la fecha y categoría.</small>
               </div>
               <div>
                 <label class="fl">Ajuste (editable)</label>
@@ -528,6 +528,7 @@
         <div class="ph">
           <span class="pt">Vista previa guía despacho</span>
         </div>
+        <div id="guia-preview-editor" style="padding:10px 14px;border-bottom:1px solid #eee;display:none"></div>
         <div id="guia-preview-body" class="prev-wrap"></div>
       </div>
     </section>

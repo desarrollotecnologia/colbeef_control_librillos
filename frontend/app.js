@@ -2382,6 +2382,13 @@ function fechaGuiaSolo(iso) {
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+function fechaGuiaLarga(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
 function normalizarCategoriaGuiaCodigo(valor) {
   const t = String(valor || '').trim().toLowerCase();
   if (!t) return '';
@@ -2440,7 +2447,7 @@ function plantillaGuiaPredeterminada(categoria) {
 function destinoFijoGuiaPorCategoria(categoria) {
   const cat = normalizarCategoriaGuiaCodigo(categoria);
   if (cat === 'cat') return 'PIEDECUESTA';
-  if (cat === 'derivados') return 'BUCARAMANGA';
+  if (cat === 'derivados') return 'BUCARAMANGA. DERIVADOS CARNICOS';
   if (cat === 'global_hides') return 'BUCARAMANGA';
   return '';
 }
@@ -2519,7 +2526,6 @@ function construirGuiaVaciaFallback(fecha, categoria) {
 
 function leerManualGuiaDesdeFormulario() {
   return {
-    pendientesHoy: valorEnteroGuia('inp-guia-pendientes'),
     ajusteValor: valorEnteroGuia('inp-guia-ajuste-valor'),
     decomiso: valorEnteroGuia('inp-guia-decomiso'),
     ajusteTipo: String(document.getElementById('sel-guia-ajuste-tipo')?.value || 'pendientes').trim(),
@@ -2527,9 +2533,24 @@ function leerManualGuiaDesdeFormulario() {
   };
 }
 
+function pintarPendientesHoyAutomatico(data) {
+  const n = Number(data?.cabecera?.resumen_categoria?.pendientes_hoy || 0);
+  const inp = document.getElementById('inp-guia-pendientes');
+  if (inp) inp.value = String(Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0);
+}
+
 function actualizarResumenControlGuia(data, manual) {
   const box = document.getElementById('guia-resumen-control');
   if (!box) return;
+  const calc = calcularControlGuia(data, manual);
+  box.innerHTML = `
+    <strong>Control de cálculo:</strong>
+    LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong>
+    &nbsp;|&nbsp; TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} - ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong>
+  `;
+}
+
+function calcularControlGuia(data, manual = {}) {
   const c = data?.cabecera || {};
   const partes = descomponerTotalesGuia(c);
   const base = Number(partes.a || 0) + Number(partes.b || 0);
@@ -2540,11 +2561,53 @@ function actualizarResumenControlGuia(data, manual) {
   const final = Math.max(0, totalAjustado - decomiso);
   const op = ajusteTipo === 'adicionales' ? '-' : '+';
   const lbl = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
-  box.innerHTML = `
-    <strong>Control de cálculo:</strong>
-    LIBROS A DESPACHAR (${partes.nombreA}: ${partes.a} + ${partes.nombreB}: ${partes.b}) = <strong>${base}</strong>
-    &nbsp;|&nbsp; TOTAL = ${base} ${op} ${ajusteValor} ${lbl} - ${decomiso} DECOMISO = <strong>${final}</strong>
+  return { partes, base, ajusteValor, ajusteTipo, decomiso, totalAjustado, final, op, lbl };
+}
+
+function validarGuiaAntesDeGenerar(data, manual) {
+  const calc = calcularControlGuia(data, manual);
+  const errores = [];
+  if (calc.ajusteValor > 0 && !String(manual?.ajusteFecha || '').trim()) {
+    errores.push('Cuando hay ajuste, debes seleccionar la fecha del ajuste.');
+  }
+  if (calc.decomiso > calc.base + calc.ajusteValor) {
+    errores.push('El decomiso no puede ser mayor al total calculado.');
+  }
+  return { ok: errores.length === 0, errores, calc };
+}
+
+function renderEditorEnVistaPreviaGuia() {
+  const host = document.getElementById('guia-preview-editor');
+  if (!host) return;
+  host.style.display = '';
+  host.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+      <div><label class="fl">Ajuste</label><input class="fi" id="inp-prev-ajuste-valor" type="number" min="0" step="1" style="width:120px"></div>
+      <div><label class="fl">Tipo</label><select class="fs" id="sel-prev-ajuste-tipo" style="width:180px"><option value="pendientes">Pendientes</option><option value="adicionales">Adicionales</option></select></div>
+      <div><label class="fl">Fecha ajuste</label><input class="fi" id="inp-prev-ajuste-fecha" type="date"></div>
+      <div><label class="fl">Decomiso</label><input class="fi" id="inp-prev-decomiso" type="number" min="0" step="1" style="width:120px"></div>
+      <button type="button" class="btn-gen btn-gen-sec" id="btn-prev-actualizar">Actualizar vista previa</button>
+    </div>
   `;
+  const map = [
+    ['inp-prev-ajuste-valor', 'inp-guia-ajuste-valor'],
+    ['sel-prev-ajuste-tipo', 'sel-guia-ajuste-tipo'],
+    ['inp-prev-ajuste-fecha', 'inp-guia-ajuste-fecha'],
+    ['inp-prev-decomiso', 'inp-guia-decomiso'],
+  ];
+  map.forEach(([a, b]) => {
+    const ea = document.getElementById(a);
+    const eb = document.getElementById(b);
+    if (ea && eb) ea.value = eb.value || '';
+  });
+  document.getElementById('btn-prev-actualizar')?.addEventListener('click', () => {
+    map.forEach(([a, b]) => {
+      const ea = document.getElementById(a);
+      const eb = document.getElementById(b);
+      if (ea && eb) eb.value = ea.value || '';
+    });
+    void generarVistaPreviaGuiaDespacho();
+  });
 }
 
 async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
@@ -2579,7 +2642,23 @@ async function generarVistaPreviaGuiaDespacho() {
     return;
   }
   const manual = leerManualGuiaDesdeFormulario();
+  pintarPendientesHoyAutomatico(data);
   actualizarResumenControlGuia(data, manual);
+  renderEditorEnVistaPreviaGuia();
+  const check = validarGuiaAntesDeGenerar(data, manual);
+  enviarEventoAnalytics({
+    eventName: 'guia_preview_control',
+    viewName: _analyticsViewActual,
+    meta: {
+      fecha,
+      categoria,
+      ok: check.ok,
+      base: check.calc.base,
+      ajuste: check.calc.ajusteValor,
+      decomiso: check.calc.decomiso,
+      final: check.calc.final,
+    },
+  });
   const html = construirHtmlGuiaDespachoPdf(data, {
     logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
     categoria,
@@ -2629,9 +2708,10 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const c = { ...cRaw, ...plantillaGuiaPredeterminada(categoria) };
   const detalle = Array.isArray(data?.detalle) ? data.detalle : [];
   const fechaExp = fechaGuiaSolo(c.fecha_creacion);
+  const fechaExpLarga = fechaGuiaLarga(c.fecha_creacion);
   const fechaVig = fechaGuiaTexto(c.fecha_fin_vigencia);
   const conductor = c.conductor_nombre || (c.id_conductor != null ? `ID ${c.id_conductor}` : '—');
-  const guiaTransporte = c.numero_guia_transporte_completo || c.numero_guia_transporte || '—';
+  const guiaTransporte = c.numero_guia_transporte_completo || c.numero_guia_transporte || 'Colbeef - 06389 - 18';
   const destinoFijo = destinoFijoGuiaPorCategoria(categoria);
   const destinoTxt = destinoFijo || c.destino_principal || c.destinos || (detalle.find((x) => x?.destino)?.destino || '—');
   const especie = c.especie_producto || detalle.find((x) => x?.especie)?.especie || 'bovina';
@@ -2641,7 +2721,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const partes = descomponerTotalesGuia(c);
   const librosADespachar = Number(partes.a || 0) + Number(partes.b || 0);
   const pendientesHoyApi = Number(r.pendientes_hoy || 0);
-  const pendientesHoy = Number.isFinite(manual.pendientesHoy) ? manual.pendientesHoy : pendientesHoyApi;
+  const pendientesHoy = pendientesHoyApi;
   const ajusteValor = Number.isFinite(manual.ajusteValor) ? manual.ajusteValor : 0;
   const ajusteTipo = manual.ajusteTipo === 'adicionales' ? 'adicionales' : 'pendientes';
   const ajusteFecha = String(manual.ajusteFecha || '').trim();
@@ -2666,8 +2746,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   if (tipo.includes('CAT')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${librosADespachar}</span> <span class="v" style="margin-left:60px">${pendientesHoy} PENDIENTES</span></div>
-        <div style="margin-top:8px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
+        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:40px">${pendientesHoy} PENDIENTES</span></div>
+        <div style="margin-top:6px"><span class="k">Libros despachados:</span> <span class="v">${cantidadDespachados}</span></div>
         <div style="margin-top:8px">CAT: <span class="v">${Number(r.cat || 0)}</span></div>
         <div>ASURCARNESCOL: <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
       </div>
@@ -2675,8 +2755,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   } else if (tipo.includes('DERIVADOS')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${librosADespachar}</span> <span class="v" style="margin-left:60px">${pendientesHoy} PENDIENTES</span></div>
-        <div style="margin-top:8px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
+        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:40px">${pendientesHoy} PENDIENTES</span></div>
+        <div style="margin-top:6px"><span class="k">Libros despachados:</span> <span class="v">${cantidadDespachados}</span></div>
         <div style="margin-top:8px">DERIVADOS: <span class="v">${Number(r.derivados || 0)}</span></div>
         <div>ASURCARNES: <span class="v">${Number(r.asurcarnes || 0)}</span></div>
       </div>
@@ -2684,8 +2764,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   } else {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${librosADespachar}</span> <span class="v" style="margin-left:60px">${pendientesHoy} PENDIENTES</span></div>
-        <div style="margin-top:8px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
+        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:40px">${pendientesHoy} PENDIENTES</span></div>
+        <div style="margin-top:6px"><span class="k">Libros despachados:</span> <span class="v">${cantidadDespachados}</span></div>
         <div style="margin-top:8px">GLOBAL HIDES: <span class="v">${Number(r.global_hides || 0)}</span></div>
         <div>ASURCARNESGLO: <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
       </div>
@@ -2694,19 +2774,19 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   return `
   <style>
-    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:12px;background:#fff}
-    .h-top{display:flex;justify-content:space-between;align-items:flex-start}
-    .logo{font-size:64px;font-weight:800;line-height:1}
+    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;background:#fff}
+    .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+    .logo{font-size:62px;font-weight:800;line-height:0.95;letter-spacing:-1px}
     .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
-    .cap{font-size:12px;margin-bottom:6px}
+    .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
     .t th{font-weight:600;background:#f2f2f2}
-    .sec{margin-top:10px}
-    .sec-title{font-size:28px;margin:6px 0 4px}
+    .sec{margin-top:8px}
+    .sec-title{font-size:17px;margin:6px 0 4px;font-weight:700}
     .k{font-weight:700}
     .v{font-weight:800;color:#c00}
-    .resumen{font-size:34px;margin-top:8px}
+    .resumen{font-size:22px;margin-top:8px;line-height:1.2}
     .firma{margin-top:8px}
     .nota{font-size:10px;margin-top:8px}
   </style>
@@ -2714,13 +2794,11 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
   <div class="h-top">
     <div>
-      ${logoDataUrl
-        ? `<img src="${logoDataUrl}" alt="Colbeef" style="height:78px;max-width:340px;object-fit:contain" />`
-        : '<div class="logo"><span class="a">Col</span><span class="b">beef</span></div>'}
+      <div class="logo"><span class="a">Col</span><span class="b">beef</span></div>
     </div>
     <table class="t" style="max-width:420px">
       <tr><th>FECHA DE EXPEDICION</th><th>Numero</th></tr>
-      <tr><td>${escapeHtml(fechaExp)}</td><td>${escapeHtml(String(guiaTransporte))}</td></tr>
+      <tr><td>${escapeHtml(fechaExpLarga)}</td><td>${escapeHtml(String(guiaTransporte))}</td></tr>
     </table>
   </div>
 
@@ -2793,7 +2871,18 @@ async function descargarPdfGuiaDespacho() {
       return;
     }
 
+    pintarPendientesHoyAutomatico(data);
+    const check = validarGuiaAntesDeGenerar(data, manual);
     actualizarResumenControlGuia(data, manual);
+    if (!check.ok) {
+      mostrarToast(check.errores[0], 'err');
+      enviarEventoAnalytics({
+        eventName: 'guia_generate_blocked',
+        viewName: _analyticsViewActual,
+        meta: { fecha, categoria, error: check.errores[0] },
+      });
+      return;
+    }
     const html = construirHtmlGuiaDespachoPdf(data, {
       logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
       categoria,
@@ -2817,7 +2906,14 @@ async function descargarPdfGuiaDespacho() {
       enviarEventoAnalytics({
         eventName: 'export_pdf',
         viewName: _analyticsViewActual,
-        meta: { archivo: `Guia_Despacho_${categoria}_${fecha}` },
+        meta: {
+          archivo: `Guia_Despacho_${categoria}_${fecha}`,
+          base: check.calc.base,
+          ajuste: check.calc.ajusteValor,
+          decomiso: check.calc.decomiso,
+          total_final: check.calc.final,
+          ajuste_tipo: check.calc.ajusteTipo,
+        },
       });
     } catch (e) {
       mostrarToast(`No se pudo generar PDF: ${e.message || e}`, 'err');
@@ -2834,15 +2930,39 @@ if (fechaGlobalEl) {
   fechaGlobalEl.addEventListener('change', () => {
     sincronizarFechaGuiaConFechaGlobal();
     void autocompletarAjusteGuiaDesdeDiaAnterior();
+    const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+    const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+    if (!fecha || !categoria) return;
+    void (async () => {
+      try {
+        const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
+        pintarPendientesHoyAutomatico(data);
+        actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
+      } catch {
+        /* ignore */
+      }
+    })();
   });
 }
 const selGuiaCategoriaEl = document.getElementById('sel-guia-categoria');
 if (selGuiaCategoriaEl) {
   selGuiaCategoriaEl.addEventListener('change', () => {
     void autocompletarAjusteGuiaDesdeDiaAnterior();
+    const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+    const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+    if (!fecha || !categoria) return;
+    void (async () => {
+      try {
+        const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
+        pintarPendientesHoyAutomatico(data);
+        actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
+      } catch {
+        /* ignore */
+      }
+    })();
   });
 }
-['inp-guia-pendientes', 'inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso']
+['inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso']
   .forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -2853,6 +2973,7 @@ if (selGuiaCategoriaEl) {
       void (async () => {
         try {
           const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
+          pintarPendientesHoyAutomatico(data);
           actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
         } catch {
           /* ignore */
@@ -2862,6 +2983,18 @@ if (selGuiaCategoriaEl) {
   });
 
 sincronizarFechaGuiaConFechaGlobal();
+void (async () => {
+  const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+  const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+  if (!fecha || !categoria) return;
+  try {
+    const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
+    pintarPendientesHoyAutomatico(data);
+    actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
+  } catch {
+    /* ignore */
+  }
+})();
 
 function descargarExcel(nombre, html) {
   const blob = new Blob([`\ufeff${html}`], { type: 'application/vnd.ms-excel;charset=utf-8' });
