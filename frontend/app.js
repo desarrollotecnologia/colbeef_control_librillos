@@ -1454,6 +1454,14 @@ if (fechaRepCliHastaEl) fechaRepCliHastaEl.value = fechaDefectoOperacion;
 const fechaGuiaEl = document.getElementById('inp-guia-fecha');
 if (fechaGuiaEl) fechaGuiaEl.value = fechaDefectoOperacion;
 
+function sincronizarFechaGuiaConFechaGlobal() {
+  const fg = String(document.getElementById('fecha-global')?.value || '').trim();
+  const operativa = fg || fechaOperativaDefectoISO();
+  const inp = document.getElementById('inp-guia-fecha');
+  if (inp) inp.value = operativa;
+  return operativa;
+}
+
 const DEFAULT_COLBEEF_UI = {
   navHistorialHint: 'Plan faena · parte Colbeef',
   kpiStripTitle:
@@ -2429,6 +2437,14 @@ function plantillaGuiaPredeterminada(categoria) {
   return { ...basePlanta, ...baseFirma };
 }
 
+function destinoFijoGuiaPorCategoria(categoria) {
+  const cat = normalizarCategoriaGuiaCodigo(categoria);
+  if (cat === 'cat') return 'PIEDECUESTA';
+  if (cat === 'derivados') return 'BUCARAMANGA';
+  if (cat === 'global_hides') return 'BUCARAMANGA';
+  return '';
+}
+
 function valorEnteroGuia(id) {
   const raw = String(document.getElementById(id)?.value || '').trim();
   if (!raw) return 0;
@@ -2501,8 +2517,84 @@ function construirGuiaVaciaFallback(fecha, categoria) {
   };
 }
 
+function leerManualGuiaDesdeFormulario() {
+  return {
+    pendientesHoy: valorEnteroGuia('inp-guia-pendientes'),
+    ajusteValor: valorEnteroGuia('inp-guia-ajuste-valor'),
+    decomiso: valorEnteroGuia('inp-guia-decomiso'),
+    ajusteTipo: String(document.getElementById('sel-guia-ajuste-tipo')?.value || 'pendientes').trim(),
+    ajusteFecha: String(document.getElementById('inp-guia-ajuste-fecha')?.value || '').trim(),
+  };
+}
+
+function actualizarResumenControlGuia(data, manual) {
+  const box = document.getElementById('guia-resumen-control');
+  if (!box) return;
+  const c = data?.cabecera || {};
+  const partes = descomponerTotalesGuia(c);
+  const base = Number(partes.a || 0) + Number(partes.b || 0);
+  const ajusteValor = Number(manual?.ajusteValor || 0);
+  const ajusteTipo = manual?.ajusteTipo === 'adicionales' ? 'adicionales' : 'pendientes';
+  const decomiso = Number(manual?.decomiso || 0);
+  const totalAjustado = ajusteTipo === 'adicionales' ? (base - ajusteValor) : (base + ajusteValor);
+  const final = Math.max(0, totalAjustado - decomiso);
+  const op = ajusteTipo === 'adicionales' ? '-' : '+';
+  const lbl = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
+  box.innerHTML = `
+    <strong>Control de cálculo:</strong>
+    LIBROS A DESPACHAR (${partes.nombreA}: ${partes.a} + ${partes.nombreB}: ${partes.b}) = <strong>${base}</strong>
+    &nbsp;|&nbsp; TOTAL = ${base} ${op} ${ajusteValor} ${lbl} - ${decomiso} DECOMISO = <strong>${final}</strong>
+  `;
+}
+
+async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
+  try {
+    return await fetchGuiaData(fecha, categoria);
+  } catch (e) {
+    const msg = String(e?.message || e || '');
+    if (/No hay productos despachados/i.test(msg)) {
+      if (conToast) mostrarToast('No hay despachos en esa fecha: se genera guía base en ceros', 'ok');
+      return construirGuiaVaciaFallback(fecha, categoria);
+    }
+    throw e;
+  }
+}
+
+async function generarVistaPreviaGuiaDespacho() {
+  const fecha = sincronizarFechaGuiaConFechaGlobal();
+  const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+  if (!fecha) {
+    mostrarToast('Selecciona la fecha de salida', 'err');
+    return;
+  }
+  if (!categoria) {
+    mostrarToast('Selecciona la categoria', 'err');
+    return;
+  }
+  let data = null;
+  try {
+    data = await obtenerDataGuiaConFallback(fecha, categoria, true);
+  } catch (e) {
+    mostrarToast(`No se pudo cargar la guía: ${e.message || e}`, 'err');
+    return;
+  }
+  const manual = leerManualGuiaDesdeFormulario();
+  actualizarResumenControlGuia(data, manual);
+  const html = construirHtmlGuiaDespachoPdf(data, {
+    logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
+    categoria,
+    manual,
+  });
+  const panel = document.getElementById('guia-preview-panel');
+  const body = document.getElementById('guia-preview-body');
+  if (panel && body) {
+    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="transform:scale(.8);transform-origin:top left;width:1250px;background:#fff">${html}</div></div>`;
+    panel.style.display = '';
+  }
+}
+
 async function autocompletarAjusteGuiaDesdeDiaAnterior() {
-  const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+  const fecha = sincronizarFechaGuiaConFechaGlobal();
   const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
   if (!fecha || !categoria) return;
   const prev = diaAnteriorIsoLocal(fecha);
@@ -2540,7 +2632,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const fechaVig = fechaGuiaTexto(c.fecha_fin_vigencia);
   const conductor = c.conductor_nombre || (c.id_conductor != null ? `ID ${c.id_conductor}` : '—');
   const guiaTransporte = c.numero_guia_transporte_completo || c.numero_guia_transporte || '—';
-  const destinoTxt = c.destino_principal || c.destinos || (detalle.find((x) => x?.destino)?.destino || '—');
+  const destinoFijo = destinoFijoGuiaPorCategoria(categoria);
+  const destinoTxt = destinoFijo || c.destino_principal || c.destinos || (detalle.find((x) => x?.destino)?.destino || '—');
   const especie = c.especie_producto || detalle.find((x) => x?.especie)?.especie || 'bovina';
   const observacionProducto = c.observacion_producto || 'LIBROS CRUDOS';
   const r = c.resumen_categoria || {};
@@ -2680,13 +2773,9 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
 async function descargarPdfGuiaDespacho() {
   return runWithAppLoader('Generando guia de despacho en PDF...', async () => {
-    const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+    const fecha = sincronizarFechaGuiaConFechaGlobal();
     const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
-    const pendientesHoy = valorEnteroGuia('inp-guia-pendientes');
-    const ajusteValor = valorEnteroGuia('inp-guia-ajuste-valor');
-    const decomiso = valorEnteroGuia('inp-guia-decomiso');
-    const ajusteTipo = String(document.getElementById('sel-guia-ajuste-tipo')?.value || 'pendientes').trim();
-    const ajusteFecha = String(document.getElementById('inp-guia-ajuste-fecha')?.value || '').trim();
+    const manual = leerManualGuiaDesdeFormulario();
     if (!fecha) {
       mostrarToast('Selecciona la fecha de salida', 'err');
       return;
@@ -2698,22 +2787,17 @@ async function descargarPdfGuiaDespacho() {
 
     let data = null;
     try {
-      data = await fetchGuiaData(fecha, categoria);
+      data = await obtenerDataGuiaConFallback(fecha, categoria, true);
     } catch (e) {
-      const msg = String(e?.message || e || '');
-      if (/No hay productos despachados/i.test(msg)) {
-        data = construirGuiaVaciaFallback(fecha, categoria);
-        mostrarToast('No hay despachos en esa fecha: se genera guía base en ceros', 'ok');
-      } else {
-        mostrarToast(`No se pudo cargar la guia: ${msg}`, 'err');
-        return;
-      }
+      mostrarToast(`No se pudo cargar la guia: ${e.message || e}`, 'err');
+      return;
     }
 
+    actualizarResumenControlGuia(data, manual);
     const html = construirHtmlGuiaDespachoPdf(data, {
       logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
       categoria,
-      manual: { pendientesHoy, ajusteValor, ajusteTipo, ajusteFecha, decomiso },
+      manual,
     });
     try {
       const h2p = await ensureHtml2PdfDisponible();
@@ -2746,12 +2830,38 @@ if (fechaGuiaEl) {
     void autocompletarAjusteGuiaDesdeDiaAnterior();
   });
 }
+if (fechaGlobalEl) {
+  fechaGlobalEl.addEventListener('change', () => {
+    sincronizarFechaGuiaConFechaGlobal();
+    void autocompletarAjusteGuiaDesdeDiaAnterior();
+  });
+}
 const selGuiaCategoriaEl = document.getElementById('sel-guia-categoria');
 if (selGuiaCategoriaEl) {
   selGuiaCategoriaEl.addEventListener('change', () => {
     void autocompletarAjusteGuiaDesdeDiaAnterior();
   });
 }
+['inp-guia-pendientes', 'inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso']
+  .forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+      const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+      if (!fecha || !categoria) return;
+      void (async () => {
+        try {
+          const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
+          actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
+        } catch {
+          /* ignore */
+        }
+      })();
+    });
+  });
+
+sincronizarFechaGuiaConFechaGlobal();
 
 function descargarExcel(nombre, html) {
   const blob = new Blob([`\ufeff${html}`], { type: 'application/vnd.ms-excel;charset=utf-8' });
