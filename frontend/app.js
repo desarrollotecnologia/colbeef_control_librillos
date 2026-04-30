@@ -2524,6 +2524,50 @@ function construirGuiaVaciaFallback(fecha, categoria) {
   };
 }
 
+function construirGuiaDesdeResumenDia(fecha, categoria, resumenMacro) {
+  const catNorm = normalizarCategoriaGuiaCodigo(categoria);
+  const cats = resumenMacro?.categorias || {};
+  const tipo = catNorm === 'cat'
+    ? 'CAT'
+    : (catNorm === 'derivados' ? 'DERIVADOS' : 'GLOBAL HIDES');
+  const resumenCategoria = catNorm === 'cat'
+    ? {
+        cat: Number(cats.cat || 0),
+        asurcarnescol: Number(cats.asurcarnescol || 0),
+        pendientes_hoy: 0,
+      }
+    : (catNorm === 'derivados'
+      ? {
+          derivados: Number(cats.derivados || 0),
+          asurcarnes: Number(cats.asurcarnes || 0),
+          pendientes_hoy: 0,
+        }
+      : {
+          global_hides: Number(cats.global_hides || 0),
+          asurcarnes_glo: Number(cats.asurcarnes_glo || 0),
+          pendientes_hoy: 0,
+        });
+  const total = catNorm === 'cat'
+    ? Number(resumenCategoria.cat || 0) + Number(resumenCategoria.asurcarnescol || 0)
+    : (catNorm === 'derivados'
+      ? Number(resumenCategoria.derivados || 0) + Number(resumenCategoria.asurcarnes || 0)
+      : Number(resumenCategoria.global_hides || 0) + Number(resumenCategoria.asurcarnes_glo || 0));
+  return {
+    cabecera: {
+      fecha_creacion: fecha ? `${fecha}T12:00:00` : new Date().toISOString(),
+      fecha_fin_vigencia: null,
+      tipo_despacho_nombre: tipo,
+      total_productos: total,
+      decomiso: 0,
+      destino_principal: destinoFijoGuiaPorCategoria(catNorm),
+      destinos: '',
+      observacion_producto: 'LIBROS CRUDOS',
+      resumen_categoria: resumenCategoria,
+    },
+    detalle: [],
+  };
+}
+
 function leerManualGuiaDesdeFormulario() {
   return {
     ajusteValor: valorEnteroGuia('inp-guia-ajuste-valor'),
@@ -2611,6 +2655,15 @@ function renderEditorEnVistaPreviaGuia() {
 }
 
 async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
+  // Fuente principal: mismos totales del "Resumen del día"
+  try {
+    const rm = await fetchResumenMacro(fecha);
+    if (rm?.categorias) {
+      return construirGuiaDesdeResumenDia(fecha, categoria, rm);
+    }
+  } catch {
+    // fallback a endpoint de guías
+  }
   try {
     return await fetchGuiaData(fecha, categoria);
   } catch (e) {
@@ -2738,16 +2791,18 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const logoDataUrl = opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null);
   const ajusteLabel = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
   const fechaAjusteTexto = ajusteFecha ? fechaGuiaSolo(ajusteFecha) : '';
+  const signoAjuste = ajusteTipo === 'adicionales' ? '-' : '+';
   const ajusteBloque = ajusteValor > 0
-    ? ` ${ajusteTipo === 'adicionales' ? '-' : '+'} ${ajusteValor} ${ajusteLabel}${fechaAjusteTexto ? ` DEL ${fechaAjusteTexto}` : ''}`
+    ? `${signoAjuste} ${ajusteValor} ${ajusteLabel}${fechaAjusteTexto ? ` DEL ${fechaAjusteTexto}` : ''}`
     : '';
+  const descomisoTxt = decomisoManual > 0 ? ` - ${decomisoManual} DECOMISO` : '';
 
   let bloqueTotales = '';
   if (tipo.includes('CAT')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:40px">${pendientesHoy} PENDIENTES</span></div>
-        <div style="margin-top:6px"><span class="k">Libros despachados:</span> <span class="v">${cantidadDespachados}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
         <div style="margin-top:8px">CAT: <span class="v">${Number(r.cat || 0)}</span></div>
         <div>ASURCARNESCOL: <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
       </div>
@@ -2755,8 +2810,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   } else if (tipo.includes('DERIVADOS')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:40px">${pendientesHoy} PENDIENTES</span></div>
-        <div style="margin-top:6px"><span class="k">Libros despachados:</span> <span class="v">${cantidadDespachados}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
         <div style="margin-top:8px">DERIVADOS: <span class="v">${Number(r.derivados || 0)}</span></div>
         <div>ASURCARNES: <span class="v">${Number(r.asurcarnes || 0)}</span></div>
       </div>
@@ -2764,8 +2819,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   } else {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">CANTIDAD DE LIBROS DESPACHADOS:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:40px">${pendientesHoy} PENDIENTES</span></div>
-        <div style="margin-top:6px"><span class="k">Libros despachados:</span> <span class="v">${cantidadDespachados}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
         <div style="margin-top:8px">GLOBAL HIDES: <span class="v">${Number(r.global_hides || 0)}</span></div>
         <div>ASURCARNESGLO: <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
       </div>
@@ -2830,9 +2885,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   <div class="sec sec-title">4. DESTINO: ${escapeHtml(destinoTxt)}${tipo ? `, ${escapeHtml(tipo)}` : ''}</div>
   ${bloqueTotales}
-  ${decomisoManual > 0 ? `<div class="resumen">DECOMISO: <span class="v">${decomisoManual}</span></div>` : ''}
   <div class="resumen" style="margin-top:6px">
-    TOTAL: <span class="v">${totalBase}${escapeHtml(ajusteBloque)}${decomisoManual > 0 ? ` - DECOMISO ${decomisoManual}` : ''} = ${totalFinal}</span>
+    TOTAL: <span class="v">${totalBase}${ajusteBloque ? ` ${escapeHtml(ajusteBloque)}` : ''}${escapeHtml(descomisoTxt)} = ${totalFinal}</span>
   </div>
 
   <table class="t firma">
