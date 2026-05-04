@@ -75,8 +75,19 @@ export async function obtenerHistoricoCambios({
   limit = 120,
 } = {}) {
   const rows = await readRows();
-  const fromTs = desde ? Date.parse(`${desde}T00:00:00.000Z`) : null;
-  const toTs = hasta ? Date.parse(`${hasta}T23:59:59.999Z`) : null;
+  /** Día calendario America/Bogota (YYYY-MM-DD del picker), no medianoche UTC. */
+  const fromTs =
+    desde && /^\d{4}-\d{2}-\d{2}$/.test(String(desde).trim())
+      ? Date.parse(`${String(desde).trim()}T00:00:00-05:00`)
+      : desde
+        ? Date.parse(`${desde}T00:00:00.000Z`)
+        : null;
+  const toTs =
+    hasta && /^\d{4}-\d{2}-\d{2}$/.test(String(hasta).trim())
+      ? Date.parse(`${String(hasta).trim()}T23:59:59.999-05:00`)
+      : hasta
+        ? Date.parse(`${hasta}T23:59:59.999Z`)
+        : null;
   const lim = Math.max(1, Math.min(1000, Number(limit) || 120));
 
   const out = rows

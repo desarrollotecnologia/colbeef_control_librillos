@@ -133,11 +133,7 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
     return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos' };
   }
 
-  if (
-    t.includes('global hides') ||
-    t.includes('salomon') ||
-    (retLibr && /\bhides\b/.test(t))
-  ) {
+  if (t.includes('global hides') || t.includes('salomon')) {
     return { codigo: 'global_hides', etiqueta: 'Global Hides' };
   }
 
@@ -160,7 +156,7 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
     if (/\basurcarnes\b/.test(destinoEnObs)) return { codigo: 'asurcarnes', etiqueta: 'Asurcarnes' };
     if (/\bcat\b/.test(destinoEnObs)) return { codigo: 'cat', etiqueta: 'CAT' };
     if (/\bderivados?\b/.test(destinoEnObs)) return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos' };
-    if (/\bglobal hides\b|\bsalomon\b|\bhides\b/.test(destinoEnObs)) {
+    if (/\bglobal hides\b|\bsalomon\b/.test(destinoEnObs)) {
       return { codigo: 'global_hides', etiqueta: 'Global Hides' };
     }
   }

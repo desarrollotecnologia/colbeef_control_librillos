@@ -768,27 +768,13 @@ const consultarLibrillos = async (fecha = null) => {
             fechaISO,
             idsOrdenados
           );
-          // Si falta observación del día para algún ID del plan, usar la última observación conocida.
+          // Si falta parte del día para un ID del plan, NO reusar observación histórica:
+          // mezclarla como si fuera del día produce doble conteo entre fechas consecutivas.
           const idsFaltantes = idsOrdenados.filter((id) => !parteMap.has(String(id)));
-          const ultObsMap = await observacionesUltimasPorIds(idsFaltantes);
           idsConParte = new Set(parteMap.keys());
           librillos = idsOrdenados.map((id) => {
             const row = parteMap.get(id);
             if (row) return row;
-            const back = ultObsMap.get(String(id));
-            if (back) {
-              return {
-                id_producto: id,
-                identificacion: back.identificacion || null,
-                observaciones: back.observaciones || null,
-                usuario_planillaje: back.usuario_planillaje || null,
-                accion: null,
-                id_tipo_parte_producto: ID_TIPO_PARTE_COLBEEF,
-                // Mantener fecha operativa solicitada, aunque la observación sea respaldo histórico.
-                fecha: fechaISO,
-                observacion_origen: 'respaldo_ultima_observacion',
-              };
-            }
             return {
               id_producto: id,
               identificacion: null,
@@ -796,7 +782,7 @@ const consultarLibrillos = async (fecha = null) => {
               accion: null,
               id_tipo_parte_producto: ID_TIPO_PARTE_COLBEEF,
               fecha: fechaISO,
-              observacion_origen: 'sin_observacion',
+              observacion_origen: 'sin_registro_dia',
             };
           });
           if (COLBEEF_DEBUG) {
@@ -911,11 +897,13 @@ const consultarLibrillos = async (fecha = null) => {
           obsParte
         );
         const { observacion, cliente_destino, plaza } = parsearObservacion(obsFuente);
-        // Para clasificar, usar el mejor candidato de cliente:
-        // 1) cliente parseado desde "RETIRAR LIBRILLOS"
-        // 2) propietario de la vista cuando el parseo viene vacío.
-        // Esto evita inflar ASURCARNES por fallback en retiros sin cliente explícito.
-        const clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
+        // Para clasificar, usar fuentes operativas (cliente parseado / empresa / destino),
+        // evitando propietario como fallback comercial porque infla ASURCARNES.
+        const clienteClasificacion = textoNoVacio(
+          cliente_destino,
+          v.empresa_destino,
+          v.destino
+        );
         const ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
         const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion);
         /** Plaza operativa: primero la plaza parseada desde observación (p.ej. "01014 CAVA"), luego sucursal BD. */

@@ -1348,22 +1348,6 @@ function minutosDesdeMedianocheBogota(date = new Date()) {
   return h * 60 + m;
 }
 
-/** ¿El instante `fechaIso` es el mismo día calendario en Bogotá y ≥ 13:30 allí? */
-function cambioHistoricoPasaCortePlanillaje(fechaIso) {
-  const s = String(fechaIso || '').trim();
-  if (!s) return false;
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return false;
-  const ymd = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
-  const corte = new Date(`${ymd}T13:30:00-05:00`);
-  return d.getTime() >= corte.getTime();
-}
-
 /** Resta un día calendario a YYYY-MM-DD (sin depender del huso del navegador). */
 function diaAnteriorISO(iso) {
   const [y, m, d] = String(iso).split('-').map(Number);
@@ -4009,11 +3993,10 @@ async function cargarHistoricoCambios() {
     historicoCambios = (Array.isArray(payload?.items) ? payload.items : [])
       .map(normalizarCambioHistorico)
       .filter((r) => r.esCambioRealObservacion)
-      .filter((r) => cambioHistoricoPasaCortePlanillaje(r.fecha))
       .sort((a, b) => Date.parse(b.fecha || 0) - Date.parse(a.fecha || 0));
     const lbl = document.getElementById('historico-rango-label');
     if (lbl) {
-      lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios (desde 13:30 Bogotá)`;
+      lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios`;
     }
     filtrarHistoricoCambios();
   });
@@ -5870,11 +5853,12 @@ function plazaOperativaDesdeObservacion(raw) {
 }
 
 /** Aplica `plazas-alias.json` (exact + contains) sobre una etiqueta base y variantes de búsqueda. */
-function aplicarMapaPlazasAlias(base, variantesParaContains) {
+function aplicarMapaPlazasAlias(base, variantesParaContains, opts = {}) {
   const baseU = String(base).toUpperCase();
   const exact = PLAZAS_ALIAS?.exact || {};
   if (exact[baseU]) return String(exact[baseU]).trim();
 
+  if (opts?.allowContains === false) return base;
   const contains = PLAZAS_ALIAS?.contains || {};
   const universo = (variantesParaContains || [])
     .map((x) => String(x || '').toUpperCase())
@@ -5915,8 +5899,9 @@ function puestoNormalizado(d) {
   // Solo si no hay sucursal, se usa destino como respaldo.
   const sucOk = (esPlaceholderTexto(suc) || esEtiquetaInstruccionOperativa(suc)) ? '' : suc;
   const destOk = (esPlaceholderTexto(dest) || esEtiquetaInstruccionOperativa(dest)) ? '' : dest;
-  const base = sucOk || destOk || '—';
-  return aplicarMapaPlazasAlias(base, [suc, dest, base]);
+  if (sucOk) return aplicarMapaPlazasAlias(sucOk, [sucOk], { allowContains: false });
+  const base = destOk || '—';
+  return aplicarMapaPlazasAlias(base, [dest, base]);
 }
 
 /**
@@ -5930,6 +5915,10 @@ function ubicacionPlaza(d) {
   const apiPlaza = esPlaceholderTexto(apiPlazaRaw) ? '' : apiPlazaRaw;
   const sucRaw = limpiarPuestoTxt(d?.sucursal);
   const suc = esPlaceholderTexto(sucRaw) ? '' : sucRaw;
+  if (suc && !esEtiquetaInstruccionOperativa(suc)) {
+    // Si hay sucursal real (p.ej. CRAX), no sobreescribirla con alias por "contains".
+    return aplicarMapaPlazasAlias(suc, [suc], { allowContains: false });
+  }
   const obsFull = textoObservacionFuente(d);
   const obsPlazaRaw = plazaOperativaDesdeObservacion(obsFull) || plazaDesdeTextoObservacion(obsFull);
   const obsPlaza = esPlaceholderTexto(obsPlazaRaw) ? '' : limpiarPuestoTxt(obsPlazaRaw);
