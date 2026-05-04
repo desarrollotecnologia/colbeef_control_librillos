@@ -2388,9 +2388,11 @@ function fechaGuiaLarga(iso) {
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
-const GUIA_PDF_MARGIN_MM = 6;
+/** Márgenes físicos del PDF (carta); ~10mm ≈ 1cm, seguro en la mayoría de impresoras. */
+const GUIA_PDF_MARGIN_MM = 10;
 const GUIA_PDF_PAGE_FORMAT = 'letter';
-const GUIA_PDF_CONTENT_WIDTH_PX = 770;
+/** Ancho del bloque capturado (px); algo menor que 816px de carta a 96dpi deja holgura al escalar. */
+const GUIA_PDF_CONTENT_WIDTH_PX = 736;
 function normalizarCategoriaGuiaCodigo(valor) {
   const t = String(valor || '').trim().toLowerCase();
   if (!t) return '';
@@ -2833,7 +2835,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   return `
   <style>
-    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;font-weight:600;background:#fff}
+    .guia-pdf-root{box-sizing:border-box;max-width:100%;font-family:Arial,sans-serif;color:#111;margin:0;padding:12px 20px;font-size:11px;font-weight:600;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
     .logo{font-family:'Arial Black',Arial,sans-serif;font-size:58px;font-weight:900;line-height:0.95;letter-spacing:-2px;white-space:nowrap}
     .logo .a{color:#10c45a}.logo .b{color:#f10d1f;font-size:0.42em;font-weight:900;vertical-align:0.12em;margin-left:1px}
@@ -2845,7 +2847,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .sec-title{font-size:17px;margin:6px 0 4px;font-weight:800}
     .k{font-weight:800}
     .v{font-weight:900;color:#c00}
-    .resumen{font-size:22px;font-weight:700;margin-top:8px;line-height:1.2}
+    .resumen{font-size:22px;font-weight:700;margin-top:8px;line-height:1.25;overflow-wrap:break-word;word-wrap:break-word}
     .firma{margin-top:8px}
     .nota{font-size:10px;font-weight:600;margin-top:8px;line-height:1.25}
   </style>
