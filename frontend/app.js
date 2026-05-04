@@ -2395,11 +2395,12 @@ const COLBEEF_LOGO_FALLBACK_DATA_URL = `data:image/svg+xml;utf8,${encodeURICompo
 
 function normalizarLogoColbeefDataUrl(raw) {
   const v = String(raw || '').trim();
+  // Forzamos logo limpio para evitar fondos/artefactos del base64 antiguo.
   if (!v) return COLBEEF_LOGO_FALLBACK_DATA_URL;
-  // Algunas cargas antiguas vienen con prefijo png pero contenido JPEG (/9j).
-  if (v.startsWith('data:image/png;base64,/9j/')) {
-    return `data:image/jpeg;base64,${v.slice('data:image/png;base64,'.length)}`;
-  }
+  if (v.startsWith('data:image/svg+xml')) return v;
+  // Algunas cargas antiguas vienen con prefijo png pero contenido JPEG (/9j/).
+  // En estos casos usamos fallback para evitar resultados inestables en html2canvas/PDF.
+  if (v.startsWith('data:image/png;base64,/9j/')) return COLBEEF_LOGO_FALLBACK_DATA_URL;
   if (v.startsWith('data:image/')) return v;
   return COLBEEF_LOGO_FALLBACK_DATA_URL;
 }
@@ -2965,23 +2966,37 @@ async function descargarPdfGuiaDespacho() {
     try {
       const h2p = await ensureHtml2PdfDisponible();
       const htmlForPdf = `<div style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;box-sizing:border-box;background:#fff">${html}</div>`;
-      await h2p()
-        .set({
-          margin: GUIA_PDF_MARGIN_MM,
-          filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
-          image: { type: 'jpeg', quality: 0.96 },
-          html2canvas: {
-            scale: 2,
-            useCORS: true,
-            logging: false,
-            backgroundColor: '#ffffff',
-            windowWidth: GUIA_PDF_CONTENT_WIDTH_PX,
-          },
-          jsPDF: { unit: 'mm', format: GUIA_PDF_PAGE_FORMAT, orientation: 'portrait' },
-          pagebreak: { mode: ['css', 'legacy'] },
-        })
-        .from(htmlForPdf, 'string')
-        .save();
+      const host = document.createElement('div');
+      host.style.position = 'fixed';
+      host.style.left = '-100000px';
+      host.style.top = '0';
+      host.style.background = '#fff';
+      host.style.zIndex = '-1';
+      host.innerHTML = htmlForPdf;
+      document.body.appendChild(host);
+      try {
+        const sourceEl = host.firstElementChild;
+        if (!sourceEl) throw new Error('No se pudo preparar el contenido PDF');
+        await h2p()
+          .set({
+            margin: GUIA_PDF_MARGIN_MM,
+            filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
+            image: { type: 'jpeg', quality: 0.96 },
+            html2canvas: {
+              scale: 2,
+              useCORS: true,
+              logging: false,
+              backgroundColor: '#ffffff',
+              windowWidth: GUIA_PDF_CONTENT_WIDTH_PX,
+            },
+            jsPDF: { unit: 'mm', format: GUIA_PDF_PAGE_FORMAT, orientation: 'portrait' },
+            pagebreak: { mode: ['css', 'legacy'] },
+          })
+          .from(sourceEl)
+          .save();
+      } finally {
+        host.remove();
+      }
       mostrarToast('Guia PDF generada', 'ok');
       enviarEventoAnalytics({
         eventName: 'export_pdf',
