@@ -2830,12 +2830,17 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     `;
   }
 
+  const logoHtml = logoDataUrl
+    ? `<img src="${logoDataUrl}" alt="Colbeef" class="logo-img">`
+    : `<div class="logo"><span class="a">Col</span><span class="b">beef</span></div>`;
+
   return `
   <style>
     .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
     .logo{font-size:62px;font-weight:800;line-height:0.95;letter-spacing:-1px}
     .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
+    .logo-img{display:block;width:220px;max-width:100%;height:70px;object-fit:contain;object-position:left center}
     .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
@@ -2852,7 +2857,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
   <div class="h-top">
     <div>
-      <div class="logo"><span class="a">Col</span><span class="b">beef</span></div>
+      ${logoHtml}
     </div>
     <table class="t" style="max-width:420px">
       <tr><th>FECHA DE EXPEDICION</th><th>Numero</th></tr>
