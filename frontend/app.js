@@ -32,6 +32,8 @@ let _loaderVisibleSince = 0;
 const APP_LOADER_SHOW_DELAY_MS = 90;
 /** Tiempo mínimo visible una vez mostrado (solo anti-parpadeo; no alargar trabajo real). */
 const APP_LOADER_MIN_VISIBLE_MS = 160;
+/** Evita loaders eternos cuando una petición se queda colgada. */
+const FETCH_TIMEOUT_MS = 25000;
 
 function setAppLoaderText(msg) {
   const txt = document.getElementById('app-loader-text');
@@ -81,6 +83,18 @@ async function runWithAppLoader(msg, fn) {
     return await fn();
   } finally {
     endAppLoader();
+  }
+}
+
+async function fetchConTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ms = Number(timeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) return fetch(url, opts);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(new Error('timeout')), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
   }
 }
 
@@ -1694,7 +1708,7 @@ function cambiarSubtabInventario(tab) {
 // ── FETCH ─────────────────────────────────────────────────────────────────────
 async function fetchPorFecha(fecha) {
   const url = fecha ? `${API_URL}?fecha=${fecha}` : API_URL;
-  const res = await fetch(url);
+  const res = await fetchConTimeout(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -1704,7 +1718,7 @@ async function fetchSalidas() {
     return cacheSalidasFront.data;
   }
   try {
-    const res = await fetch(SALIDAS_URL);
+    const res = await fetchConTimeout(SALIDAS_URL);
     if (!res.ok) return [];
     const data = await res.json();
     const out = normalizarListaSalidas(data);
@@ -1718,7 +1732,7 @@ async function fetchSalidas() {
 async function fetchResumenMacro(fecha) {
   if (!fecha) return null;
   try {
-    const res = await fetch(`${API_URL}/resumen?fecha=${encodeURIComponent(fecha)}`);
+    const res = await fetchConTimeout(`${API_URL}/resumen?fecha=${encodeURIComponent(fecha)}`);
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -1739,7 +1753,7 @@ function normalizarListaSalidas(lista) {
 
 async function fetchObservacionesPorFecha(fecha) {
   try {
-    const res = await fetch(`${API_URL}/observaciones?fecha=${encodeURIComponent(fecha)}`);
+    const res = await fetchConTimeout(`${API_URL}/observaciones?fecha=${encodeURIComponent(fecha)}`);
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -1965,11 +1979,10 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     sumarAgr(codigosBase.has(codAjustado) ? codAjustado : codRaw, 1);
   });
   const mapAgr = conteoAgr;
+  /** Misma regla que backend `obtenerResumenMacroPorFecha` e historial crudas: solo texto CRUDAS en obs. */
   const totalCrudas = (rm && !usarSoloLibrillos)
     ? Number(rm?.categorias?.chunchullas_crudas || 0)
-    : (baseLista || []).filter((d) =>
-        /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''))
-      ).length;
+    : (baseLista || []).filter(esVistaHistorialCrudasSolo).length;
 
   const vAsurGlo = rm ? Number(rm?.categorias?.asurcarnes_glo || 0) : (mapAgr.get('asurcarnes_glo') || 0);
   const vAsurCol = rm ? Number(rm?.categorias?.asurcarnescol || 0) : (mapAgr.get('asurcarnescol') || 0);
@@ -2041,8 +2054,25 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const totalFilaDerivados = Number(vDeriv || 0) + Number(vAsur || 0);
   const totalFilaCat = Number(vCat || 0) + Number(vAsurCol || 0);
   const totalFilaGlobalHides = Number(vGlobal || 0) + Number(vAsurGlo || 0);
+  const totalOtrosSin = Number(vOtros || 0) + Number(vSinDestino || 0);
   const totalTablaLibros =
-    totalFilaCocidos + totalFilaDerivados + totalFilaCat + totalFilaGlobalHides;
+    totalFilaCocidos +
+    totalFilaDerivados +
+    totalFilaCat +
+    totalFilaGlobalHides +
+    totalOtrosSin;
+
+  const sumaCategoriasComercial =
+    vAsurGlo +
+    vAsurCol +
+    vGlobal +
+    vAsur +
+    vCat +
+    vDeriv +
+    totalCocidos +
+    vOtros +
+    vSinDestino;
+  const cuadreOk = sumaCategoriasComercial === totalGeneral;
 
   /**
    * Partición disjunta operativa (para columnas Pendientes/Salió/Despachado).
@@ -2071,7 +2101,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const estCrudasHoy = resumenEstado(listaCrudasHoy);
 
   const tbody = `
-    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td>${totalCrudas}</td></tr>
+    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS <span style="font-weight:600;font-size:10px;color:#555">(marca en obs.; ya van dentro de las filas de abajo)</span></td><td>${totalCrudas}</td></tr>
     <tr class="resumen-dia-asur-glo"><td>ASURCARNESGLO</td><td>${vAsurGlo}</td></tr>
     <tr class="resumen-dia-asur-col"><td>ASURCARNESCOL</td><td>${vAsurCol}</td></tr>
     <tr class="resumen-dia-global"><td>GLOBAL HIDES SAS</td><td>${vGlobal}</td></tr>
@@ -2080,12 +2110,15 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <tr class="resumen-dia-deriv"><td>DERIVADOS</td><td>${vDeriv}</td></tr>
     ${(vOtros || vSinDestino) ? `<tr><td>OTROS / SIN DESTINO</td><td>${vOtros + vSinDestino}</td></tr>` : ''}
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
-    <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
+    <tr class="resumen-dia-total"><td>TOTAL <span style="font-weight:600;font-size:10px;color:#555">(suma solo categorías comerciales)</span></td><td>${totalGeneral}</td></tr>
   `;
   return `
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
-      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
+      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong> unidades planilladas ·
+        suma ASURCARNESGLO…COCIDOS${(vOtros || vSinDestino) ? ' + OTROS/SIN DESTINO' : ''} = <strong>${sumaCategoriasComercial}</strong>
+        ${cuadreOk ? '' : ` <span style="color:#b71c1c;font-weight:700">(revisar: no cuadra con ${totalGeneral})</span>`}</p>
+      <p class="rep-bloque-resumen-meta" style="font-size:11px;color:var(--tx3);margin-top:-6px">No sume la fila amarilla al total: es un conteo cruzado de cuántas observaciones llevan CRUDAS.</p>
       <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
           <thead><tr><th>Categoría</th><th>Total</th></tr></thead>
@@ -2095,7 +2128,8 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       <div class="tw rep-table-wrap" style="margin-top:14px">
         <p class="rep-bloque-resumen-meta" style="margin:0 0 8px;font-size:12px;color:var(--tx3)">
           COCIDOS = COCIDOS · DERIVADOS = DERIVADOS + ASURCARNES · CAT = CAT + ASURCARNESCOL ·
-          GLOBAL HIDES = GLOBAL HIDES + ASURCARNESGLO.
+          GLOBAL HIDES = GLOBAL HIDES + ASURCARNESGLO
+          ${totalOtrosSin ? ' · OTROS/SIN DESTINO = filas no agrupadas arriba.' : '.'}
         </p>
         <table class="dt" style="max-width:460px">
           <thead>
@@ -2109,6 +2143,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
             <tr><td>DERIVADOS</td><td>${totalFilaDerivados}</td></tr>
             <tr><td>CAT</td><td>${totalFilaCat}</td></tr>
             <tr><td>GLOBAL HIDES</td><td>${totalFilaGlobalHides}</td></tr>
+            ${totalOtrosSin ? `<tr><td>OTROS / SIN DESTINO</td><td>${totalOtrosSin}</td></tr>` : ''}
             <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalTablaLibros}</td></tr>
           </tbody>
         </table>
@@ -3979,7 +4014,7 @@ async function cargarHistoricoCambios() {
     } catch {
       // ignore
     }
-    const res = await fetch(`${AUDITORIA_CAMBIOS_URL}?${q.toString()}`, { headers });
+    const res = await fetchConTimeout(`${AUDITORIA_CAMBIOS_URL}?${q.toString()}`, { headers });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       const msg = payload?.error || `HTTP ${res.status}`;

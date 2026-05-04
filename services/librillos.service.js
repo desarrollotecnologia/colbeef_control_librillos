@@ -1037,6 +1037,8 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     derivados: Number(countCod.get('derivados_carnicos') || 0),
     cocidos: Number(countCod.get('cocidos') || 0),
     total: rows.length,
+    /** Suma de todas las claves en countCod (cada fila cuenta una sola vez). Debe coincidir con `total`. */
+    suma_particion_codigos: [...countCod.values()].reduce((a, b) => a + Number(b || 0), 0),
   };
 
   const resumenLibros = {
