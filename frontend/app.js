@@ -9,6 +9,10 @@ const AUDITORIA_CAMBIOS_URL = '/api/auditoria/cambios';
 const AUTO_REFRESH_DATOS_MS = 15000;
 /** Detección de cambios en observaciones (toast + datos). Un poco más frecuente. */
 const AUTO_REFRESH_OBS_MS = 10000;
+/** Planillaje Bogotá: sin llamadas API pesadas hasta ~13:15; 13:15–13:30 cada 60s; desde 13:30 cada AUTO_REFRESH_OBS_MS. */
+const PLANILLAJE_OBS_POLL_BOGOTA_WARM_MIN = 13 * 60 + 15;
+const PLANILLAJE_OBS_POLL_BOGOTA_FULL_MIN = 13 * 60 + 30;
+const PLANILLAJE_OBS_POLL_WARM_INTERVAL_MS = 60000;
 /** Heartbeat de uso para estimar tiempo activo en la app. */
 const ANALYTICS_HEARTBEAT_MS = 60000;
 
@@ -1121,6 +1125,7 @@ let _autoInvSnapshot = '';
 let _autoGlobalTimer = null;
 let _autoObsTimer = null;
 let _autoObsSnapshot = '';
+let _obsPollVentanaLentaUltMs = 0;
 let _obsTextoMapPrev = new Map();
 let historialCambiosObs = [];
 /** Historial de cambios de observación solo en este navegador (sin tablas en servidor). */
@@ -1327,6 +1332,36 @@ function horaActualBogota() {
   }).formatToParts(new Date());
   const h = parts.find((p) => p.type === 'hour')?.value;
   return h != null ? parseInt(h, 10) : 12;
+}
+
+/** Minutos desde medianoche en America/Bogota (0–1439). */
+function minutosDesdeMedianocheBogota(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Bogota',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(date);
+  const h = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+  const m = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
+  if (Number.isNaN(h) || Number.isNaN(m)) return 12 * 60;
+  return h * 60 + m;
+}
+
+/** ¿El instante `fechaIso` es el mismo día calendario en Bogotá y ≥ 13:30 allí? */
+function cambioHistoricoPasaCortePlanillaje(fechaIso) {
+  const s = String(fechaIso || '').trim();
+  if (!s) return false;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return false;
+  const ymd = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+  const corte = new Date(`${ymd}T13:30:00-05:00`);
+  return d.getTime() >= corte.getTime();
 }
 
 /** Resta un día calendario a YYYY-MM-DD (sin depender del huso del navegador). */
@@ -3781,7 +3816,9 @@ async function irHistorialYMostrarCambios(cambios) {
 
 function textoObsHistorico(payload) {
   if (!payload || typeof payload !== 'object') return '';
-  return String(payload.observacion ?? payload.observaciones ?? '').trim();
+  const fusion = String(payload.observaciones ?? payload.observacion ?? '').trim();
+  if (fusion) return fusion;
+  return String(payload.observacion_plan ?? '').trim();
 }
 
 function idProductoHistorico(item) {
@@ -3860,8 +3897,8 @@ function pintarTablaHistoricoCambios() {
       <td>${escapeHtml(r.momento)}</td>
       <td>${escapeHtml(r.usuario)}</td>
       <td>${escapeHtml(r.idProducto || '—')}</td>
-      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 120))}</td>
-      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 120))}</td>
+      <td class="hist-obs-full">${escapeHtml(r.antes || '—')}</td>
+      <td class="hist-obs-full">${escapeHtml(r.despues || '—')}</td>
       <td><span class="hist-badge ${badgeCls}">${escapeHtml(r.tipoLabel)}</span></td>
     </tr>`;
   }).join('');
@@ -3899,8 +3936,8 @@ function pintarTablaHistoricoCrudas() {
       <td>${escapeHtml(r.momento)}</td>
       <td>${escapeHtml(r.usuario)}</td>
       <td>${escapeHtml(r.idProducto)}</td>
-      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 100))}</td>
-      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 100))}</td>
+      <td class="hist-obs-full">${escapeHtml(r.antes || '—')}</td>
+      <td class="hist-obs-full">${escapeHtml(r.despues || '—')}</td>
     </tr>`;
   }).join('');
 }
@@ -3972,9 +4009,12 @@ async function cargarHistoricoCambios() {
     historicoCambios = (Array.isArray(payload?.items) ? payload.items : [])
       .map(normalizarCambioHistorico)
       .filter((r) => r.esCambioRealObservacion)
+      .filter((r) => cambioHistoricoPasaCortePlanillaje(r.fecha))
       .sort((a, b) => Date.parse(b.fecha || 0) - Date.parse(a.fecha || 0));
     const lbl = document.getElementById('historico-rango-label');
-    if (lbl) lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios`;
+    if (lbl) {
+      lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios (desde 13:30 Bogotá)`;
+    }
     filtrarHistoricoCambios();
   });
 }
@@ -4004,6 +4044,13 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
 
 async function refrescarSiCambioObservacion() {
   if (document.hidden) return;
+  const minBog = minutosDesdeMedianocheBogota();
+  if (minBog < PLANILLAJE_OBS_POLL_BOGOTA_WARM_MIN) return;
+  if (minBog < PLANILLAJE_OBS_POLL_BOGOTA_FULL_MIN) {
+    const now = Date.now();
+    if (now - _obsPollVentanaLentaUltMs < PLANILLAJE_OBS_POLL_WARM_INTERVAL_MS) return;
+    _obsPollVentanaLentaUltMs = now;
+  }
   const fecha = document.getElementById('fecha-global')?.value || hoyISO();
   try {
     const [datosFresh, obsDia] = await Promise.all([

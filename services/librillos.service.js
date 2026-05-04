@@ -257,13 +257,14 @@ async function obtenerColumnaUsuarioPlanillaje() {
 function snapshotPlanillajeDesdeRows(rows) {
   const m = new Map();
   (rows || []).forEach((r) => {
-    const obsCompleta = String(r?.observaciones || r?.observacion || '').toUpperCase();
+    const obsCompleta = String(r?.observaciones ?? r?.observacion ?? '').toUpperCase();
     const tieneRetiroLibrillos =
       /\bRETIRAR?\s+LIBRIL+OS?\b/.test(obsCompleta) ||
       /\bRETIRAR?\s+LIBRIL+O\b/.test(obsCompleta) ||
       /\bRETIRAR?\s+LIBRIL\b/.test(obsCompleta);
     const tienePlanFaena = String(r?.observacion_plan || '').trim().length > 0;
-    const tieneObsActual = String(r?.observacion || '').trim().length > 0;
+    const tieneObsActual =
+      String(r?.observaciones || r?.observacion || '').trim().length > 0;
     const relevantePlanillaje = tieneRetiroLibrillos || tienePlanFaena || tieneObsActual;
     if (!relevantePlanillaje) return;
 
@@ -272,7 +273,8 @@ function snapshotPlanillajeDesdeRows(rows) {
     const identificacion = String(r?.identificacion || '').trim();
     const propietario = String(r?.propietario || '').trim();
     const clienteDestino = String(r?.cliente_destino || '').trim();
-    const observacion = String(r?.observacion || r?.observaciones || '').trim();
+    /** Texto fusionado completo (obsFuente); no usar solo `observacion` parseada o se pierde el resto. */
+    const observacion = String(r?.observaciones || r?.observacion || '').trim();
     const empresaDestino = String(r?.empresa_destino || '').trim();
     const usernameBd = String(r?.usuario_planillaje || '').trim();
     m.set(id, {

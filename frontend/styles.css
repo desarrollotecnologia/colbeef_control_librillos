@@ -1942,6 +1942,14 @@ body{
   background:var(--rojo-claro);
   border-color:rgba(192,57,43,.4);
 }
+#vista-historico .dt td.hist-obs-full{
+  white-space:pre-wrap;
+  word-break:break-word;
+  max-width:min(520px,36vw);
+  vertical-align:top;
+  font-size:12px;
+  line-height:1.35;
+}
 
 /* Punto discreto para acceso privado a analitica (solo quien conoce Shift+click). */
 .btn-analytics-secret{
