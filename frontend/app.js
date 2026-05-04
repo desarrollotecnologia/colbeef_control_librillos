@@ -1740,6 +1740,16 @@ async function fetchResumenMacro(fecha) {
   }
 }
 
+/** Evita mezclar respuestas parciales del API (NaN en filas) con conteos locales. */
+function resumenMacroCompleto(rm) {
+  return !!(
+    rm &&
+    rm.categorias &&
+    rm.resumen_libros &&
+    Number.isFinite(Number(rm.categorias.total))
+  );
+}
+
 function normalizarIdProducto(v) {
   return String(v ?? '').trim();
 }
@@ -2100,52 +2110,28 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const estLibrillosHoy = resumenEstado(listaLibrillosHoy);
   const estCrudasHoy = resumenEstado(listaCrudasHoy);
 
-  /** Filas comerciales con movimiento; las que van en 0 no se ocultan del cálculo, solo de la tabla (evita “pantalla rota”). */
-  const filasComercial = [
-    { label: 'ASURCARNESGLO', v: vAsurGlo, cls: 'resumen-dia-asur-glo' },
-    { label: 'ASURCARNESCOL', v: vAsurCol, cls: 'resumen-dia-asur-col' },
-    { label: 'GLOBAL HIDES SAS', v: vGlobal, cls: 'resumen-dia-global' },
-    { label: 'ASURCARNES', v: vAsur, cls: 'resumen-dia-asur' },
-    { label: 'CAT', v: vCat, cls: 'resumen-dia-cat' },
-    { label: 'DERIVADOS', v: vDeriv, cls: 'resumen-dia-deriv' },
-    { label: 'COCIDOS', v: totalCocidos, cls: 'resumen-dia-coc' },
-  ];
-  const comercialOcultasCero = filasComercial.filter((x) => x.v <= 0).map((x) => x.label);
-  const filasComercialHtml = filasComercial
-    .filter((x) => x.v > 0)
-    .map(
-      (x) =>
-        `<tr class="${x.cls}"><td>${escapeHtml(x.label)}</td><td style="text-align:right">${x.v}</td></tr>`
-    )
-    .join('');
-  const notaComercialCeros =
-    comercialOcultasCero.length > 0
-      ? `<tr><td colspan="2" style="font-size:11px;color:var(--tx3);padding:8px 10px;border-top:1px dashed #bbb;line-height:1.35">Sin movimiento este día (0 uds.): <strong>${escapeHtml(comercialOcultasCero.join(', '))}</strong>. Es normal: no todas las agrupaciones tienen piezas cada día.</td></tr>`
-      : '';
-
   const filasOtrosSin =
     vOtros || vSinDestino
       ? `<tr><td>OTROS / SIN DESTINO</td><td style="text-align:right">${vOtros + vSinDestino}</td></tr>`
       : '';
 
   const tbody = `
-    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS <span style="font-weight:600;font-size:10px;color:#555">(marca en obs.; ya van dentro de las filas de abajo)</span></td><td style="text-align:right">${totalCrudas}</td></tr>
-    ${filasComercialHtml}
+    <tr class="resumen-dia-head"><td>CHUNCHULLAS CRUDAS</td><td style="text-align:right">${totalCrudas}</td></tr>
+    <tr class="resumen-dia-asur-glo"><td>ASURCARNESGLO</td><td style="text-align:right">${vAsurGlo}</td></tr>
+    <tr class="resumen-dia-asur-col"><td>ASURCARNESCOL</td><td style="text-align:right">${vAsurCol}</td></tr>
+    <tr class="resumen-dia-global"><td>GLOBAL HIDES SAS</td><td style="text-align:right">${vGlobal}</td></tr>
+    <tr class="resumen-dia-asur"><td>ASURCARNES</td><td style="text-align:right">${vAsur}</td></tr>
+    <tr class="resumen-dia-cat"><td>CAT</td><td style="text-align:right">${vCat}</td></tr>
+    <tr class="resumen-dia-deriv"><td>DERIVADOS</td><td style="text-align:right">${vDeriv}</td></tr>
     ${filasOtrosSin}
-    ${notaComercialCeros}
-    <tr class="resumen-dia-total"><td>TOTAL <span style="font-weight:600;font-size:10px;color:#555">(suma solo categorías comerciales)</span></td><td style="text-align:right">${totalGeneral}</td></tr>
+    <tr class="resumen-dia-coc"><td>COCIDOS</td><td style="text-align:right">${totalCocidos}</td></tr>
+    <tr class="resumen-dia-total"><td>TOTAL</td><td style="text-align:right">${totalGeneral}</td></tr>
   `;
   return `
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
-      <p class="rep-bloque-resumen-meta" style="font-size:11px;color:var(--tx3);line-height:1.45;margin-bottom:8px">
-        <strong>Guías de despacho</strong> usan otra agrupación (p. ej. CAT incluye ASURCARNESCOL; DERIVADOS incluye ASURCARNES).
-        <strong>Este resumen del día</strong> muestra <em>cada código comercial por separado</em> para cuadrar con operación. No compite con el PDF de guía.
-      </p>
-      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong> unidades planilladas ·
-        suma ASURCARNESGLO…COCIDOS${(vOtros || vSinDestino) ? ' + OTROS/SIN DESTINO' : ''} = <strong>${sumaCategoriasComercial}</strong>
-        ${cuadreOk ? '' : ` <span style="color:#b71c1c;font-weight:700">(revisar: no cuadra con ${totalGeneral})</span>`}</p>
-      <p class="rep-bloque-resumen-meta" style="font-size:11px;color:var(--tx3);margin-top:-6px">No sume la fila amarilla al total: es un conteo cruzado de cuántas observaciones llevan CRUDAS.</p>
+      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
+      ${!cuadreOk ? `<p class="rep-bloque-resumen-meta" style="font-size:12px;color:#b71c1c;font-weight:700">Atención: suma de categorías (${sumaCategoriasComercial}) distinta del total (${totalGeneral}). Revisar datos o servidor.</p>` : ''}
       <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
           <thead><tr><th>Categoría</th><th>Total</th></tr></thead>
@@ -2166,14 +2152,11 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
             </tr>
           </thead>
           <tbody>
-            ${totalFilaCocidos > 0 ? `<tr><td>COCIDOS</td><td style="text-align:right">${totalFilaCocidos}</td></tr>` : ''}
-            ${totalFilaDerivados > 0 ? `<tr><td>DERIVADOS</td><td style="text-align:right">${totalFilaDerivados}</td></tr>` : ''}
-            ${totalFilaCat > 0 ? `<tr><td>CAT</td><td style="text-align:right">${totalFilaCat}</td></tr>` : ''}
-            ${totalFilaGlobalHides > 0 ? `<tr><td>GLOBAL HIDES</td><td style="text-align:right">${totalFilaGlobalHides}</td></tr>` : ''}
+            <tr><td>COCIDOS</td><td style="text-align:right">${totalFilaCocidos}</td></tr>
+            <tr><td>DERIVADOS</td><td style="text-align:right">${totalFilaDerivados}</td></tr>
+            <tr><td>CAT</td><td style="text-align:right">${totalFilaCat}</td></tr>
+            <tr><td>GLOBAL HIDES</td><td style="text-align:right">${totalFilaGlobalHides}</td></tr>
             ${totalOtrosSin ? `<tr><td>OTROS / SIN DESTINO</td><td style="text-align:right">${totalOtrosSin}</td></tr>` : ''}
-            ${(!totalFilaCocidos && !totalFilaDerivados && !totalFilaCat && !totalFilaGlobalHides && !totalOtrosSin)
-              ? '<tr><td colspan="2" style="font-size:12px;color:var(--tx3)">Sin filas de resumen de libros con movimiento.</td></tr>'
-              : ''}
             <tr class="resumen-dia-total"><td>TOTAL</td><td style="text-align:right">${totalTablaLibros}</td></tr>
           </tbody>
         </table>
@@ -2228,16 +2211,9 @@ async function actualizarVistaTotales() {
     let salidas;
     let resumenMacro = null;
     try {
-      [datos, salidas, resumenMacro] = await Promise.all([
-        fetchPorFecha(fecha),
-        fetchSalidas(),
-        fetchResumenMacro(fecha),
-      ]);
-      if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
-        throw new Error('Resumen macro no disponible');
-      }
+      datos = await fetchPorFecha(fecha);
     } catch (e) {
-      mostrarToast('No se pudo cargar el resumen macro estricto. Intenta actualizar.', 'err');
+      mostrarToast(String(e?.message || e) || 'Error al cargar librillos', 'err');
       const prev = document.getElementById('rep-preview');
       const body = document.getElementById('rep-prev-body');
       const t = document.getElementById('rep-prev-title');
@@ -2247,6 +2223,16 @@ async function actualizarVistaTotales() {
         prev.style.display = 'block';
       }
       return false;
+    }
+    [salidas, resumenMacro] = await Promise.all([fetchSalidas(), fetchResumenMacro(fecha)]);
+    const macroCompleto = resumenMacroCompleto(resumenMacro);
+    if (!macroCompleto && Array.isArray(datos) && datos.length) {
+      mostrarToast(
+        'Resumen macro del servidor no disponible; se muestran totales con clasificación local.',
+        'warn',
+        { durationMs: 6000 }
+      );
+      resumenMacro = null;
     }
     const prev = document.getElementById('rep-preview');
     const body = document.getElementById('rep-prev-body');
@@ -2427,7 +2413,7 @@ async function obtenerContextoReporteCliente() {
     titulo,
     etiqueta,
     vistaReporte,
-    resumenMacro,
+    resumenMacro: resumenMacroCompleto(resumenMacro) ? resumenMacro : null,
   };
 }
 
@@ -6887,14 +6873,25 @@ function kpisAgrupacionesResumen(datos, fechaISO, salidas, kopts = {}) {
 
 async function descargarReporteGeneral() {
   const fecha = document.getElementById('fecha-global')?.value || hoyISO();
-  const [datos, resumenMacro] = await Promise.all([fetchPorFecha(fecha), fetchResumenMacro(fecha)]);
+  let datos;
+  try {
+    datos = await fetchPorFecha(fecha);
+  } catch (e) {
+    mostrarToast(String(e?.message || e) || 'Error al cargar', 'err');
+    return;
+  }
   if (!datos.length) {
     mostrarToast('Sin datos', 'err');
     return;
   }
-  if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
-    mostrarToast('Resumen macro no disponible. No se genera reporte para evitar datos inconsistentes.', 'err');
-    return;
+  const resumenMacroRaw = await fetchResumenMacro(fecha);
+  let resumenMacro = resumenMacroCompleto(resumenMacroRaw) ? resumenMacroRaw : null;
+  if (!resumenMacro) {
+    mostrarToast(
+      'Resumen macro del servidor no disponible; el HTML usa clasificación local (mismas filas que en pantalla).',
+      'warn',
+      { durationMs: 6500 }
+    );
   }
   const salidas = await fetchSalidas();
   const logoMarcaHtml = await obtenerMarcaExportColbeefImgHtml();
