@@ -2591,10 +2591,13 @@ function actualizarResumenControlGuia(data, manual) {
   const box = document.getElementById('guia-resumen-control');
   if (!box) return;
   const calc = calcularControlGuia(data, manual);
+  const pend = Number(data?.cabecera?.resumen_categoria?.pendientes_hoy || 0);
+  const pendTxt = Number.isFinite(pend) && pend > 0 ? String(Math.trunc(pend)) : '0';
   box.innerHTML = `
-    <strong>Control de cálculo:</strong>
-    LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong>
-    &nbsp;|&nbsp; TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} - ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong>
+    <strong>Control de cálculo</strong> (datos del día y categoría; ajuste/decomiso solo si los editaste)<br>
+    <span style="display:inline-block;margin-top:6px">Pendientes hoy (API): <strong>${pendTxt}</strong></span><br>
+    <span style="display:inline-block;margin-top:4px">LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong></span><br>
+    <span style="display:inline-block;margin-top:4px">TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} − ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong></span>
   `;
 }
 
@@ -2616,7 +2619,7 @@ function validarGuiaAntesDeGenerar(data, manual) {
   const calc = calcularControlGuia(data, manual);
   const errores = [];
   if (calc.ajusteValor > 0 && !String(manual?.ajusteFecha || '').trim()) {
-    errores.push('Cuando hay ajuste, debes seleccionar la fecha del ajuste.');
+    errores.push('Si hay ajuste, abre «Ajuste por día anterior…» y elige la fecha del ajuste (p. ej. ayer).');
   }
   if (calc.decomiso > calc.base + calc.ajusteValor) {
     errores.push('El decomiso no puede ser mayor al total calculado.');
@@ -2629,33 +2632,17 @@ function renderEditorEnVistaPreviaGuia() {
   if (!host) return;
   host.style.display = '';
   host.innerHTML = `
-    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
-      <div><label class="fl">Ajuste</label><input class="fi" id="inp-prev-ajuste-valor" type="number" min="0" step="1" style="width:120px"></div>
-      <div><label class="fl">Tipo</label><select class="fs" id="sel-prev-ajuste-tipo" style="width:180px"><option value="pendientes">Pendientes</option><option value="adicionales">Adicionales</option></select></div>
-      <div><label class="fl">Fecha ajuste</label><input class="fi" id="inp-prev-ajuste-fecha" type="date"></div>
-      <div><label class="fl">Decomiso</label><input class="fi" id="inp-prev-decomiso" type="number" min="0" step="1" style="width:120px"></div>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+      <span style="color:var(--tx2);font-size:13px;line-height:1.35">Edita arriba (categoría y, si aplica, el bloque <strong>Ajuste…</strong>). Aquí solo refrescas la vista.</span>
       <button type="button" class="btn-gen btn-gen-sec" id="btn-prev-actualizar">Actualizar vista previa</button>
     </div>
   `;
-  const map = [
-    ['inp-prev-ajuste-valor', 'inp-guia-ajuste-valor'],
-    ['sel-prev-ajuste-tipo', 'sel-guia-ajuste-tipo'],
-    ['inp-prev-ajuste-fecha', 'inp-guia-ajuste-fecha'],
-    ['inp-prev-decomiso', 'inp-guia-decomiso'],
-  ];
-  map.forEach(([a, b]) => {
-    const ea = document.getElementById(a);
-    const eb = document.getElementById(b);
-    if (ea && eb) ea.value = eb.value || '';
-  });
-  document.getElementById('btn-prev-actualizar')?.addEventListener('click', () => {
-    map.forEach(([a, b]) => {
-      const ea = document.getElementById(a);
-      const eb = document.getElementById(b);
-      if (ea && eb) eb.value = ea.value || '';
-    });
-    void generarVistaPreviaGuiaDespacho();
-  });
+  const btn = document.getElementById('btn-prev-actualizar');
+  if (btn) {
+    btn.onclick = () => {
+      void generarVistaPreviaGuiaDespacho();
+    };
+  }
 }
 
 async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
@@ -3067,6 +3054,15 @@ if (selGuiaCategoriaEl) {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', () => {
+      if (id === 'inp-guia-ajuste-valor') {
+        const v = valorEnteroGuia('inp-guia-ajuste-valor');
+        const inpFecha = document.getElementById('inp-guia-ajuste-fecha');
+        const fechaGuia = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+        const prev = diaAnteriorIsoLocal(fechaGuia);
+        if (v > 0 && inpFecha && prev && !String(inpFecha.value || '').trim()) {
+          inpFecha.value = prev;
+        }
+      }
       const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
       const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
       if (!fecha || !categoria) return;
