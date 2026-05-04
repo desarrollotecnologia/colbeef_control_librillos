@@ -2391,7 +2391,7 @@ function fechaGuiaLarga(iso) {
 const GUIA_PDF_MARGIN_MM = 6;
 const GUIA_PDF_PAGE_FORMAT = 'letter';
 const GUIA_PDF_CONTENT_WIDTH_PX = 770;
-const COLBEEF_LOGO_FALLBACK_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 170"><rect width="100%" height="100%" fill="white"/><text x="20" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="700" fill="#10c45a">Col</text><text x="220" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="700" fill="#f10d1f">beef</text></svg>')}`;
+const COLBEEF_LOGO_FALLBACK_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 170"><rect width="100%" height="100%" fill="white"/><text x="20" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#10c45a">Col</text><text x="220" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#f10d1f">beef</text></svg>')}`;
 
 function normalizarLogoColbeefDataUrl(raw) {
   const v = String(raw || '').trim();
