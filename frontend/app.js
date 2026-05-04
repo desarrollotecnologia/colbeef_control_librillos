@@ -2845,7 +2845,13 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     `;
   }
 
-  const logoHtml = `<img src="${logoDataUrl}" alt="Colbeef" class="logo-img">`;
+  const logoHtml = `
+    <svg class="logo-svg" viewBox="0 0 520 170" role="img" aria-label="Colbeef">
+      <rect width="100%" height="100%" fill="#ffffff"></rect>
+      <text x="20" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#10c45a">Col</text>
+      <text x="220" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#f10d1f">beef</text>
+    </svg>
+  `;
 
   return `
   <style>
@@ -2853,7 +2859,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
     .logo{font-size:62px;font-weight:800;line-height:0.95;letter-spacing:-1px}
     .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
-    .logo-img{display:block;width:240px;max-width:100%;height:78px;object-fit:contain;object-position:left center}
+    .logo-svg{display:block;width:240px;max-width:100%;height:78px}
     .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
