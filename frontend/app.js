@@ -2391,20 +2391,6 @@ function fechaGuiaLarga(iso) {
 const GUIA_PDF_MARGIN_MM = 6;
 const GUIA_PDF_PAGE_FORMAT = 'letter';
 const GUIA_PDF_CONTENT_WIDTH_PX = 770;
-const COLBEEF_LOGO_FALLBACK_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 170"><rect width="100%" height="100%" fill="white"/><text x="20" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#10c45a">Col</text><text x="220" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#f10d1f">beef</text></svg>')}`;
-
-function normalizarLogoColbeefDataUrl(raw) {
-  const v = String(raw || '').trim();
-  // Forzamos logo limpio para evitar fondos/artefactos del base64 antiguo.
-  if (!v) return COLBEEF_LOGO_FALLBACK_DATA_URL;
-  if (v.startsWith('data:image/svg+xml')) return v;
-  // Algunas cargas antiguas vienen con prefijo png pero contenido JPEG (/9j/).
-  // En estos casos usamos fallback para evitar resultados inestables en html2canvas/PDF.
-  if (v.startsWith('data:image/png;base64,/9j/')) return COLBEEF_LOGO_FALLBACK_DATA_URL;
-  if (v.startsWith('data:image/')) return v;
-  return COLBEEF_LOGO_FALLBACK_DATA_URL;
-}
-
 function normalizarCategoriaGuiaCodigo(valor) {
   const t = String(valor || '').trim().toLowerCase();
   if (!t) return '';
@@ -2804,9 +2790,6 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     : totalBase + ajusteValor;
   const totalFinal = Math.max(0, totalConAjuste - decomisoManual);
   const cantidadDespachados = totalFinal;
-  const logoDataUrl = normalizarLogoColbeefDataUrl(
-    opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
-  );
   const ajusteLabel = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
   const fechaAjusteTexto = ajusteFecha ? fechaGuiaSolo(ajusteFecha) : '';
   const signoAjuste = ajusteTipo === 'adicionales' ? '-' : '+';
@@ -2845,21 +2828,15 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     `;
   }
 
-  const logoHtml = `
-    <svg class="logo-svg" viewBox="0 0 520 170" role="img" aria-label="Colbeef">
-      <rect width="100%" height="100%" fill="#ffffff"></rect>
-      <text x="20" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#10c45a">Col</text>
-      <text x="220" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="900" fill="#f10d1f">beef</text>
-    </svg>
-  `;
+  // Logo en HTML (no SVG): html2canvas suele omitir <text> dentro de <svg> en el PDF.
+  const logoHtml = '<div class="logo"><span class="a">Col</span><span class="b">beef</span></div>';
 
   return `
   <style>
     .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-    .logo{font-size:62px;font-weight:800;line-height:0.95;letter-spacing:-1px}
-    .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
-    .logo-svg{display:block;width:240px;max-width:100%;height:78px}
+    .logo{font-family:'Arial Black',Arial,sans-serif;font-size:58px;font-weight:900;line-height:0.95;letter-spacing:-2px;white-space:nowrap}
+    .logo .a{color:#10c45a}.logo .b{color:#f10d1f;font-size:0.42em;font-weight:900;vertical-align:0.12em;margin-left:1px}
     .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
