@@ -2842,9 +2842,10 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   <style>
     .guia-pdf-root{box-sizing:border-box;max-width:100%;font-family:Arial,sans-serif;color:#111;margin:0;padding:12px 20px;font-size:11px;font-weight:600;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-    .logo{display:inline-flex;align-items:flex-end;flex-wrap:nowrap;gap:0;line-height:1;white-space:nowrap}
-    .logo .a{font-family:'Arial Black',Arial,sans-serif;font-size:56px;font-weight:900;color:#2c9f45;letter-spacing:-3px;line-height:1;padding-bottom:1px}
-    .logo .b{font-family:Arial,Helvetica,sans-serif;font-size:30px;font-weight:700;color:#ea3b3b;letter-spacing:-1px;line-height:1;margin-left:0;padding-bottom:3px}
+    .logo{display:inline-flex;align-items:center;flex-wrap:nowrap;gap:0;line-height:1;white-space:nowrap}
+    .logo .a,.logo .b{font-family:'Arial Black',Arial,sans-serif;font-size:50px;font-weight:900;line-height:1;letter-spacing:-2px}
+    .logo .a{color:#2c9f45}
+    .logo .b{color:#ea3b3b;margin-left:0}
     .cap{font-size:11px;font-weight:800;margin-bottom:6px;text-align:center;letter-spacing:.12em;text-transform:uppercase;color:#111}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top;font-weight:600}
