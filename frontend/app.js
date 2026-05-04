@@ -2833,21 +2833,21 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   return `
   <style>
-    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;background:#fff}
+    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;font-weight:600;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
     .logo{font-family:'Arial Black',Arial,sans-serif;font-size:58px;font-weight:900;line-height:0.95;letter-spacing:-2px;white-space:nowrap}
     .logo .a{color:#10c45a}.logo .b{color:#f10d1f;font-size:0.42em;font-weight:900;vertical-align:0.12em;margin-left:1px}
-    .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
+    .cap{font-size:11px;font-weight:700;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
-    .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
-    .t th{font-weight:600;background:#f2f2f2}
+    .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top;font-weight:600}
+    .t th{font-weight:700;background:#f2f2f2}
     .sec{margin-top:8px}
-    .sec-title{font-size:17px;margin:6px 0 4px;font-weight:700}
-    .k{font-weight:700}
-    .v{font-weight:800;color:#c00}
-    .resumen{font-size:22px;margin-top:8px;line-height:1.2}
+    .sec-title{font-size:17px;margin:6px 0 4px;font-weight:800}
+    .k{font-weight:800}
+    .v{font-weight:900;color:#c00}
+    .resumen{font-size:22px;font-weight:700;margin-top:8px;line-height:1.2}
     .firma{margin-top:8px}
-    .nota{font-size:10px;margin-top:8px}
+    .nota{font-size:10px;font-weight:600;margin-top:8px;line-height:1.25}
   </style>
 <div class="guia-pdf-root">
   <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
