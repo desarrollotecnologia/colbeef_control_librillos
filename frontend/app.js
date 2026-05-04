@@ -2965,18 +2965,29 @@ async function descargarPdfGuiaDespacho() {
     });
     try {
       const h2p = await ensureHtml2PdfDisponible();
-      const htmlForPdf = `<div style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;box-sizing:border-box;background:#fff">${html}</div>`;
+      const htmlForPdf = `<div class="guia-pdf-export-wrap" style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;box-sizing:border-box;margin:0;padding:0;background:#fff;transform:none">${html}</div>`;
       const host = document.createElement('div');
-      host.style.position = 'fixed';
-      host.style.left = '-100000px';
-      host.style.top = '0';
-      host.style.background = '#fff';
-      host.style.zIndex = '-1';
+      // No usar left negativo enorme: html2canvas suele recortar mal y el PDF queda desplazado/cortado a la izquierda.
+      host.style.cssText = [
+        'position:fixed',
+        'left:0',
+        'top:0',
+        `width:${GUIA_PDF_CONTENT_WIDTH_PX}px`,
+        'max-height:100vh',
+        'overflow:hidden',
+        'opacity:0',
+        'pointer-events:none',
+        'z-index:-1',
+        'background:#fff',
+      ].join(';');
       host.innerHTML = htmlForPdf;
       document.body.appendChild(host);
       try {
         const sourceEl = host.firstElementChild;
         if (!sourceEl) throw new Error('No se pudo preparar el contenido PDF');
+        await new Promise((r) => {
+          requestAnimationFrame(() => requestAnimationFrame(r));
+        });
         await h2p()
           .set({
             margin: GUIA_PDF_MARGIN_MM,
@@ -2987,7 +2998,8 @@ async function descargarPdfGuiaDespacho() {
               useCORS: true,
               logging: false,
               backgroundColor: '#ffffff',
-              windowWidth: GUIA_PDF_CONTENT_WIDTH_PX,
+              scrollX: 0,
+              scrollY: 0,
             },
             jsPDF: { unit: 'mm', format: GUIA_PDF_PAGE_FORMAT, orientation: 'portrait' },
             pagebreak: { mode: ['css', 'legacy'] },
