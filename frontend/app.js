@@ -1594,6 +1594,17 @@ function irVista(nombre, btn) {
   if (ba) ba.style.display = '';
   if (nombre === 'inventario') renderInventario();
   if (nombre === 'totales') void actualizarVistaTotales();
+  if (nombre === 'guias') {
+    void runWithAppLoader('Cargando vista de guía...', async () => {
+      sincronizarFechaGuiaConFechaGlobal();
+      try {
+        await autocompletarAjusteGuiaDesdeDiaAnterior();
+        await refrescarResumenGuiaDespacho();
+      } catch {
+        /* ignore */
+      }
+    });
+  }
   if (nombre === 'historico') {
     const fechaBase = document.getElementById('fecha-global')?.value || hoyISO();
     const fd = document.getElementById('fecha-historico-desde');
@@ -2645,6 +2656,20 @@ function renderEditorEnVistaPreviaGuia() {
   }
 }
 
+/** Recalcula pendientes y cuadro «Control de cálculo» desde la API (sin overlay; quien llame puede usar runWithAppLoader). */
+async function refrescarResumenGuiaDespacho() {
+  const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
+  const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+  if (!fecha || !categoria) return;
+  try {
+    const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
+    pintarPendientesHoyAutomatico(data);
+    actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
+  } catch {
+    /* ignore */
+  }
+}
+
 async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
   // Fuente principal: mismos totales del "Resumen del día"
   try {
@@ -2678,42 +2703,44 @@ async function generarVistaPreviaGuiaDespacho() {
     mostrarToast('Selecciona la categoria', 'err');
     return;
   }
-  let data = null;
-  try {
-    data = await obtenerDataGuiaConFallback(fecha, categoria, true);
-  } catch (e) {
-    mostrarToast(`No se pudo cargar la guía: ${e.message || e}`, 'err');
-    return;
-  }
-  const manual = leerManualGuiaDesdeFormulario();
-  pintarPendientesHoyAutomatico(data);
-  actualizarResumenControlGuia(data, manual);
-  renderEditorEnVistaPreviaGuia();
-  const check = validarGuiaAntesDeGenerar(data, manual);
-  enviarEventoAnalytics({
-    eventName: 'guia_preview_control',
-    viewName: _analyticsViewActual,
-    meta: {
-      fecha,
+  return runWithAppLoader('Cargando guía y vista previa...', async () => {
+    let data = null;
+    try {
+      data = await obtenerDataGuiaConFallback(fecha, categoria, true);
+    } catch (e) {
+      mostrarToast(`No se pudo cargar la guía: ${e.message || e}`, 'err');
+      return;
+    }
+    const manual = leerManualGuiaDesdeFormulario();
+    pintarPendientesHoyAutomatico(data);
+    actualizarResumenControlGuia(data, manual);
+    renderEditorEnVistaPreviaGuia();
+    const check = validarGuiaAntesDeGenerar(data, manual);
+    enviarEventoAnalytics({
+      eventName: 'guia_preview_control',
+      viewName: _analyticsViewActual,
+      meta: {
+        fecha,
+        categoria,
+        ok: check.ok,
+        base: check.calc.base,
+        ajuste: check.calc.ajusteValor,
+        decomiso: check.calc.decomiso,
+        final: check.calc.final,
+      },
+    });
+    const html = construirHtmlGuiaDespachoPdf(data, {
+      logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
       categoria,
-      ok: check.ok,
-      base: check.calc.base,
-      ajuste: check.calc.ajusteValor,
-      decomiso: check.calc.decomiso,
-      final: check.calc.final,
-    },
+      manual,
+    });
+    const panel = document.getElementById('guia-preview-panel');
+    const body = document.getElementById('guia-preview-body');
+    if (panel && body) {
+      body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;max-width:100%;margin:0 auto;background:#fff">${html}</div></div>`;
+      panel.style.display = '';
+    }
   });
-  const html = construirHtmlGuiaDespachoPdf(data, {
-    logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
-    categoria,
-    manual,
-  });
-  const panel = document.getElementById('guia-preview-panel');
-  const body = document.getElementById('guia-preview-body');
-  if (panel && body) {
-    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;max-width:100%;margin:0 auto;background:#fff">${html}</div></div>`;
-    panel.style.display = '';
-  }
 }
 
 async function autocompletarAjusteGuiaDesdeDiaAnterior() {
@@ -3016,37 +3043,22 @@ if (fechaGuiaEl) {
 if (fechaGlobalEl) {
   fechaGlobalEl.addEventListener('change', () => {
     sincronizarFechaGuiaConFechaGlobal();
-    void autocompletarAjusteGuiaDesdeDiaAnterior();
-    const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
-    const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
-    if (!fecha || !categoria) return;
-    void (async () => {
-      try {
-        const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
-        pintarPendientesHoyAutomatico(data);
-        actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
-      } catch {
-        /* ignore */
-      }
-    })();
+    const enGuias = document.getElementById('vista-guias')?.classList.contains('active');
+    const run = async () => {
+      await autocompletarAjusteGuiaDesdeDiaAnterior();
+      await refrescarResumenGuiaDespacho();
+    };
+    if (enGuias) void runWithAppLoader('Actualizando guía con la nueva fecha...', run);
+    else void run();
   });
 }
 const selGuiaCategoriaEl = document.getElementById('sel-guia-categoria');
 if (selGuiaCategoriaEl) {
   selGuiaCategoriaEl.addEventListener('change', () => {
-    void autocompletarAjusteGuiaDesdeDiaAnterior();
-    const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
-    const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
-    if (!fecha || !categoria) return;
-    void (async () => {
-      try {
-        const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
-        pintarPendientesHoyAutomatico(data);
-        actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
-      } catch {
-        /* ignore */
-      }
-    })();
+    void runWithAppLoader('Cargando datos de la categoría...', async () => {
+      await autocompletarAjusteGuiaDesdeDiaAnterior();
+      await refrescarResumenGuiaDespacho();
+    });
   });
 }
 ['inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso']
@@ -3063,34 +3075,12 @@ if (selGuiaCategoriaEl) {
           inpFecha.value = prev;
         }
       }
-      const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
-      const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
-      if (!fecha || !categoria) return;
-      void (async () => {
-        try {
-          const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
-          pintarPendientesHoyAutomatico(data);
-          actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
-        } catch {
-          /* ignore */
-        }
-      })();
+      void refrescarResumenGuiaDespacho();
     });
   });
 
 sincronizarFechaGuiaConFechaGlobal();
-void (async () => {
-  const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
-  const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
-  if (!fecha || !categoria) return;
-  try {
-    const data = await obtenerDataGuiaConFallback(fecha, categoria, false);
-    pintarPendientesHoyAutomatico(data);
-    actualizarResumenControlGuia(data, leerManualGuiaDesdeFormulario());
-  } catch {
-    /* ignore */
-  }
-})();
+void refrescarResumenGuiaDespacho();
 
 function descargarExcel(nombre, html) {
   const blob = new Blob([`\ufeff${html}`], { type: 'application/vnd.ms-excel;charset=utf-8' });
