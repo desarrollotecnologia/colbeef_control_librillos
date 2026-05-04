@@ -2837,9 +2837,9 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   <style>
     .guia-pdf-root{box-sizing:border-box;max-width:100%;font-family:Arial,sans-serif;color:#111;margin:0;padding:12px 20px;font-size:11px;font-weight:600;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-    .logo{display:inline-flex;align-items:baseline;flex-wrap:nowrap;gap:0;line-height:1;white-space:nowrap}
-    .logo .a{font-family:'Arial Black',Arial,sans-serif;font-size:54px;font-weight:900;color:#2c9f45;letter-spacing:-2px;line-height:1}
-    .logo .b{font-family:Arial,sans-serif;font-size:26px;font-weight:700;color:#ea3b3b;letter-spacing:-0.5px;line-height:1;margin-left:2px;position:relative;top:4px}
+    .logo{display:inline-flex;align-items:flex-end;flex-wrap:nowrap;gap:0;line-height:1;white-space:nowrap}
+    .logo .a{font-family:'Arial Black',Arial,sans-serif;font-size:54px;font-weight:900;color:#2c9f45;letter-spacing:-2px;line-height:1;padding-bottom:1px}
+    .logo .b{font-family:Arial,sans-serif;font-size:27px;font-weight:600;color:#ea3b3b;letter-spacing:-0.5px;line-height:1;margin-left:1px;padding-bottom:2px}
     .cap{font-size:11px;font-weight:700;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top;font-weight:600}
