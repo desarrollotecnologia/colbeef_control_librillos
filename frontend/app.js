@@ -24,6 +24,10 @@ let _loaderDepth = 0;
 let _loaderDelayTimer = null;
 let _loaderHideTimer = null;
 let _loaderVisibleSince = 0;
+/** No mostrar overlay si el trabajo termina antes (evita parpadeos). */
+const APP_LOADER_SHOW_DELAY_MS = 90;
+/** Tiempo mínimo visible una vez mostrado (solo anti-parpadeo; no alargar trabajo real). */
+const APP_LOADER_MIN_VISIBLE_MS = 160;
 
 function setAppLoaderText(msg) {
   const txt = document.getElementById('app-loader-text');
@@ -43,7 +47,7 @@ function beginAppLoader(msg) {
     overlay.classList.add('show');
     overlay.setAttribute('aria-hidden', 'false');
     _loaderVisibleSince = Date.now();
-  }, 180);
+  }, APP_LOADER_SHOW_DELAY_MS);
 }
 
 function endAppLoader() {
@@ -60,7 +64,7 @@ function endAppLoader() {
   };
   if (_loaderVisibleSince) {
     const elapsed = Date.now() - _loaderVisibleSince;
-    const wait = Math.max(0, 420 - elapsed);
+    const wait = Math.max(0, APP_LOADER_MIN_VISIBLE_MS - elapsed);
     _loaderHideTimer = setTimeout(hide, wait);
     return;
   }
@@ -1595,15 +1599,15 @@ function irVista(nombre, btn) {
   if (nombre === 'inventario') renderInventario();
   if (nombre === 'totales') void actualizarVistaTotales();
   if (nombre === 'guias') {
-    void runWithAppLoader('Cargando vista de guía...', async () => {
-      sincronizarFechaGuiaConFechaGlobal();
+    sincronizarFechaGuiaConFechaGlobal();
+    void (async () => {
       try {
         await autocompletarAjusteGuiaDesdeDiaAnterior();
         await refrescarResumenGuiaDespacho();
       } catch {
         /* ignore */
       }
-    });
+    })();
   }
   if (nombre === 'historico') {
     const fechaBase = document.getElementById('fecha-global')?.value || hoyISO();
@@ -3043,22 +3047,27 @@ if (fechaGuiaEl) {
 if (fechaGlobalEl) {
   fechaGlobalEl.addEventListener('change', () => {
     sincronizarFechaGuiaConFechaGlobal();
-    const enGuias = document.getElementById('vista-guias')?.classList.contains('active');
-    const run = async () => {
-      await autocompletarAjusteGuiaDesdeDiaAnterior();
-      await refrescarResumenGuiaDespacho();
-    };
-    if (enGuias) void runWithAppLoader('Actualizando guía con la nueva fecha...', run);
-    else void run();
+    void (async () => {
+      try {
+        await autocompletarAjusteGuiaDesdeDiaAnterior();
+        await refrescarResumenGuiaDespacho();
+      } catch {
+        /* ignore */
+      }
+    })();
   });
 }
 const selGuiaCategoriaEl = document.getElementById('sel-guia-categoria');
 if (selGuiaCategoriaEl) {
   selGuiaCategoriaEl.addEventListener('change', () => {
-    void runWithAppLoader('Cargando datos de la categoría...', async () => {
-      await autocompletarAjusteGuiaDesdeDiaAnterior();
-      await refrescarResumenGuiaDespacho();
-    });
+    void (async () => {
+      try {
+        await autocompletarAjusteGuiaDesdeDiaAnterior();
+        await refrescarResumenGuiaDespacho();
+      } catch {
+        /* ignore */
+      }
+    })();
   });
 }
 ['inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso']
