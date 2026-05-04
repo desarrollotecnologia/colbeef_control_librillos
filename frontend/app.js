@@ -4652,9 +4652,15 @@ function esVisceraBlanca(d) {
   return clasificarRegistro(d).viscera;
 }
 
-/** Historial — Librillos: RETIRAR LIBRILLOS (cliente_destino u observación). */
+/**
+ * Historial — Librillos: retiro explícito **o** pendiente de parte el día
+ * (en plan / universo del día pero aún sin movimiento Colbeef con texto de retiro).
+ * Sin esto, al quitar el respaldo histórico la tabla queda en 0 aunque el API sí trae IDs.
+ */
 function esVistaHistorialLibrillos(d) {
-  return clasificarRegistro(d).tieneRetiro;
+  if (clasificarRegistro(d).tieneRetiro) return true;
+  if (Boolean(d?.pendiente_registro_parte)) return true;
+  return false;
 }
 
 /** Historial — Crudas: cualquier observación con CRUDAS/CRUDA (conteo paralelo a categoría comercial). */
@@ -4668,10 +4674,10 @@ function esVistaHistorialCrudasSolo(d) {
  * (mismos buckets que pivots ASURCARNES / DERIVADOS / …); no se exige cliente parseado ni vw_pbi01.
  */
 function esLibrilloParaReporteAgrupacion(d) {
+  if (Boolean(d?.pendiente_registro_parte)) return true;
   const obs = normalizarObs(String(d?.observaciones ?? d?.observacion ?? ''));
   const cliente = String(d?.cliente_destino || '').trim();
   const clienteValido = cliente && !esPlaceholderTexto(cliente) && !/^SIN\s+CLIENTE$/i.test(cliente);
-  // Solo retiros explícitos de librillos para el reporte por agrupación.
   return Boolean(clienteValido) || RX_RETIRO_LIBRILLO_FRONT.test(obs) || /\bRETIRA(R)?\b/.test(obs);
 }
 
@@ -4797,7 +4803,23 @@ function renderHistorialLib(lista) {
     `Total: <strong style="color:var(--rojo)">${filtrada.length}</strong> librillos · ` +
     `<span style="color:var(--tx2)">Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día</span>`;
 
-  if (!filtrada.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">Sin librillos crudos para esta fecha</td></tr>'; return; }
+  if (!filtrada.length) {
+    const nApi = (datosGlobal || []).length;
+    let det = '';
+    if (historialSoloPendientes) {
+      det = ' Filtro «Solo pendientes» activo: no quedan librillos pendientes con los criterios actuales.';
+    } else if (!nApi) {
+      det =
+        ' No hay filas en el listado del API para esta fecha (revisar plan de faena, conexión o que exista producción ese día).';
+    } else {
+      const soloCrud = (datosGlobal || []).filter((d) => esVistaHistorialCrudasSolo(d) && !esVistaHistorialLibrillos(d)).length;
+      if (soloCrud > 0) {
+        det = ` Hay ${soloCrud} registro(s) solo en «Crudas» (marca CRUDAS sin retiro de librillos).`;
+      }
+    }
+    tbody.innerHTML = `<tr><td colspan="11" class="empty">Sin librillos en esta vista para la fecha seleccionada.${escapeHtml(det)}</td></tr>`;
+    return;
+  }
 
   const sorted = [...filtrada].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
