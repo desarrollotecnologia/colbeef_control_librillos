@@ -2388,6 +2388,9 @@ function fechaGuiaLarga(iso) {
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
+const GUIA_PDF_MARGIN_MM = 6;
+const GUIA_PDF_PAGE_FORMAT = 'letter';
+const GUIA_PDF_CONTENT_WIDTH_PX = 770;
 
 function normalizarCategoriaGuiaCodigo(valor) {
   const t = String(valor || '').trim().toLowerCase();
@@ -2720,7 +2723,7 @@ async function generarVistaPreviaGuiaDespacho() {
   const panel = document.getElementById('guia-preview-panel');
   const body = document.getElementById('guia-preview-body');
   if (panel && body) {
-    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="transform:scale(.8);transform-origin:top left;width:1250px;background:#fff">${html}</div></div>`;
+    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;max-width:100%;margin:0 auto;background:#fff">${html}</div></div>`;
     panel.style.display = '';
   }
 }
@@ -2944,14 +2947,20 @@ async function descargarPdfGuiaDespacho() {
     });
     try {
       const h2p = await ensureHtml2PdfDisponible();
-      const htmlForPdf = `<div style="width:794px;background:#fff">${html}</div>`;
+      const htmlForPdf = `<div style="width:${GUIA_PDF_CONTENT_WIDTH_PX}px;box-sizing:border-box;background:#fff">${html}</div>`;
       await h2p()
         .set({
-          margin: 6,
+          margin: GUIA_PDF_MARGIN_MM,
           filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
           image: { type: 'jpeg', quality: 0.96 },
-          html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff',
+            windowWidth: GUIA_PDF_CONTENT_WIDTH_PX,
+          },
+          jsPDF: { unit: 'mm', format: GUIA_PDF_PAGE_FORMAT, orientation: 'portrait' },
           pagebreak: { mode: ['css', 'legacy'] },
         })
         .from(htmlForPdf, 'string')
