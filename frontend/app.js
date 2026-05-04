@@ -2800,32 +2800,37 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     : '';
   const descomisoTxt = decomisoManual > 0 ? ` - ${decomisoManual} DECOMISO` : '';
 
+  const rn = (n) => `<span class="rn">${Number(n)}</span>`;
+  const ajusteExtra = ajusteValor > 0
+    ? ` <span class="v" style="margin-left:24px">${ajusteValor} ${escapeHtml(ajusteLabel)}</span>`
+    : '';
+
   let bloqueTotales = '';
   if (tipo.includes('CAT')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> ${rn(r.cat || 0)} + ${rn(r.asurcarnescol || 0)} = <span class="v">${librosADespachar}</span>${ajusteExtra}</div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
-        <div style="margin-top:8px">CAT: <span class="v">${Number(r.cat || 0)}</span></div>
-        <div>ASURCARNESCOL: <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
+        <div style="margin-top:8px"><span class="k">CAT:</span> <span class="v">${Number(r.cat || 0)}</span></div>
+        <div><span class="k">ASURCARNESCOL:</span> <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
       </div>
     `;
   } else if (tipo.includes('DERIVADOS')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> ${rn(r.derivados || 0)} + ${rn(r.asurcarnes || 0)} = <span class="v">${librosADespachar}</span>${ajusteExtra}</div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
-        <div style="margin-top:8px">DERIVADOS: <span class="v">${Number(r.derivados || 0)}</span></div>
-        <div>ASURCARNES: <span class="v">${Number(r.asurcarnes || 0)}</span></div>
+        <div style="margin-top:8px"><span class="k">DERIVADOS:</span> <span class="v">${Number(r.derivados || 0)}</span></div>
+        <div><span class="k">ASURCARNES:</span> <span class="v">${Number(r.asurcarnes || 0)}</span></div>
       </div>
     `;
   } else {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> ${rn(r.global_hides || 0)} + ${rn(r.asurcarnes_glo || 0)} = <span class="v">${librosADespachar}</span>${ajusteExtra}</div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
-        <div style="margin-top:8px">GLOBAL HIDES: <span class="v">${Number(r.global_hides || 0)}</span></div>
-        <div>ASURCARNESGLO: <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
+        <div style="margin-top:8px"><span class="k">GLOBAL HIDES:</span> <span class="v">${Number(r.global_hides || 0)}</span></div>
+        <div><span class="k">ASURCARNESGLO:</span> <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
       </div>
     `;
   }
@@ -2838,16 +2843,17 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .guia-pdf-root{box-sizing:border-box;max-width:100%;font-family:Arial,sans-serif;color:#111;margin:0;padding:12px 20px;font-size:11px;font-weight:600;background:#fff}
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
     .logo{display:inline-flex;align-items:flex-end;flex-wrap:nowrap;gap:0;line-height:1;white-space:nowrap}
-    .logo .a{font-family:'Arial Black',Arial,sans-serif;font-size:54px;font-weight:900;color:#2c9f45;letter-spacing:-2px;line-height:1;padding-bottom:1px}
-    .logo .b{font-family:Arial,sans-serif;font-size:27px;font-weight:600;color:#ea3b3b;letter-spacing:-0.5px;line-height:1;margin-left:1px;padding-bottom:2px}
-    .cap{font-size:11px;font-weight:700;margin-bottom:4px;text-align:center;letter-spacing:.2px}
+    .logo .a{font-family:'Arial Black',Arial,sans-serif;font-size:56px;font-weight:900;color:#2c9f45;letter-spacing:-3px;line-height:1;padding-bottom:1px}
+    .logo .b{font-family:Arial,Helvetica,sans-serif;font-size:30px;font-weight:700;color:#ea3b3b;letter-spacing:-1px;line-height:1;margin-left:0;padding-bottom:3px}
+    .cap{font-size:11px;font-weight:800;margin-bottom:6px;text-align:center;letter-spacing:.12em;text-transform:uppercase;color:#111}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top;font-weight:600}
     .t th{font-weight:700;background:#f2f2f2}
     .sec{margin-top:8px}
-    .sec-title{font-size:16px;margin:6px 0 4px;font-weight:600;text-transform:none}
-    .k{font-weight:800}
-    .v{font-weight:900;color:#c00}
+    .sec-title{font-size:15px;margin:8px 0 4px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#111}
+    .k{font-weight:700}
+    .rn{font-weight:700;color:#111}
+    .v{font-weight:800;color:#c00}
     .resumen{font-size:22px;font-weight:700;margin-top:8px;line-height:1.25;overflow-wrap:break-word;word-wrap:break-word}
     .firma{margin-top:8px}
     .nota{font-size:10px;font-weight:600;margin-top:8px;line-height:1.25}
