@@ -2391,6 +2391,18 @@ function fechaGuiaLarga(iso) {
 const GUIA_PDF_MARGIN_MM = 6;
 const GUIA_PDF_PAGE_FORMAT = 'letter';
 const GUIA_PDF_CONTENT_WIDTH_PX = 770;
+const COLBEEF_LOGO_FALLBACK_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 170"><rect width="100%" height="100%" fill="white"/><text x="20" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="700" fill="#10c45a">Col</text><text x="220" y="120" font-family="Arial,Helvetica,sans-serif" font-size="120" font-weight="700" fill="#f10d1f">beef</text></svg>')}`;
+
+function normalizarLogoColbeefDataUrl(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return COLBEEF_LOGO_FALLBACK_DATA_URL;
+  // Algunas cargas antiguas vienen con prefijo png pero contenido JPEG (/9j).
+  if (v.startsWith('data:image/png;base64,/9j/')) {
+    return `data:image/jpeg;base64,${v.slice('data:image/png;base64,'.length)}`;
+  }
+  if (v.startsWith('data:image/')) return v;
+  return COLBEEF_LOGO_FALLBACK_DATA_URL;
+}
 
 function normalizarCategoriaGuiaCodigo(valor) {
   const t = String(valor || '').trim().toLowerCase();
@@ -2791,7 +2803,9 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     : totalBase + ajusteValor;
   const totalFinal = Math.max(0, totalConAjuste - decomisoManual);
   const cantidadDespachados = totalFinal;
-  const logoDataUrl = opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null);
+  const logoDataUrl = normalizarLogoColbeefDataUrl(
+    opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
+  );
   const ajusteLabel = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
   const fechaAjusteTexto = ajusteFecha ? fechaGuiaSolo(ajusteFecha) : '';
   const signoAjuste = ajusteTipo === 'adicionales' ? '-' : '+';
@@ -2830,9 +2844,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     `;
   }
 
-  const logoHtml = logoDataUrl
-    ? `<img src="${logoDataUrl}" alt="Colbeef" class="logo-img">`
-    : `<div class="logo"><span class="a">Col</span><span class="b">beef</span></div>`;
+  const logoHtml = `<img src="${logoDataUrl}" alt="Colbeef" class="logo-img">`;
 
   return `
   <style>
@@ -2840,7 +2852,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
     .logo{font-size:62px;font-weight:800;line-height:0.95;letter-spacing:-1px}
     .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
-    .logo-img{display:block;width:220px;max-width:100%;height:70px;object-fit:contain;object-position:left center}
+    .logo-img{display:block;width:240px;max-width:100%;height:78px;object-fit:contain;object-position:left center}
     .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
     .t{width:100%;border-collapse:collapse}
     .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
