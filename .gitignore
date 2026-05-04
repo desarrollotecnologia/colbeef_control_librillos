@@ -25,6 +25,10 @@ Desktop.ini
 
 # Datos locales de desarrollo (salidas en archivo JSON)
 data/salidas.json
+# Datos runtime que el servidor escribe constantemente y autocrea si no existen.
+# Los dejamos sin trackear para no bloquear cambios de rama (`git checkout`).
+data/analytics-events.json
+data/historico-cambios.json
 # Volcados de macros VBA generados por scripts (regenerables)
 data/*.vba.txt
 
