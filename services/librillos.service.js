@@ -897,12 +897,18 @@ const consultarLibrillos = async (fecha = null) => {
           obsParte
         );
         const { observacion, cliente_destino, plaza } = parsearObservacion(obsFuente);
-        // Para clasificar, usar fuentes operativas (cliente parseado / empresa / destino),
-        // evitando propietario como fallback comercial porque infla ASURCARNES.
+        // Cliente para agrupación: parseo + BD; el propietario solo si aporta señal comercial
+        // (evita inflar ASURCARNES con nombres genéricos).
+        const prop = String(v.nombre_propietario || '').trim();
+        const propComercial =
+          prop && /\b(asur|carnes|col|glo|hides|salomon|cat|deriv|global)\b/i.test(prop)
+            ? prop
+            : '';
         const clienteClasificacion = textoNoVacio(
           cliente_destino,
           v.empresa_destino,
-          v.destino
+          v.destino,
+          propComercial
         );
         const ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
         const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion);

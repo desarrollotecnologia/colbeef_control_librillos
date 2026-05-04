@@ -96,7 +96,11 @@ function fallbackComercial(cfg) {
 
 export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallback = '') {
   const cfg = cargarConfig();
-  const t = normalizarClienteDestino(obsRaw);
+  /** Unificar guiones/puntos como espacio para matchear ASURCARNES-COL, ASURCARNES COL, etc. */
+  const t = normalizarClienteDestino(obsRaw)
+    .replace(/[.\u2013\u2014\-_/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!t) {
     return fallbackComercial(cfg);
   }
@@ -108,7 +112,13 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
 
   // Prioridad "tipo macro": primero subgrupos/especiales y destinos nominales,
   // luego bucket general ASURCARNES.
-  if (t.includes('asurcarnescol') || (retLibr && t.includes('asurcarnes col'))) {
+  if (
+    t.includes('asurcarnescol') ||
+    (retLibr &&
+      (t.includes('asurcarnes col') ||
+        t.includes('asurcarnes colombia') ||
+        /\basurcarnes\s+col\b/.test(t)))
+  ) {
     return { codigo: 'asurcarnescol', etiqueta: 'Asurcarnescol' };
   }
   if (
@@ -162,8 +172,16 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
   }
 
   // Regla equivalente al resumen de INICIO (COUNTIF "*ASU*" menos subgrupos):
-  // si sigue siendo retiro y menciona ASU, cae en ASURCARNES.
-  if (/\basu\b|\basurcarnes\b/.test(t)) {
+  // si sigue siendo retiro y menciona ASU, cae en ASURCARNES — pero no pisar COL/GLO ya resueltos.
+  if (
+    /\basu\b|\basurcarnes\b/.test(t) &&
+    !t.includes('asurcarnescol') &&
+    !t.includes('asurcarnes col') &&
+    !t.includes('asurcarnes colombia') &&
+    !/\basurcarnes\s+col\b/.test(t) &&
+    !t.includes('asurcarnes glo') &&
+    !t.includes('asurcarnesglo')
+  ) {
     return { codigo: 'asurcarnes', etiqueta: 'Asurcarnes' };
   }
 

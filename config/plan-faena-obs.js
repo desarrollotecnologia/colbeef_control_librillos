@@ -60,6 +60,22 @@ export function fusionarObservacionClasificacion(textoPlan, obsParte) {
     return { obsFuente: '', observacion_fuente: 'a_parte_producto' };
   }
 
+  /**
+   * `plan_first` (por defecto): antes se devolvía **solo** el texto del plan/retiro y se
+   * ignoraba por completo `parte_producto.observaciones`. En operación real el retiro
+   * (ASURCARNES COL, GLOBAL HIDES, etc.) vive en la parte; el plan suele traer otro texto
+   * (vísceras / destino) → clasificación comercial y macro quedaban mal (mucho ASURCARNES / COCIDOS).
+   * Si ambos existen, unir ambos textos para clasificar sin perder ninguna señal.
+   */
+  if (tp && op) {
+    const a = tp.replace(/\s+/g, ' ').trim();
+    const b = op.replace(/\s+/g, ' ').trim();
+    if (a === b) return { obsFuente: a, observacion_fuente: 'plan_faena' };
+    return {
+      obsFuente: `${a} ${b}`.replace(/\s+/g, ' ').trim(),
+      observacion_fuente: 'plan_faena+parte',
+    };
+  }
   if (tp) return { obsFuente: tp, observacion_fuente: 'plan_faena' };
   if (op) return { obsFuente: op, observacion_fuente: 'a_parte_producto' };
   return { obsFuente: '', observacion_fuente: 'a_parte_producto' };
