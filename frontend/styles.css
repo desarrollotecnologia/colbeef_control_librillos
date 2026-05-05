@@ -1965,3 +1965,67 @@ body{
 .btn-analytics-secret:active{
   transform:scale(.95);
 }
+
+/* ── Guía de despacho: sección colapsable y panel control de cálculo ──── */
+.guia-ajuste-section{
+  margin-top:14px;
+  border:1px solid var(--brd);
+  border-radius:8px;
+  background:var(--bg3);
+  overflow:hidden;
+}
+.guia-ajuste-summary{
+  list-style:none;
+  cursor:pointer;
+  padding:10px 14px;
+  font-weight:700;
+  font-size:13px;
+  letter-spacing:.3px;
+  color:var(--tx);
+  display:flex;
+  align-items:center;
+  gap:8px;
+  user-select:none;
+}
+.guia-ajuste-summary::-webkit-details-marker{display:none}
+.guia-ajuste-summary::before{
+  content:'▶';
+  font-size:10px;
+  color:var(--tx2);
+  transition:transform .15s ease;
+}
+.guia-ajuste-section[open] > .guia-ajuste-summary::before{
+  transform:rotate(90deg);
+}
+.guia-ajuste-section[open] > .guia-ajuste-summary{
+  border-bottom:1px solid var(--brd);
+}
+.guia-ajuste-body{
+  padding:12px 14px 14px;
+}
+
+.guia-resumen-control{
+  margin-top:14px;
+  padding:12px 14px;
+  border:1px solid var(--brd);
+  border-radius:8px;
+  background:var(--panel);
+  color:var(--tx);
+  font-size:13px;
+  line-height:1.55;
+}
+.guia-resumen-titulo{
+  margin-bottom:6px;
+}
+.guia-resumen-sub{
+  color:var(--tx2);
+  font-weight:400;
+  font-size:12px;
+}
+.guia-resumen-linea{
+  font-family:'Barlow',sans-serif;
+}
+.guia-resumen-linea strong{
+  color:var(--tx);
+  font-weight:700;
+}

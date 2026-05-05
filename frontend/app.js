@@ -2587,10 +2587,12 @@ function actualizarResumenControlGuia(data, manual) {
   const box = document.getElementById('guia-resumen-control');
   if (!box) return;
   const calc = calcularControlGuia(data, manual);
+  const pendientesApi = Number(data?.cabecera?.resumen_categoria?.pendientes_hoy || 0);
   box.innerHTML = `
-    <strong>Control de cálculo:</strong>
-    LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong>
-    &nbsp;|&nbsp; TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} - ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong>
+    <div class="guia-resumen-titulo"><strong>Control de cálculo</strong> <span class="guia-resumen-sub">(datos del día y categoría: ajuste/decomiso solo si los editaste)</span></div>
+    <div class="guia-resumen-linea">Pendientes hoy (API): <strong>${pendientesApi}</strong></div>
+    <div class="guia-resumen-linea">LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong></div>
+    <div class="guia-resumen-linea">TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} – ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong></div>
   `;
 }
 
@@ -2620,39 +2622,10 @@ function validarGuiaAntesDeGenerar(data, manual) {
   return { ok: errores.length === 0, errores, calc };
 }
 
-function renderEditorEnVistaPreviaGuia() {
-  const host = document.getElementById('guia-preview-editor');
-  if (!host) return;
-  host.style.display = '';
-  host.innerHTML = `
-    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
-      <div><label class="fl">Ajuste</label><input class="fi" id="inp-prev-ajuste-valor" type="number" min="0" step="1" style="width:120px"></div>
-      <div><label class="fl">Tipo</label><select class="fs" id="sel-prev-ajuste-tipo" style="width:180px"><option value="pendientes">Pendientes</option><option value="adicionales">Adicionales</option></select></div>
-      <div><label class="fl">Fecha ajuste</label><input class="fi" id="inp-prev-ajuste-fecha" type="date"></div>
-      <div><label class="fl">Decomiso</label><input class="fi" id="inp-prev-decomiso" type="number" min="0" step="1" style="width:120px"></div>
-      <button type="button" class="btn-gen btn-gen-sec" id="btn-prev-actualizar">Actualizar vista previa</button>
-    </div>
-  `;
-  const map = [
-    ['inp-prev-ajuste-valor', 'inp-guia-ajuste-valor'],
-    ['sel-prev-ajuste-tipo', 'sel-guia-ajuste-tipo'],
-    ['inp-prev-ajuste-fecha', 'inp-guia-ajuste-fecha'],
-    ['inp-prev-decomiso', 'inp-guia-decomiso'],
-  ];
-  map.forEach(([a, b]) => {
-    const ea = document.getElementById(a);
-    const eb = document.getElementById(b);
-    if (ea && eb) ea.value = eb.value || '';
-  });
-  document.getElementById('btn-prev-actualizar')?.addEventListener('click', () => {
-    map.forEach(([a, b]) => {
-      const ea = document.getElementById(a);
-      const eb = document.getElementById(b);
-      if (ea && eb) eb.value = ea.value || '';
-    });
-    void generarVistaPreviaGuiaDespacho();
-  });
-}
+// Editor duplicado en la vista previa eliminado: los campos de ajuste/decomiso
+// ya viven en el formulario principal. Se conserva la firma como no-op por
+// si algun llamado externo aun la referencia.
+function renderEditorEnVistaPreviaGuia() {}
 
 async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
   // Fuente principal: mismos totales del "Resumen del día"
@@ -2697,7 +2670,6 @@ async function generarVistaPreviaGuiaDespacho() {
   const manual = leerManualGuiaDesdeFormulario();
   pintarPendientesHoyAutomatico(data);
   actualizarResumenControlGuia(data, manual);
-  renderEditorEnVistaPreviaGuia();
   const check = validarGuiaAntesDeGenerar(data, manual);
   enviarEventoAnalytics({
     eventName: 'guia_preview_control',
@@ -2720,7 +2692,7 @@ async function generarVistaPreviaGuiaDespacho() {
   const panel = document.getElementById('guia-preview-panel');
   const body = document.getElementById('guia-preview-body');
   if (panel && body) {
-    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="transform:scale(.8);transform-origin:top left;width:1250px;background:#fff">${html}</div></div>`;
+    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="margin:0 auto;width:760px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12);box-sizing:border-box">${html}</div></div>`;
     panel.style.display = '';
   }
 }
@@ -2827,29 +2799,37 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     `;
   }
 
+  const logoHtml = `<div class="logo-txt"><span class="logo-col">Col</span><span class="logo-beef">beef</span></div>`;
+
   return `
   <style>
-    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:10px 14px;font-size:11px;background:#fff}
-    .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-    .logo{font-size:62px;font-weight:800;line-height:0.95;letter-spacing:-1px}
-    .logo .a{color:#2c9f45}.logo .b{color:#ea3b3b}
-    .cap{font-size:11px;margin-bottom:4px;text-align:center;letter-spacing:.2px}
-    .t{width:100%;border-collapse:collapse}
-    .t th,.t td{border:1px solid #333;padding:2px 4px;vertical-align:top}
-    .t th{font-weight:600;background:#f2f2f2}
-    .sec{margin-top:8px}
-    .sec-title{font-size:17px;margin:6px 0 4px;font-weight:700}
+    .guia-pdf-root{font-family:Arial,sans-serif;color:#111;margin:0;padding:6px 10px;font-size:10.5px;background:#fff;width:100%;box-sizing:border-box}
+    .h-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:4px}
+    .h-top > div:first-child{flex:0 0 auto;min-width:200px}
+    .h-top > table{flex:1 1 auto;max-width:360px}
+    .cap{font-size:10px;margin-bottom:4px;text-align:center;letter-spacing:.2px;font-weight:700}
+    .logo-txt{font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-size:46px;font-weight:900;line-height:1;letter-spacing:-2px;white-space:nowrap;margin:0;padding:0;display:inline-block}
+    .logo-col{color:#1A7A42}
+    .logo-beef{color:#C0392B}
+    .t{width:100%;border-collapse:collapse;table-layout:fixed;page-break-inside:avoid}
+    .t th,.t td{border:1px solid #333;padding:2px 5px;vertical-align:top;word-wrap:break-word;overflow-wrap:break-word;font-size:10px;line-height:1.3}
+    .t th{font-weight:700;background:#f2f2f2;text-align:center}
+    .t-kv td:first-child{font-weight:600;width:38%;background:#fafafa}
+    .sec{margin-top:5px;page-break-inside:avoid}
+    .sec-title{font-size:12.5px;margin:6px 0 3px;font-weight:800;letter-spacing:.2px}
     .k{font-weight:700}
-    .v{font-weight:800;color:#c00}
-    .resumen{font-size:22px;margin-top:8px;line-height:1.2}
-    .firma{margin-top:8px}
-    .nota{font-size:10px;margin-top:8px}
+    .v{font-weight:800;color:#C0392B}
+    .resumen{font-size:16px;margin-top:5px;line-height:1.25;page-break-inside:avoid}
+    .firma{margin-top:8px;page-break-inside:avoid}
+    .firma td{padding:4px 6px;font-size:10.5px}
+    .firma td:first-child{width:50%;font-weight:700}
+    .nota{font-size:9px;margin-top:6px;line-height:1.3;text-align:justify}
   </style>
 <div class="guia-pdf-root">
   <div class="cap">UNICAMENTE PARA CONSUMO NACIONAL GUIA DE TRANSPORTE DE SUBPRODUCTOS NO COMESTIBLES</div>
   <div class="h-top">
     <div>
-      <div class="logo"><span class="a">Col</span><span class="b">beef</span></div>
+      ${logoHtml}
     </div>
     <table class="t" style="max-width:420px">
       <tr><th>FECHA DE EXPEDICION</th><th>Numero</th></tr>
@@ -2858,7 +2838,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   </div>
 
   <div class="sec sec-title">1. IDENTIFICACION DE LA PLANTA DE BENEFICIO DE PROCEDENCIA</div>
-  <table class="t">
+  <table class="t t-kv">
     <tr><td>Planta de Beneficio</td><td>${escapeHtml(c.planta_beneficio || 'Colbeef S.A.S')}</td></tr>
     <tr><td>Direccion o ubicacion</td><td>${escapeHtml(c.direccion_planta || '—')}</td></tr>
     <tr><td>Fecha (dd/mm/aaaa) y Hora (hh:mm) despacho</td><td>${escapeHtml(fechaHoraDesp)}</td></tr>
@@ -2869,12 +2849,19 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   <div class="sec sec-title">2. TIPO DE PRODUCTO</div>
   <table class="t">
-    <tr><th style="width:26px"></th><th>Producto</th><th>Especie</th><th>Peso</th><th>observación</th></tr>
-    <tr><td>1</td><td>Sub-Productos no comestibles libros crudos</td><td>${escapeHtml(especie)}</td><td></td><td>${escapeHtml(observacionProducto)}</td></tr>
+    <colgroup>
+      <col style="width:5%">
+      <col style="width:42%">
+      <col style="width:14%">
+      <col style="width:13%">
+      <col style="width:26%">
+    </colgroup>
+    <tr><th></th><th>Producto</th><th>Especie</th><th>Peso</th><th>observación</th></tr>
+    <tr><td style="text-align:center">1</td><td>Sub-Productos no comestibles libros crudos</td><td>${escapeHtml(especie)}</td><td></td><td>${escapeHtml(observacionProducto)}</td></tr>
   </table>
 
   <div class="sec sec-title">3. VEHICULO TRANSPORTADOR</div>
-  <table class="t">
+  <table class="t t-kv">
     <tr><td>Nombre del Conductor</td><td>${escapeHtml(conductor)}</td></tr>
     <tr><td>Cedula de ciudadanía</td><td>${escapeHtml(String(c.id_conductor || '—'))}</td></tr>
     <tr><td>Tipo de vehículo</td><td>${escapeHtml(c.tipo_vehiculo || 'TRANSPORTE DE ALIMENTO NO COMESTIBLE')}</td></tr>
@@ -2889,8 +2876,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     TOTAL: <span class="v">${totalBase}${ajusteBloque ? ` ${escapeHtml(ajusteBloque)}` : ''}${escapeHtml(descomisoTxt)} = ${totalFinal}</span>
   </div>
 
-  <table class="t firma">
-    <tr><td style="width:50%">FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
+  <table class="t t-kv firma">
+    <tr><td>FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
     <tr><td>CEDULA DE CIUDADANIA:</td><td>${escapeHtml(c.firma_cedula || '—')}</td></tr>
     <tr><td>CARGO:</td><td>${escapeHtml(c.firma_cargo || '—')}</td></tr>
   </table>
@@ -2942,17 +2929,28 @@ async function descargarPdfGuiaDespacho() {
       categoria,
       manual,
     });
+    // Formato CARTA (Letter 8.5" x 11" = 215.9 x 279.4 mm).
+    // Margen 6mm => area util ~ 203.9 x 267.4 mm.
+    // 760px a 96 DPI ~ 201mm => calza dentro del area util sin recortes laterales.
+    const htmlForPdf = `<div style="width:760px;background:#fff;box-sizing:border-box;font-family:Arial,sans-serif">${html}</div>`;
     try {
       const h2p = await ensureHtml2PdfDisponible();
-      const htmlForPdf = `<div style="width:794px;background:#fff">${html}</div>`;
       await h2p()
         .set({
-          margin: 6,
+          margin: [6, 6, 6, 6],
           filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
           image: { type: 'jpeg', quality: 0.96 },
-          html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-          pagebreak: { mode: ['css', 'legacy'] },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff',
+          },
+          jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait', compress: true },
+          pagebreak: {
+            mode: ['avoid-all', 'css', 'legacy'],
+            avoid: ['.t', '.sec', '.resumen', '.firma', '.nota', '.h-top'],
+          },
         })
         .from(htmlForPdf, 'string')
         .save();

@@ -485,40 +485,39 @@
                 Generar PDF guía
               </button>
             </div>
-            <div class="rep-mini-fechas" style="margin-top:10px">
-              <div>
-                <label class="fl">Pendientes del día (automático)</label>
-                <input class="fi" id="inp-guia-pendientes" type="number" min="0" step="1" placeholder="0" readonly>
-                <small style="display:block;color:var(--tx2);margin-top:4px">Se calcula automáticamente según la fecha y categoría.</small>
+            <details class="guia-ajuste-section" open>
+              <summary class="guia-ajuste-summary">AJUSTE POR DÍA ANTERIOR Y DECOMISO (SOLO SI APLICA)</summary>
+              <div class="guia-ajuste-body">
+                <div class="rep-mini-fechas">
+                  <div>
+                    <label class="fl">AJUSTE</label>
+                    <input class="fi" id="inp-guia-ajuste-valor" type="number" min="0" step="1" placeholder="0">
+                    <small style="display:block;color:var(--tx2);margin-top:4px">Se sugiere solo con guía del día anterior; si no aplica, déjalo en 0.</small>
+                  </div>
+                  <div>
+                    <label class="fl">TIPO</label>
+                    <select class="fs" id="sel-guia-ajuste-tipo">
+                      <option value="pendientes">Pendientes del día anterior</option>
+                      <option value="adicionales">Adicionales del día anterior</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="rep-mini-fechas" style="margin-top:8px">
+                  <div>
+                    <label class="fl">FECHA DEL AJUSTE</label>
+                    <input class="fi" id="inp-guia-ajuste-fecha" type="date">
+                    <small style="display:block;color:var(--tx2);margin-top:4px">Si hay ajuste &gt; 0, suele ser la fecha del día contra el que cuadras (p. ej. ayer).</small>
+                  </div>
+                  <div>
+                    <label class="fl">DECOMISO</label>
+                    <input class="fi" id="inp-guia-decomiso" type="number" min="0" step="1" placeholder="0">
+                    <small style="display:block;color:var(--tx2);margin-top:4px">Se resta al final del total si aplica.</small>
+                  </div>
+                </div>
               </div>
-              <div>
-                <label class="fl">Ajuste (editable)</label>
-                <input class="fi" id="inp-guia-ajuste-valor" type="number" min="0" step="1" placeholder="0">
-                <small style="display:block;color:var(--tx2);margin-top:4px">Valor heredado del día anterior (pendientes o adicionales).</small>
-              </div>
-            </div>
-            <div class="rep-mini-fechas" style="margin-top:8px">
-              <div>
-                <label class="fl">Tipo de ajuste</label>
-                <select class="fs" id="sel-guia-ajuste-tipo">
-                  <option value="pendientes">Pendientes del día anterior</option>
-                  <option value="adicionales">Adicionales del día anterior</option>
-                </select>
-              </div>
-              <div>
-                <label class="fl">Fecha del ajuste</label>
-                <input class="fi" id="inp-guia-ajuste-fecha" type="date">
-                <small style="display:block;color:var(--tx2);margin-top:4px">Ejemplo: si ajusta contra ayer, usa la fecha de ayer.</small>
-              </div>
-            </div>
-            <div class="rep-mini-fechas" style="margin-top:8px">
-              <div>
-                <label class="fl">Decomiso (editable)</label>
-                <input class="fi" id="inp-guia-decomiso" type="number" min="0" step="1" placeholder="0">
-                <small style="display:block;color:var(--tx2);margin-top:4px">Se resta al final del total si aplica.</small>
-              </div>
-            </div>
-            <div id="guia-resumen-control" style="margin-top:12px;padding:10px;border:1px solid #ddd;border-radius:8px;color:var(--tx2);font-size:13px">
+            </details>
+            <input id="inp-guia-pendientes" type="hidden" value="0">
+            <div id="guia-resumen-control" class="guia-resumen-control">
               Completa fecha y categoría, luego pulsa <strong>Vista previa</strong> para validar el cálculo antes del PDF.
             </div>
           </div>
@@ -528,7 +527,6 @@
         <div class="ph">
           <span class="pt">Vista previa guía despacho</span>
         </div>
-        <div id="guia-preview-editor" style="padding:10px 14px;border-bottom:1px solid #eee;display:none"></div>
         <div id="guia-preview-body" class="prev-wrap"></div>
       </div>
     </section>
