@@ -7510,6 +7510,7 @@ const repLibrillosState = {
   cacheAnio: new Map(),
   cacheFiltro: new Map(),
   lastRender: null,
+  reqSeq: 0,
 };
 
 function repLibFechaIso(v) {
@@ -7536,6 +7537,16 @@ function repLibArmarMesesSelect() {
   selMes.innerHTML = '<option value="">Todos</option>' + REP_LIB_MESES
     .map((m, idx) => `<option value="${idx + 1}">${m}</option>`)
     .join('');
+}
+
+function repLibMesDesdeSelect(selMes) {
+  if (!selMes) return 0;
+  const raw = String(selMes.value || '').trim();
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 1 && n <= 12) return n;
+  const txt = String(selMes.options?.[selMes.selectedIndex]?.text || raw || '').trim().toUpperCase();
+  const idx = REP_LIB_MESES.findIndex((m) => m === txt);
+  return idx >= 0 ? idx + 1 : 0;
 }
 
 function repLibArmarAniosSelect() {
@@ -7754,44 +7765,137 @@ function repLibNombreArchivo(ext) {
 
 function descargarReporteLibrillosPDF() {
   const st = repLibrillosState.lastRender;
-  if (!st || !Array.isArray(st.filas)) {
+  const cargando = document.getElementById('rep-lib-inline-loader')?.classList.contains('show');
+  if (cargando) {
+    mostrarToast('El reporte aún está cargando. Intenta de nuevo en unos segundos.', 'err');
+    return;
+  }
+  if (!st || !Array.isArray(st.filas) || !st.filas.length) {
     mostrarToast('Primero genera el reporte para descargar.', 'err');
     return;
   }
-  const source = document.getElementById('vista-rep-librillos');
-  if (!source) {
-    mostrarToast('No se encontró la vista para generar el PDF.', 'err');
-    return;
-  }
-  const wrap = source.cloneNode(true);
+  const wrap = document.createElement('div');
   wrap.id = 'rep-lib-pdf-clone';
-  wrap.classList.add('active');
-  wrap.style.display = 'block';
   wrap.style.padding = '16px';
+  wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
   wrap.style.background = '#ffffff';
   wrap.style.width = '1280px';
   wrap.style.maxWidth = '1280px';
   wrap.style.position = 'fixed';
-  wrap.style.left = '-99999px';
+  wrap.style.left = '0';
   wrap.style.top = '0';
+  wrap.style.opacity = '0.01';
+  wrap.style.pointerEvents = 'none';
+  wrap.style.zIndex = '-1';
 
-  const filtros = wrap.querySelector('.rep-lib-filtros');
-  if (filtros) filtros.remove();
-
-  const chart = wrap.querySelector('#rep-lib-chart');
-  if (chart) {
-    chart.id = 'rep-lib-chart-pdf';
-    chart.style.minHeight = '240px';
-  }
-  const legend = wrap.querySelector('#rep-lib-legend');
-  if (legend) legend.id = 'rep-lib-legend-pdf';
+  const chartHtml = document.getElementById('rep-lib-chart')?.innerHTML || '';
+  const legendHtml = document.getElementById('rep-lib-legend')?.innerHTML || '';
+  const fact = st.facturacion || {};
+  const factRows = Array.isArray(fact.detalle) ? fact.detalle : [];
+  const factLabel = (cod) => {
+    if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
+    return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
+  };
 
   const meta = document.createElement('div');
   meta.style.fontSize = '12px';
   meta.style.color = '#4b5b50';
   meta.style.margin = '0 0 10px 2px';
   meta.textContent = `Año: ${String(st.anio || '—')} · Mes: ${st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : 'Todos'} · Generado: ${new Date().toLocaleString('es-CO')}`;
-  wrap.prepend(meta);
+  wrap.appendChild(meta);
+
+  wrap.innerHTML += `
+    <div class="panel rep-lib-header" style="margin-bottom:12px">
+      <div class="rep-lib-brand">
+        <div class="rep-lib-logo">Colbeef</div>
+        <h2 class="rep-lib-title">REPORTE DE LIBRILLOS</h2>
+      </div>
+      <div class="rep-lib-kpis">
+        <div class="rep-lib-kpi rep-lib-kpi-total">
+          <span class="rep-lib-kpi-label">TOTAL DE LIBROS</span>
+          <strong>${fmtNum(st.totalLibros || 0)}</strong>
+        </div>
+        <div class="rep-lib-kpi rep-lib-kpi-facturar">
+          <span class="rep-lib-kpi-label">CANTIDAD DE LIBROS A FACTURAR</span>
+          <strong>${fmtNum(st.totalFacturar || 0)}</strong>
+        </div>
+      </div>
+    </div>
+    <div class="panel" style="margin-bottom:12px">
+      <div class="tw">
+        <table class="dt rep-lib-tabla">
+          <thead>
+            <tr>
+              <th>FECHA DE BENEFICIO</th>
+              <th>DERIVADOS CARNICOS</th>
+              <th>ASURCARNES</th>
+              <th>ASURCARNES COL</th>
+              <th>CAT</th>
+              <th>GLOBAL HIDES</th>
+              <th>ASURCARNES GLO</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${st.filas.map((f) => `
+              <tr>
+                <td>${repLibFmtFecha(f.fecha)}</td>
+                <td>${fmtNum(f.derivados_carnicos)}</td>
+                <td>${fmtNum(f.asurcarnes)}</td>
+                <td>${fmtNum(f.asurcarnescol)}</td>
+                <td>${fmtNum(f.cat)}</td>
+                <td>${fmtNum(f.global_hides)}</td>
+                <td>${fmtNum(f.asurcarnes_glo)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th>${fmtNum(st.totales?.derivados_carnicos || 0)}</th>
+              <th>${fmtNum(st.totales?.asurcarnes || 0)}</th>
+              <th>${fmtNum(st.totales?.asurcarnescol || 0)}</th>
+              <th>${fmtNum(st.totales?.cat || 0)}</th>
+              <th>${fmtNum(st.totales?.global_hides || 0)}</th>
+              <th>${fmtNum(st.totales?.asurcarnes_glo || 0)}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="panel rep-lib-fact-panel" style="margin-bottom:12px">
+      <div class="rep-lib-fact-text">${escapeHtml(String(fact.periodoTexto || ''))}</div>
+      <div class="tw">
+        <table class="dt rep-lib-fact-table">
+          <tbody>
+            ${factRows.map((d) => `
+              <tr>
+                <td class="rep-lib-fact-label">${escapeHtml(factLabel(d.codigo))}</td>
+                <td class="rep-lib-fact-value">${fmtNum(d.total)}</td>
+              </tr>
+            `).join('')}
+            <tr class="rep-lib-fact-total">
+              <td class="rep-lib-fact-label">TOTAL ${escapeHtml(String(fact.mesNombre || 'MES'))}</td>
+              <td class="rep-lib-fact-value">${fmtNum(fact.totalMes || 0)}</td>
+            </tr>
+            <tr>
+              <td class="rep-lib-fact-label">TOTAL ${escapeHtml(String(fact.corteAnteriorLabel || ''))}</td>
+              <td class="rep-lib-fact-value">${fmtNum(fact.totalCorteAnterior || 0)}</td>
+            </tr>
+            <tr class="rep-lib-fact-total">
+              <td class="rep-lib-fact-label">TOTAL A FACTURAR</td>
+              <td class="rep-lib-fact-value">${fmtNum(fact.totalFacturar || 0)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="rep-lib-fact-note">NOTA: CAT Y COCIDOS NO SE FACTURAN</div>
+    </div>
+    <div class="panel rep-lib-chart-panel">
+      <div class="ph"><span class="pt">Cantidad de librillos por mes y canal</span></div>
+      <div class="rep-lib-chart" style="min-height:240px">${chartHtml}</div>
+      <div class="rep-lib-legend">${legendHtml}</div>
+    </div>
+  `;
 
   document.body.appendChild(wrap);
   const opt = {
@@ -7811,6 +7915,13 @@ function descargarReporteLibrillosPDF() {
 }
 
 async function cargarReporteLibrillosVista(forzar = false) {
+  const reqId = ++repLibrillosState.reqSeq;
+  const setLoading = (on) => {
+    const ld = document.getElementById('rep-lib-inline-loader');
+    if (!ld) return;
+    ld.classList.toggle('show', !!on);
+    ld.setAttribute('aria-hidden', on ? 'false' : 'true');
+  };
   repLibArmarMesesSelect();
   if (!repLibrillosState.init) {
     repLibArmarAniosSelect();
@@ -7828,57 +7939,63 @@ async function cargarReporteLibrillosVista(forzar = false) {
   const selMes = document.getElementById('rep-lib-mes');
   const tbody = document.getElementById('rep-lib-tbody');
   if (!selAnio) return;
+  const mes = repLibMesDesdeSelect(selMes);
   if (forzar) {
     const cacheKeyAnio = String(selAnio.value || '');
-    const cacheKeyFiltro = `${cacheKeyAnio}|${Number(selMes?.value || 0)}`;
+    const cacheKeyFiltro = `${cacheKeyAnio}|${mes}`;
     repLibrillosState.cacheAnio.delete(cacheKeyAnio);
     repLibrillosState.cacheFiltro.delete(cacheKeyFiltro);
   }
   const anio = String(selAnio.value || '').trim();
-  const mes = Number(selMes?.value || 0);
   if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte...</td></tr>';
-  const lista = await repLibDatosPorFiltro(anio, mes);
-  const filtrada = lista.filter((r) => {
-    const f = repLibFechaIso(r?.fecha);
-    if (!f) return false;
-    if (mes) return Number(f.slice(5, 7)) === mes;
-    return true;
-  });
-  const map = new Map();
-  filtrada.forEach((r) => {
-    const fecha = repLibFechaIso(r.fecha);
-    if (!fecha) return;
-    const codigo = codigoAgrupacionMacro(r);
-    if (!REP_LIB_CANALES.find((c) => c.key === codigo)) return;
-    if (!map.has(fecha)) map.set(fecha, repLibFilaBase(fecha));
-    const acc = map.get(fecha);
-    acc[codigo] += 1;
-  });
-  const filas = [...map.values()].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
-  const totales = repLibFilaBase('tot');
-  filas.forEach((f) => REP_LIB_CANALES.forEach((c) => { totales[c.key] += Number(f[c.key] || 0); }));
-  const totalLibros = REP_LIB_CANALES.reduce((s, c) => s + Number(totales[c.key] || 0), 0);
-  const fact = repLibCalcularFacturacion(filtrada, anio, mes);
-  fact.mesNombre = mes ? REP_LIB_MESES[Number(mes) - 1] : 'MES';
-  const dPrev = new Date(Number(anio), Number(mes || 1) - 1, 0);
-  fact.corteAnteriorLabel = `${dPrev.getDate()} ${REP_LIB_MESES[dPrev.getMonth()]}`;
-  const totalFacturar = Number(fact.totalFacturar || 0);
-  const k1 = document.getElementById('rep-lib-total-libros');
-  const k2 = document.getElementById('rep-lib-total-facturar');
-  if (k1) k1.textContent = fmtNum(totalLibros);
-  if (k2) k2.textContent = fmtNum(totalFacturar);
-  repLibPintarFacturacion(fact);
-  repLibrillosState.lastRender = {
-    filas,
-    totales,
-    totalLibros,
-    totalFacturar,
-    anio,
-    mes: mes || null,
-    facturacion: fact,
-  };
-  repLibPintarTabla(filas, totales);
-  repLibPintarChart(filas);
+  setLoading(true);
+  try {
+    const lista = await repLibDatosPorFiltro(anio, mes);
+    if (reqId !== repLibrillosState.reqSeq) return;
+    const filtrada = lista.filter((r) => {
+      const f = repLibFechaIso(r?.fecha);
+      if (!f) return false;
+      if (mes) return Number(f.slice(5, 7)) === mes;
+      return true;
+    });
+    const map = new Map();
+    filtrada.forEach((r) => {
+      const fecha = repLibFechaIso(r.fecha);
+      if (!fecha) return;
+      const codigo = codigoAgrupacionMacro(r);
+      if (!REP_LIB_CANALES.find((c) => c.key === codigo)) return;
+      if (!map.has(fecha)) map.set(fecha, repLibFilaBase(fecha));
+      const acc = map.get(fecha);
+      acc[codigo] += 1;
+    });
+    const filas = [...map.values()].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+    const totales = repLibFilaBase('tot');
+    filas.forEach((f) => REP_LIB_CANALES.forEach((c) => { totales[c.key] += Number(f[c.key] || 0); }));
+    const totalLibros = REP_LIB_CANALES.reduce((s, c) => s + Number(totales[c.key] || 0), 0);
+    const fact = repLibCalcularFacturacion(filtrada, anio, mes);
+    fact.mesNombre = mes ? REP_LIB_MESES[Number(mes) - 1] : 'MES';
+    const dPrev = new Date(Number(anio), Number(mes || 1) - 1, 0);
+    fact.corteAnteriorLabel = `${dPrev.getDate()} ${REP_LIB_MESES[dPrev.getMonth()]}`;
+    const totalFacturar = Number(fact.totalFacturar || 0);
+    const k1 = document.getElementById('rep-lib-total-libros');
+    const k2 = document.getElementById('rep-lib-total-facturar');
+    if (k1) k1.textContent = fmtNum(totalLibros);
+    if (k2) k2.textContent = fmtNum(totalFacturar);
+    repLibPintarFacturacion(fact);
+    repLibrillosState.lastRender = {
+      filas,
+      totales,
+      totalLibros,
+      totalFacturar,
+      anio,
+      mes: mes || null,
+      facturacion: fact,
+    };
+    repLibPintarTabla(filas, totales);
+    repLibPintarChart(filas);
+  } finally {
+    if (reqId === repLibrillosState.reqSeq) setLoading(false);
+  }
 }
 
 // ── INICIAR ───────────────────────────────────────────────────────────────────
