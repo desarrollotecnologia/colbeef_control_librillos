@@ -7497,10 +7497,18 @@ const REP_LIB_CANALES = [
   { key: 'global_hides', label: 'GLOBAL HIDES', color: '#8e6ac8' },
   { key: 'asurcarnes_glo', label: 'ASURCARNES GLO', color: '#2e7d32' },
 ];
+const REP_LIB_FACTURABLE = new Set([
+  'derivados_carnicos',
+  'asurcarnes',
+  'asurcarnescol',
+  'global_hides',
+  'asurcarnes_glo',
+]);
 const REP_LIB_MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
 const repLibrillosState = {
   init: false,
   cacheAnio: new Map(),
+  cacheFiltro: new Map(),
   lastRender: null,
 };
 
@@ -7557,6 +7565,41 @@ async function repLibDatosPorAnio(anio) {
   });
   const out = [...dedupe.values()];
   repLibrillosState.cacheAnio.set(key, out);
+  return out;
+}
+
+async function repLibDatosPorFiltro(anio, mes) {
+  const y = String(anio || '').trim();
+  const m = Number(mes || 0);
+  if (!/^\d{4}$/.test(y)) return [];
+  if (!m) return repLibDatosPorAnio(y);
+
+  const key = `${y}|${m}`;
+  if (repLibrillosState.cacheFiltro.has(key)) return repLibrillosState.cacheFiltro.get(key);
+
+  const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  const anioHoy = Number(hoy.slice(0, 4));
+  const mesHoy = Number(hoy.slice(5, 7));
+  if (Number(y) > anioHoy || (Number(y) === anioHoy && m > mesHoy)) return [];
+
+  const desdeMes = `${y}-${String(m).padStart(2, '0')}-01`;
+  const finMes = Number(y) === anioHoy && m === mesHoy
+    ? hoy
+    : `${y}-${String(m).padStart(2, '0')}-${String(new Date(Number(y), m, 0).getDate()).padStart(2, '0')}`;
+  const corteAnterior = new Date(Number(y), m - 1, 0).toLocaleDateString('en-CA');
+
+  const [datosMes, datosCorteAnterior] = await Promise.all([
+    fetchDatosRango(desdeMes, finMes).catch(() => []),
+    fetchDatosRango(corteAnterior, corteAnterior).catch(() => []),
+  ]);
+
+  const dedupe = new Map();
+  [...datosMes, ...datosCorteAnterior].forEach((r) => {
+    const k = `${String(r?.id_producto || '')}|${String(r?.fecha || '')}`;
+    if (!dedupe.has(k)) dedupe.set(k, r);
+  });
+  const out = [...dedupe.values()];
+  repLibrillosState.cacheFiltro.set(key, out);
   return out;
 }
 
@@ -7628,6 +7671,79 @@ function repLibPintarChart(filas) {
     .join('');
 }
 
+function repLibCalcularFacturacion(lista, anio, mes) {
+  const out = {
+    periodoTexto: 'Selecciona un mes para calcular facturación.',
+    detalle: [],
+    totalMes: 0,
+    totalCorteAnterior: 0,
+    totalFacturar: 0,
+  };
+  if (!mes) return out;
+  const detalle = new Map();
+  let totalMes = 0;
+  let totalCorteAnterior = 0;
+  const y = Number(anio);
+  const m = Number(mes);
+  const fechaCortePrev = new Date(y, m - 1, 0).toLocaleDateString('en-CA');
+  const fechaFinMes = new Date(y, m, 0).toLocaleDateString('en-CA');
+  (lista || []).forEach((r) => {
+    const f = repLibFechaIso(r?.fecha);
+    if (!f) return;
+    const cod = codigoAgrupacionMacro(r);
+    if (!REP_LIB_FACTURABLE.has(cod)) return;
+    const yy = Number(f.slice(0, 4));
+    const mm = Number(f.slice(5, 7));
+    if (yy === y && mm === m) {
+      detalle.set(cod, (detalle.get(cod) || 0) + 1);
+      totalMes += 1;
+    }
+    if (f === fechaCortePrev) {
+      totalCorteAnterior += 1;
+    }
+  });
+  out.periodoTexto = `Se realiza factura de comisión de librillos del ${repLibFmtFecha(fechaCortePrev)} al ${repLibFmtFecha(fechaFinMes)}.`;
+  out.detalle = [...detalle.entries()]
+    .map(([codigo, total]) => ({ codigo, total }))
+    .sort((a, b) => b.total - a.total || a.codigo.localeCompare(b.codigo));
+  out.totalMes = totalMes;
+  out.totalCorteAnterior = totalCorteAnterior;
+  out.totalFacturar = totalMes + totalCorteAnterior;
+  return out;
+}
+
+function repLibPintarFacturacion(data) {
+  const txt = document.getElementById('rep-lib-fact-text');
+  const tbody = document.getElementById('rep-lib-fact-tbody');
+  if (!txt || !tbody) return;
+  txt.textContent = String(data?.periodoTexto || '');
+  const etiqueta = (cod) => {
+    if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
+    return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
+  };
+  const rowsDetalle = (data?.detalle || []).map((d) => `
+    <tr>
+      <td class="rep-lib-fact-label">${escapeHtml(etiqueta(d.codigo))}</td>
+      <td class="rep-lib-fact-value">${fmtNum(d.total)}</td>
+    </tr>
+  `).join('');
+  tbody.innerHTML = `
+    ${rowsDetalle || '<tr><td class="rep-lib-fact-label">SIN REGISTROS FACTURABLES</td><td class="rep-lib-fact-value">0</td></tr>'}
+    <tr class="rep-lib-fact-total">
+      <td class="rep-lib-fact-label">TOTAL ${escapeHtml(data?.mesNombre || '')}</td>
+      <td class="rep-lib-fact-value">${fmtNum(data?.totalMes || 0)}</td>
+    </tr>
+    <tr>
+      <td class="rep-lib-fact-label">TOTAL ${escapeHtml(data?.corteAnteriorLabel || '')}</td>
+      <td class="rep-lib-fact-value">${fmtNum(data?.totalCorteAnterior || 0)}</td>
+    </tr>
+    <tr class="rep-lib-fact-total">
+      <td class="rep-lib-fact-label">TOTAL A FACTURAR</td>
+      <td class="rep-lib-fact-value">${fmtNum(data?.totalFacturar || 0)}</td>
+    </tr>
+  `;
+}
+
 function repLibNombreArchivo(ext) {
   const s = repLibrillosState.lastRender || {};
   const anio = String(s.anio || 'reporte');
@@ -7642,77 +7758,56 @@ function descargarReporteLibrillosPDF() {
     mostrarToast('Primero genera el reporte para descargar.', 'err');
     return;
   }
-  const wrap = document.createElement('div');
-  wrap.style.padding = '20px';
-  wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
-  wrap.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px">
-      <div>
-        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:30px;color:#2daa41;font-weight:800">Colbeef</div>
-        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:22px;font-weight:700;letter-spacing:.03em">REPORTE DE LIBRILLOS</div>
-      </div>
-      <div style="text-align:right;font-size:12px;color:#444">
-        <div><strong>Año:</strong> ${escapeHtml(String(st.anio || '—'))}</div>
-        <div><strong>Mes:</strong> ${escapeHtml(st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : 'Todos')}</div>
-        <div>Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}</div>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;margin-bottom:12px">
-      <div style="border:1px solid #2f9650;border-radius:10px;padding:8px 12px;min-width:220px">
-        <div style="font-size:10px;color:#666">TOTAL DE LIBROS</div>
-        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:30px;color:#208748;font-weight:700">${fmtNum(st.totalLibros || 0)}</div>
-      </div>
-      <div style="border:1px solid #d96f2f;border-radius:10px;padding:8px 12px;min-width:260px;background:#fff8f1">
-        <div style="font-size:10px;color:#666">CANTIDAD DE LIBROS A FACTURAR</div>
-        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:30px;color:#cf5c2f;font-weight:700">${fmtNum(st.totalFacturar || 0)}</div>
-      </div>
-    </div>
-    <table style="width:100%;border-collapse:collapse;font-size:11px">
-      <thead>
-        <tr style="background:#0a7f2d;color:#fff">
-          <th style="text-align:left;border:1px solid #06531d;padding:6px">FECHA DE BENEFICIO</th>
-          <th style="text-align:right;border:1px solid #06531d;padding:6px">DERIVADOS CARNICOS</th>
-          <th style="text-align:right;border:1px solid #06531d;padding:6px">ASURCARNES</th>
-          <th style="text-align:right;border:1px solid #06531d;padding:6px">ASURCARNES COL</th>
-          <th style="text-align:right;border:1px solid #06531d;padding:6px">CAT</th>
-          <th style="text-align:right;border:1px solid #06531d;padding:6px">GLOBAL HIDES</th>
-          <th style="text-align:right;border:1px solid #06531d;padding:6px">ASURCARNES GLO</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${(st.filas || []).map((f, idx) => `
-          <tr style="background:${idx % 2 ? '#edf8ef' : '#fff'}">
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:left">${repLibFmtFecha(f.fecha)}</td>
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.derivados_carnicos)}</td>
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.asurcarnes)}</td>
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.asurcarnescol)}</td>
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.cat)}</td>
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.global_hides)}</td>
-            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.asurcarnes_glo)}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-      <tfoot>
-        <tr style="background:#0a7f2d;color:#fff;font-weight:700">
-          <td style="border:1px solid #06531d;padding:6px">TOTAL</td>
-          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.derivados_carnicos || 0)}</td>
-          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.asurcarnes || 0)}</td>
-          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.asurcarnescol || 0)}</td>
-          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.cat || 0)}</td>
-          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.global_hides || 0)}</td>
-          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.asurcarnes_glo || 0)}</td>
-        </tr>
-      </tfoot>
-    </table>
-  `;
+  const source = document.getElementById('vista-rep-librillos');
+  if (!source) {
+    mostrarToast('No se encontró la vista para generar el PDF.', 'err');
+    return;
+  }
+  const wrap = source.cloneNode(true);
+  wrap.id = 'rep-lib-pdf-clone';
+  wrap.classList.add('active');
+  wrap.style.display = 'block';
+  wrap.style.padding = '16px';
+  wrap.style.background = '#ffffff';
+  wrap.style.width = '1280px';
+  wrap.style.maxWidth = '1280px';
+  wrap.style.position = 'fixed';
+  wrap.style.left = '-99999px';
+  wrap.style.top = '0';
+
+  const filtros = wrap.querySelector('.rep-lib-filtros');
+  if (filtros) filtros.remove();
+
+  const chart = wrap.querySelector('#rep-lib-chart');
+  if (chart) {
+    chart.id = 'rep-lib-chart-pdf';
+    chart.style.minHeight = '240px';
+  }
+  const legend = wrap.querySelector('#rep-lib-legend');
+  if (legend) legend.id = 'rep-lib-legend-pdf';
+
+  const meta = document.createElement('div');
+  meta.style.fontSize = '12px';
+  meta.style.color = '#4b5b50';
+  meta.style.margin = '0 0 10px 2px';
+  meta.textContent = `Año: ${String(st.anio || '—')} · Mes: ${st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : 'Todos'} · Generado: ${new Date().toLocaleString('es-CO')}`;
+  wrap.prepend(meta);
+
+  document.body.appendChild(wrap);
   const opt = {
     margin: [8, 8, 8, 8],
     filename: repLibNombreArchivo('pdf'),
     image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true },
+    html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
   };
-  html2pdf().set(opt).from(wrap).save();
+  html2pdf()
+    .set(opt)
+    .from(wrap)
+    .save()
+    .finally(() => {
+      wrap.remove();
+    });
 }
 
 async function cargarReporteLibrillosVista(forzar = false) {
@@ -7731,11 +7826,18 @@ async function cargarReporteLibrillosVista(forzar = false) {
   }
   const selAnio = document.getElementById('rep-lib-anio');
   const selMes = document.getElementById('rep-lib-mes');
+  const tbody = document.getElementById('rep-lib-tbody');
   if (!selAnio) return;
-  if (forzar) repLibrillosState.cacheAnio.delete(String(selAnio.value || ''));
+  if (forzar) {
+    const cacheKeyAnio = String(selAnio.value || '');
+    const cacheKeyFiltro = `${cacheKeyAnio}|${Number(selMes?.value || 0)}`;
+    repLibrillosState.cacheAnio.delete(cacheKeyAnio);
+    repLibrillosState.cacheFiltro.delete(cacheKeyFiltro);
+  }
   const anio = String(selAnio.value || '').trim();
   const mes = Number(selMes?.value || 0);
-  const lista = await repLibDatosPorAnio(anio);
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte...</td></tr>';
+  const lista = await repLibDatosPorFiltro(anio, mes);
   const filtrada = lista.filter((r) => {
     const f = repLibFechaIso(r?.fecha);
     if (!f) return false;
@@ -7756,11 +7858,16 @@ async function cargarReporteLibrillosVista(forzar = false) {
   const totales = repLibFilaBase('tot');
   filas.forEach((f) => REP_LIB_CANALES.forEach((c) => { totales[c.key] += Number(f[c.key] || 0); }));
   const totalLibros = REP_LIB_CANALES.reduce((s, c) => s + Number(totales[c.key] || 0), 0);
-  const totalFacturar = totalLibros;
+  const fact = repLibCalcularFacturacion(filtrada, anio, mes);
+  fact.mesNombre = mes ? REP_LIB_MESES[Number(mes) - 1] : 'MES';
+  const dPrev = new Date(Number(anio), Number(mes || 1) - 1, 0);
+  fact.corteAnteriorLabel = `${dPrev.getDate()} ${REP_LIB_MESES[dPrev.getMonth()]}`;
+  const totalFacturar = Number(fact.totalFacturar || 0);
   const k1 = document.getElementById('rep-lib-total-libros');
   const k2 = document.getElementById('rep-lib-total-facturar');
   if (k1) k1.textContent = fmtNum(totalLibros);
   if (k2) k2.textContent = fmtNum(totalFacturar);
+  repLibPintarFacturacion(fact);
   repLibrillosState.lastRender = {
     filas,
     totales,
@@ -7768,6 +7875,7 @@ async function cargarReporteLibrillosVista(forzar = false) {
     totalFacturar,
     anio,
     mes: mes || null,
+    facturacion: fact,
   };
   repLibPintarTabla(filas, totales);
   repLibPintarChart(filas);
