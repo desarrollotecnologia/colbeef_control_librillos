@@ -5966,10 +5966,18 @@ function clientePivotMacro(d, nombreGrupo = '') {
     if (src.includes('CARVISCOL')) {
       return prop || elegirNombreMasCompleto(cand, (s) => /carviscol/i.test(s)) || 'CARVISCOL';
     }
-    if (src.includes('RUTH CACUA') || cand.some((s) => /ruth/i.test(s) && /cacua/i.test(s))) {
-      const n = elegirNombreMasCompleto(cand, (s) => /ruth/i.test(s) && /cacua/i.test(s));
-      return n || cliDest || 'RUTH CACUA';
-    }
+    // Canoniza todas las variantes de "CACUA" hacia la misma etiqueta comercial (como en VBA: RUT/CACUA/CARMEN/LARROTA => RUTH CACUA).
+    const hasCacua =
+      /\bCACUA\b/.test(src) ||
+      cand.some((s) => /cacua/i.test(String(s)));
+    const hasRutCacua = /\bRUT\s*CACUA\b/.test(src) || cand.some((s) => /rut/i.test(String(s)) && /cacua/i.test(String(s)));
+    const hasRuthCacua = src.includes('RUTH CACUA') || cand.some((s) => /ruth/i.test(String(s)) && /cacua/i.test(String(s)));
+    const hasCarmen = /\bCARMEN\b/.test(src) || cand.some((s) => /carmen/i.test(String(s)));
+    const hasLarrota =
+      /\bLARROTA\s*EDINSON\b/.test(src) ||
+      /\bLARROTA\s*EDINISON\b/.test(src) ||
+      /\bLARROTA\s*EDIN(?:SON|ISON)\b/i.test(src);
+    if (hasRuthCacua || hasRutCacua || hasCacua || hasCarmen || hasLarrota) return 'RUTH CACUA';
     if (
       src.includes('JUAN CARLOS RUEDA') ||
       src.includes('JUAN RUEDA') ||

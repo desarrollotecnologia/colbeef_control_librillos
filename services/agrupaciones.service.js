@@ -128,6 +128,10 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
     /\bderivados\s+carnicos\b/.test(t) ||
     /\bcarviscol\b/.test(t) ||
     /\bruth\s+cacua\b/.test(t) ||
+    (retLibr && /\brut\s+cacua\b/.test(t)) ||
+    (retLibr && /\bcacua\b/.test(t)) ||
+    (retLibr && /\bcarmen\b/.test(t)) ||
+    (retLibr && /\blarrota\s*edin(ison|son)\b/.test(t)) ||
     /\bjuan(\s+carlos)?\s+rueda\b/.test(t)
   ) {
     return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos' };
