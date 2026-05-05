@@ -2029,3 +2029,140 @@ body{
   color:var(--tx);
   font-weight:700;
 }
+
+/* ── REPORTE DE LIBRILLOS ────────────────────────── */
+.rep-lib-header{
+  display:flex;
+  justify-content:space-between;
+  gap:14px;
+  align-items:flex-start;
+  padding:14px 16px;
+  margin-bottom:14px;
+}
+.rep-lib-brand{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;}
+.rep-lib-logo{
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:42px;
+  line-height:1;
+  font-weight:800;
+  color:#2daa41;
+}
+.rep-lib-title{
+  margin:10px 0 0;
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:30px;
+  letter-spacing:.04em;
+}
+.rep-lib-kpis{display:flex;gap:12px;flex-wrap:wrap;justify-content:flex-end;}
+.rep-lib-kpi{
+  border:2px solid #2f9650;
+  border-radius:12px;
+  padding:8px 12px;
+  min-width:210px;
+  background:#fff;
+  text-align:center;
+}
+.rep-lib-kpi-label{
+  font-size:10px;
+  text-transform:uppercase;
+  color:var(--tx2);
+  display:block;
+}
+.rep-lib-kpi strong{
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:34px;
+  line-height:1;
+  color:#208748;
+}
+.rep-lib-kpi-facturar{
+  border-color:#d96f2f;
+  background:#fff8f1;
+}
+.rep-lib-kpi-facturar strong{color:#cf5c2f;}
+.rep-lib-filtros{
+  display:flex;
+  align-items:flex-end;
+  gap:12px;
+  margin-bottom:14px;
+  padding:12px 14px;
+  flex-wrap:wrap;
+}
+.rep-lib-tabla thead tr{
+  background:#0a7f2d !important;
+}
+.rep-lib-tabla thead th{
+  color:#fff !important;
+  border-color:#06531d !important;
+  background:#0a7f2d !important;
+}
+.rep-lib-tabla tbody tr:nth-child(even){background:#edf8ef;}
+.rep-lib-tabla tbody td{text-align:right;}
+.rep-lib-tabla tbody td:first-child,.rep-lib-tabla thead th:first-child,.rep-lib-tabla tfoot th:first-child{text-align:left;}
+.rep-lib-tabla tfoot th{
+  background:#0a7f2d;
+  color:#fff;
+  border-color:#06531d !important;
+}
+.rep-lib-chart-panel{margin-top:14px;}
+.rep-lib-chart{
+  display:flex;
+  gap:14px;
+  align-items:flex-end;
+  min-height:280px;
+  padding:16px;
+  overflow-x:auto;
+}
+.rep-lib-group{
+  min-width:108px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+}
+.rep-lib-bars{
+  height:220px;
+  display:flex;
+  align-items:flex-end;
+  gap:4px;
+}
+.rep-lib-bar-wrap{
+  width:14px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-end;
+  gap:4px;
+}
+.rep-lib-bar-value{
+  font-size:9px;
+  color:#4b5b50;
+  white-space:nowrap;
+}
+.rep-lib-bar{
+  width:100%;
+  border-radius:4px 4px 0 0;
+  min-height:2px;
+}
+.rep-lib-month{
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  color:#33423a;
+}
+.rep-lib-legend{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  padding:0 16px 14px;
+}
+.rep-lib-legend-item{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:11px;
+}
+.rep-lib-legend-swatch{
+  width:10px;
+  height:10px;
+  border-radius:2px;
+}

@@ -1554,7 +1554,7 @@ function aplicarVistaDesdeQueryString() {
     const q = new URLSearchParams(window.location.search || '');
     const v = (q.get('vista') || '').trim().toLowerCase();
     if (!v) return;
-    const permitidas = new Set(['historial', 'inventario', 'clientes', 'totales', 'reportes', 'guias', 'historico']);
+    const permitidas = new Set(['historial', 'inventario', 'clientes', 'totales', 'reportes', 'rep-librillos', 'guias', 'historico']);
     if (!permitidas.has(v)) return;
     const nav = document.querySelector(`.nav-item[data-vista="${v}"]`);
     if (nav) irVista(v, nav);
@@ -1577,6 +1577,7 @@ function irVista(nombre, btn) {
     clientes: 'Por cliente',
     totales: 'Resumen del día',
     reportes: 'Reportes',
+    'rep-librillos': 'Reporte de librillos',
     guias: 'Guía de despacho',
     historico: 'Historico de cambios',
   };
@@ -1594,6 +1595,7 @@ function irVista(nombre, btn) {
   if (ba) ba.style.display = '';
   if (nombre === 'inventario') renderInventario();
   if (nombre === 'totales') void actualizarVistaTotales();
+  if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
     const fechaBase = document.getElementById('fecha-global')?.value || hoyISO();
     const fd = document.getElementById('fecha-historico-desde');
@@ -4084,6 +4086,9 @@ async function cambiarFecha() {
     if (document.getElementById('vista-totales')?.classList.contains('active')) {
       void actualizarVistaTotales();
     }
+    if (document.getElementById('vista-rep-librillos')?.classList.contains('active')) {
+      void cargarReporteLibrillosVista();
+    }
     try {
       const [datos, salidas] = await Promise.all([
         fetchPorFecha(fecha),
@@ -4130,6 +4135,9 @@ async function cargarDatos() {
       _autoInvSnapshot = snapshotPendientes(datos, salidasRegistradas);
       if (document.getElementById('vista-totales')?.classList.contains('active')) {
         void actualizarVistaTotales();
+      }
+      if (document.getElementById('vista-rep-librillos')?.classList.contains('active')) {
+        void cargarReporteLibrillosVista();
       }
     } catch(e) {
       console.error('Error:', e);
@@ -7479,6 +7487,200 @@ function imprimirEtiquetasCrudasDespachadasHoy() {
     viewName: _analyticsViewActual,
     meta: { modo: 'despachadas_hoy', total: crudasDesp.length, fecha: fechaSel },
   });
+}
+
+const REP_LIB_CANALES = [
+  { key: 'derivados_carnicos', label: 'DERIVADOS CARNICOS', color: '#1e88e5' },
+  { key: 'asurcarnes', label: 'ASURCARNES', color: '#fbc02d' },
+  { key: 'asurcarnescol', label: 'ASURCARNES COL', color: '#8bc34a' },
+  { key: 'cat', label: 'CAT', color: '#e53935' },
+  { key: 'global_hides', label: 'GLOBAL HIDES', color: '#8e6ac8' },
+  { key: 'asurcarnes_glo', label: 'ASURCARNES GLO', color: '#2e7d32' },
+];
+const REP_LIB_MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+const repLibrillosState = {
+  init: false,
+  cacheAnio: new Map(),
+};
+
+function repLibFechaIso(v) {
+  const s = String(v || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function repLibFmtFecha(iso) {
+  if (!iso) return '—';
+  const d = new Date(`${iso}T00:00:00-05:00`);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleDateString('es-CO');
+}
+
+function repLibFilaBase(fecha) {
+  const base = { fecha };
+  REP_LIB_CANALES.forEach((c) => { base[c.key] = 0; });
+  return base;
+}
+
+function repLibArmarMesesSelect() {
+  const selMes = document.getElementById('rep-lib-mes');
+  if (!selMes || selMes.options.length > 1) return;
+  selMes.innerHTML = '<option value="">Todos</option>' + REP_LIB_MESES
+    .map((m, idx) => `<option value="${idx + 1}">${m}</option>`)
+    .join('');
+}
+
+function repLibArmarAniosSelect() {
+  const selAnio = document.getElementById('rep-lib-anio');
+  if (!selAnio) return;
+  const actual = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' }).slice(0, 4);
+  const y = Number(actual);
+  selAnio.innerHTML = [y, y - 1, y - 2]
+    .map((n) => `<option value="${n}">${n}</option>`)
+    .join('');
+}
+
+async function repLibDatosPorAnio(anio) {
+  const key = String(anio || '').trim();
+  if (!/^\d{4}$/.test(key)) return [];
+  if (repLibrillosState.cacheAnio.has(key)) return repLibrillosState.cacheAnio.get(key);
+  const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  const anioHoy = Number(hoy.slice(0, 4));
+  const mesHoy = Number(hoy.slice(5, 7));
+  const pedazos = [];
+  for (let mes = 1; mes <= 12; mes += 1) {
+    if (Number(key) > anioHoy) break;
+    if (Number(key) === anioHoy && mes > mesHoy) break;
+    const desde = `${key}-${String(mes).padStart(2, '0')}-01`;
+    const hastaDia = new Date(Number(key), mes, 0).getDate();
+    const hasta = `${key}-${String(mes).padStart(2, '0')}-${String(hastaDia).padStart(2, '0')}`;
+    pedazos.push(fetchDatosRango(desde, hasta).catch(() => []));
+  }
+  const lista = (await Promise.all(pedazos)).flat();
+  const dedupe = new Map();
+  lista.forEach((r) => {
+    const k = `${String(r?.id_producto || '')}|${String(r?.fecha || '')}`;
+    if (!dedupe.has(k)) dedupe.set(k, r);
+  });
+  const out = [...dedupe.values()];
+  repLibrillosState.cacheAnio.set(key, out);
+  return out;
+}
+
+function repLibPintarTabla(filas, totales) {
+  const tbody = document.getElementById('rep-lib-tbody');
+  if (!tbody) return;
+  if (!filas.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Sin datos para los filtros seleccionados.</td></tr>';
+  } else {
+    tbody.innerHTML = filas.map((f) => `
+      <tr>
+        <td>${repLibFmtFecha(f.fecha)}</td>
+        <td>${fmtNum(f.derivados_carnicos)}</td>
+        <td>${fmtNum(f.asurcarnes)}</td>
+        <td>${fmtNum(f.asurcarnescol)}</td>
+        <td>${fmtNum(f.cat)}</td>
+        <td>${fmtNum(f.global_hides)}</td>
+        <td>${fmtNum(f.asurcarnes_glo)}</td>
+      </tr>
+    `).join('');
+  }
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = fmtNum(v); };
+  set('rep-lib-total-derivados', totales.derivados_carnicos);
+  set('rep-lib-total-asurcarnes', totales.asurcarnes);
+  set('rep-lib-total-asurcarnes-col', totales.asurcarnescol);
+  set('rep-lib-total-cat', totales.cat);
+  set('rep-lib-total-global-hides', totales.global_hides);
+  set('rep-lib-total-asurcarnes-glo', totales.asurcarnes_glo);
+}
+
+function repLibPintarChart(filas) {
+  const el = document.getElementById('rep-lib-chart');
+  const legend = document.getElementById('rep-lib-legend');
+  if (!el || !legend) return;
+  const porMes = new Map();
+  filas.forEach((f) => {
+    const mes = Number(String(f.fecha).slice(5, 7));
+    if (!Number.isFinite(mes) || mes < 1 || mes > 12) return;
+    if (!porMes.has(mes)) porMes.set(mes, repLibFilaBase(`m-${mes}`));
+    const acc = porMes.get(mes);
+    REP_LIB_CANALES.forEach((c) => { acc[c.key] += Number(f[c.key] || 0); });
+  });
+  const meses = [...porMes.entries()].sort((a, b) => a[0] - b[0]).map(([m, v]) => ({ mes: m, ...v }));
+  if (!meses.length) {
+    el.innerHTML = '<div class="chart-empty">Sin datos para graficar.</div>';
+    legend.innerHTML = '';
+    return;
+  }
+  const max = Math.max(1, ...meses.flatMap((r) => REP_LIB_CANALES.map((c) => Number(r[c.key] || 0))));
+  el.innerHTML = meses.map((m) => `
+    <div class="rep-lib-group">
+      <div class="rep-lib-bars">
+        ${REP_LIB_CANALES.map((c) => {
+          const val = Number(m[c.key] || 0);
+          const h = Math.max(2, Math.round((val / max) * 190));
+          return `
+            <div class="rep-lib-bar-wrap">
+              <span class="rep-lib-bar-value">${fmtNum(val)}</span>
+              <span class="rep-lib-bar" style="height:${h}px;background:${c.color}" title="${c.label}: ${fmtNum(val)}"></span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div class="rep-lib-month">${REP_LIB_MESES[m.mes - 1]}</div>
+    </div>
+  `).join('');
+  legend.innerHTML = REP_LIB_CANALES
+    .map((c) => `<span class="rep-lib-legend-item"><span class="rep-lib-legend-swatch" style="background:${c.color}"></span>${c.label}</span>`)
+    .join('');
+}
+
+async function cargarReporteLibrillosVista(forzar = false) {
+  repLibArmarMesesSelect();
+  if (!repLibrillosState.init) {
+    repLibArmarAniosSelect();
+    const btn = document.getElementById('rep-lib-refrescar');
+    const selAnio = document.getElementById('rep-lib-anio');
+    const selMes = document.getElementById('rep-lib-mes');
+    btn?.addEventListener('click', () => { void cargarReporteLibrillosVista(true); });
+    selAnio?.addEventListener('change', () => { void cargarReporteLibrillosVista(false); });
+    selMes?.addEventListener('change', () => { void cargarReporteLibrillosVista(false); });
+    repLibrillosState.init = true;
+  }
+  const selAnio = document.getElementById('rep-lib-anio');
+  const selMes = document.getElementById('rep-lib-mes');
+  if (!selAnio) return;
+  if (forzar) repLibrillosState.cacheAnio.delete(String(selAnio.value || ''));
+  const anio = String(selAnio.value || '').trim();
+  const mes = Number(selMes?.value || 0);
+  const lista = await repLibDatosPorAnio(anio);
+  const filtrada = lista.filter((r) => {
+    const f = repLibFechaIso(r?.fecha);
+    if (!f) return false;
+    if (mes) return Number(f.slice(5, 7)) === mes;
+    return true;
+  });
+  const map = new Map();
+  filtrada.forEach((r) => {
+    if (!esLibrilloParaReporteAgrupacion(r)) return;
+    const fecha = repLibFechaIso(r.fecha);
+    if (!fecha) return;
+    const codigo = codigoAgrupacionMacro(r);
+    if (!REP_LIB_CANALES.find((c) => c.key === codigo)) return;
+    if (!map.has(fecha)) map.set(fecha, repLibFilaBase(fecha));
+    const acc = map.get(fecha);
+    acc[codigo] += 1;
+  });
+  const filas = [...map.values()].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const totales = repLibFilaBase('tot');
+  filas.forEach((f) => REP_LIB_CANALES.forEach((c) => { totales[c.key] += Number(f[c.key] || 0); }));
+  const totalLibros = REP_LIB_CANALES.reduce((s, c) => s + Number(totales[c.key] || 0), 0);
+  const totalFacturar = totalLibros;
+  const k1 = document.getElementById('rep-lib-total-libros');
+  const k2 = document.getElementById('rep-lib-total-facturar');
+  if (k1) k1.textContent = fmtNum(totalLibros);
+  if (k2) k2.textContent = fmtNum(totalFacturar);
+  repLibPintarTabla(filas, totales);
+  repLibPintarChart(filas);
 }
 
 // ── INICIAR ───────────────────────────────────────────────────────────────────

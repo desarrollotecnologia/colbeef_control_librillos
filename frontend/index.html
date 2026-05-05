@@ -42,6 +42,16 @@
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h8l4 4v10a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="10" x2="13" y2="10" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="13" x2="13" y2="13" stroke="currentColor" stroke-width="1.8"/></svg>
         <span class="nav-item-label"><span class="nav-item-title">Reportes</span><span class="nav-item-hint">Agrupación · Excel/PDF</span></span>
       </button>
+      <button type="button" class="nav-item" data-vista="rep-librillos" onclick="irVista('rep-librillos',this)">
+        <svg class="ni" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <path d="M3.5 4.5h13v11h-13z"></path>
+          <path d="M3.5 8.5h13"></path>
+          <path d="M7 8.5v7"></path>
+          <path d="M11 8.5v7"></path>
+          <path d="M15 8.5v7"></path>
+        </svg>
+        <span class="nav-item-label"><span class="nav-item-title">Rep. Librillos</span><span class="nav-item-hint">Tabla y barras por mes</span></span>
+      </button>
       <button type="button" class="nav-item" data-vista="guias" onclick="irVista('guias',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 2.5h8.5L16.5 6v11.5a1 1 0 01-1 1H4a1 1 0 01-1-1V3.5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12.5 2.5V6h4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 8v6M7.7 11.7L10 14l2.3-2.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <span class="nav-item-label"><span class="nav-item-title">Guía despacho</span><span class="nav-item-hint">PDF por fecha/categoría</span></span>
@@ -437,6 +447,80 @@
           <span class="pt" id="rep-prev-title-rep">Vista Previa</span>
         </div>
         <div id="rep-prev-body-rep" class="prev-wrap"></div>
+      </div>
+    </section>
+
+    <!-- ═══ REPORTE DE LIBRILLOS ═══ -->
+    <section class="vista" id="vista-rep-librillos">
+      <div class="panel rep-lib-header">
+        <div class="rep-lib-brand">
+          <div class="rep-lib-logo">Colbeef</div>
+          <h2 class="rep-lib-title">REPORTE DE LIBRILLOS</h2>
+        </div>
+        <div class="rep-lib-kpis">
+          <div class="rep-lib-kpi rep-lib-kpi-total">
+            <span class="rep-lib-kpi-label">TOTAL DE LIBROS</span>
+            <strong id="rep-lib-total-libros">0</strong>
+          </div>
+          <div class="rep-lib-kpi rep-lib-kpi-facturar">
+            <span class="rep-lib-kpi-label">CANTIDAD DE LIBROS A FACTURAR</span>
+            <strong id="rep-lib-total-facturar">0</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel rep-lib-filtros">
+        <div>
+          <label class="fl" for="rep-lib-anio">AÑO</label>
+          <select class="fs" id="rep-lib-anio"></select>
+        </div>
+        <div>
+          <label class="fl" for="rep-lib-mes">MES</label>
+          <select class="fs" id="rep-lib-mes">
+            <option value="">Todos</option>
+          </select>
+        </div>
+        <button type="button" class="btn-gen btn-gen-sec" id="rep-lib-refrescar">Actualizar reporte</button>
+      </div>
+
+      <div class="panel">
+        <div class="tw">
+          <table class="dt rep-lib-tabla">
+            <thead>
+              <tr>
+                <th>FECHA DE BENEFICIO</th>
+                <th>DERIVADOS CARNICOS</th>
+                <th>ASURCARNES</th>
+                <th>ASURCARNES COL</th>
+                <th>CAT</th>
+                <th>GLOBAL HIDES</th>
+                <th>ASURCARNES GLO</th>
+              </tr>
+            </thead>
+            <tbody id="rep-lib-tbody">
+              <tr><td colspan="7" class="empty">Cargando...</td></tr>
+            </tbody>
+            <tfoot>
+              <tr id="rep-lib-totales-row">
+                <th>Total</th>
+                <th id="rep-lib-total-derivados">0</th>
+                <th id="rep-lib-total-asurcarnes">0</th>
+                <th id="rep-lib-total-asurcarnes-col">0</th>
+                <th id="rep-lib-total-cat">0</th>
+                <th id="rep-lib-total-global-hides">0</th>
+                <th id="rep-lib-total-asurcarnes-glo">0</th>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel rep-lib-chart-panel">
+        <div class="ph">
+          <span class="pt">Cantidad de librillos por mes y canal</span>
+        </div>
+        <div id="rep-lib-chart" class="rep-lib-chart"></div>
+        <div id="rep-lib-legend" class="rep-lib-legend"></div>
       </div>
     </section>
 
