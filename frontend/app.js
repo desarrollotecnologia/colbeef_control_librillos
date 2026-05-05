@@ -1109,8 +1109,10 @@ let datosLibrillos = [];  // RETIRAR LIBRILLOS (historial librillos)
 let datosCrudasHist = []; // observación solo CRUDAS/CRUDA
 let datosClientes  = [];
 let salidasRegistradas = [];
+let fechaDatosGlobal = '';
 const cacheRangoFront = new Map();
 let cacheSalidasFront = { ts: 0, data: null };
+const cacheResumenMacroFront = new Map();
 const CACHE_FRONT_MS = 60000;
 let inventarioSubtab = 'lib'; // 'lib' | 'crud'
 let _autoInvSnapshot = '';
@@ -1685,10 +1687,16 @@ async function fetchSalidas() {
 
 async function fetchResumenMacro(fecha) {
   if (!fecha) return null;
+  const hit = cacheResumenMacroFront.get(String(fecha));
+  if (hit && (Date.now() - Number(hit.ts || 0)) <= CACHE_FRONT_MS) {
+    return hit.data;
+  }
   try {
     const res = await fetch(`${API_URL}/resumen?fecha=${encodeURIComponent(fecha)}`);
     if (!res.ok) return null;
-    return await res.json();
+    const data = await res.json();
+    cacheResumenMacroFront.set(String(fecha), { ts: Date.now(), data });
+    return data;
   } catch {
     return null;
   }
@@ -2131,11 +2139,20 @@ async function actualizarVistaTotales() {
     let salidas;
     let resumenMacro = null;
     try {
-      [datos, salidas, resumenMacro] = await Promise.all([
-        fetchPorFecha(fecha),
-        fetchSalidas(),
-        fetchResumenMacro(fecha),
-      ]);
+      const usarCacheDia = fecha && fecha === fechaDatosGlobal && Array.isArray(datosGlobal) && datosGlobal.length > 0;
+      if (usarCacheDia) {
+        [salidas, resumenMacro] = await Promise.all([
+          fetchSalidas(),
+          fetchResumenMacro(fecha),
+        ]);
+        datos = datosGlobal;
+      } else {
+        [datos, salidas, resumenMacro] = await Promise.all([
+          fetchPorFecha(fecha),
+          fetchSalidas(),
+          fetchResumenMacro(fecha),
+        ]);
+      }
       if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
         throw new Error('Resumen macro no disponible');
       }
@@ -4095,6 +4112,7 @@ async function cambiarFecha() {
         fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
       ]);
       datosGlobal = datos;
+      fechaDatosGlobal = fecha;
       datosClientes = datos;
       salidasRegistradas = normalizarListaSalidas(salidas);
       separarDatos(datosGlobal);
@@ -4121,6 +4139,7 @@ async function cargarDatos() {
         fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
       ]);
       datosGlobal    = datos;
+      fechaDatosGlobal = fecha;
       datosClientes  = datos;
       salidasRegistradas = normalizarListaSalidas(salidas);
       separarDatos(datos);
