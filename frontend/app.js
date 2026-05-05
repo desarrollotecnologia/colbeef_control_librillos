@@ -7546,17 +7546,10 @@ async function repLibDatosPorAnio(anio) {
   if (repLibrillosState.cacheAnio.has(key)) return repLibrillosState.cacheAnio.get(key);
   const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
   const anioHoy = Number(hoy.slice(0, 4));
-  const mesHoy = Number(hoy.slice(5, 7));
-  const pedazos = [];
-  for (let mes = 1; mes <= 12; mes += 1) {
-    if (Number(key) > anioHoy) break;
-    if (Number(key) === anioHoy && mes > mesHoy) break;
-    const desde = `${key}-${String(mes).padStart(2, '0')}-01`;
-    const hastaDia = new Date(Number(key), mes, 0).getDate();
-    const hasta = `${key}-${String(mes).padStart(2, '0')}-${String(hastaDia).padStart(2, '0')}`;
-    pedazos.push(fetchDatosRango(desde, hasta).catch(() => []));
-  }
-  const lista = (await Promise.all(pedazos)).flat();
+  if (Number(key) > anioHoy) return [];
+  const desde = `${key}-01-01`;
+  const hasta = Number(key) === anioHoy ? hoy : `${key}-12-31`;
+  const lista = await fetchDatosRango(desde, hasta).catch(() => []);
   const dedupe = new Map();
   lista.forEach((r) => {
     const k = `${String(r?.id_producto || '')}|${String(r?.fecha || '')}`;
@@ -7751,7 +7744,6 @@ async function cargarReporteLibrillosVista(forzar = false) {
   });
   const map = new Map();
   filtrada.forEach((r) => {
-    if (!esLibrilloParaReporteAgrupacion(r)) return;
     const fecha = repLibFechaIso(r.fecha);
     if (!fecha) return;
     const codigo = codigoAgrupacionMacro(r);
