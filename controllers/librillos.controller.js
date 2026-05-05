@@ -9,6 +9,7 @@ import {
 import {
   obtenerValidacionMovimientos,
   obtenerDiagnosticoMovimientos,
+  obtenerAuditoriaClasificacion,
   obtenerConfigOperacion,
 } from '../services/validacion.service.js';
 
@@ -118,6 +119,21 @@ export const getDiagnostico = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error al obtener diagnóstico' });
+  }
+};
+
+// GET /api/librillos/auditoria-clasificacion?fecha=YYYY-MM-DD
+export const getAuditoriaClasificacion = async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ error: 'Parámetro fecha requerido (YYYY-MM-DD)' });
+    }
+    const datos = await obtenerAuditoriaClasificacion(fecha);
+    res.json(datos);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Error al obtener auditoría de clasificación' });
   }
 };
 

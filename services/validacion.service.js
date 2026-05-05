@@ -1,6 +1,7 @@
 import { ID_TIPO_PARTE_COLBEEF } from '../config/tipo-parte.js';
 import {
   agrupacionDesdeObservacionCompleta,
+  clasificarAgrupacionConAuditoria,
   normalizarClienteDestino,
 } from './agrupaciones.service.js';
 import { obtenerLibrillosPorFecha } from './librillos.service.js';
@@ -252,6 +253,47 @@ export async function obtenerDiagnosticoMovimientos(fechaISO) {
     por_agrupacion,
     librillos: { total: librillos.length, ...contarEstados(librillos) },
     crudas: { total: crudas.length, ...contarEstados(crudas) },
+  };
+}
+
+export async function obtenerAuditoriaClasificacion(fechaISO) {
+  const datos = await obtenerLibrillosPorFecha(fechaISO);
+  const rows = (Array.isArray(datos) ? datos : []).map((d) => {
+    const obsRaw = String(d?.observaciones ?? d?.observacion ?? '').trim();
+    const clienteParsed = String(d?.cliente_destino || '').trim();
+    const calc = clasificarAgrupacionConAuditoria(obsRaw, clienteParsed);
+    const actualCod = String(d?.agrupacion_codigo || '').trim();
+    const actualEtiqueta = String(d?.agrupacion || '').trim();
+    return {
+      id_producto: String(d?.id_producto || '').trim(),
+      observacion_original: obsRaw || null,
+      observacion_normalizada: calc?.observacion_normalizada || null,
+      cliente_destino: clienteParsed || null,
+      agrupacion_actual_codigo: actualCod || null,
+      agrupacion_actual: actualEtiqueta || null,
+      agrupacion_recalculada_codigo: String(calc?.codigo || '').trim() || null,
+      agrupacion_recalculada: String(calc?.etiqueta || '').trim() || null,
+      regla_aplicada: String(calc?.regla || '').trim() || null,
+      coincide: (actualCod || '') === String(calc?.codigo || ''),
+    };
+  });
+
+  const total = rows.length;
+  const noCoinciden = rows.filter((r) => !r.coincide);
+  const porRegla = {};
+  rows.forEach((r) => {
+    const k = String(r.regla_aplicada || 'sin_regla');
+    porRegla[k] = (porRegla[k] || 0) + 1;
+  });
+
+  return {
+    fecha: fechaISO,
+    total,
+    total_no_coinciden: noCoinciden.length,
+    por_regla: Object.entries(porRegla)
+      .map(([regla, cantidad]) => ({ regla, cantidad }))
+      .sort((a, b) => b.cantidad - a.cantidad || a.regla.localeCompare(b.regla)),
+    muestras_no_coinciden: noCoinciden.slice(0, 200),
   };
 }
 

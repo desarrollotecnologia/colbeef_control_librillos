@@ -79,6 +79,24 @@ function extraerDestinoDesdeObservacionNormalizada(t) {
 }
 
 /**
+ * Normalización "estilo macro" previa a clasificar:
+ * - quita prefijos de turno /LxM/, /VxS/, etc.
+ * - si hay paréntesis, usa tramo antes de "(" para evitar ruido de cola operativa
+ * - comprime espacios
+ */
+export function normalizarObservacionMacro(obsRaw) {
+  const src = String(obsRaw || '')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!src) return '';
+  const sinTurno = src.replace(/\/[A-Z]X[A-Z]\//gi, ' ').replace(/\s+/g, ' ').trim();
+  const idxParen = sinTurno.indexOf('(');
+  const base = idxParen >= 0 ? sinTurno.slice(0, idxParen).trim() : sinTurno;
+  return base.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Reglas de negocio (texto completo observación / «Vísceras Blancas»), alineadas al resumen Excel:
  * 1) La marca CRUDAS se cuenta aparte (bandera), NO reemplaza la categoría comercial.
  * 2) Sub-marcas ASUR por palabras clave (CARNESCOL, GLO, ASURCARNES, CAT, DERIVADOS, GLOBAL HIDES).
@@ -95,10 +113,19 @@ function fallbackComercial(cfg) {
 }
 
 export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallback = '') {
+  return clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback);
+}
+
+/**
+ * Variante con metadata de regla aplicada para auditoría.
+ * Mantiene la misma salida de agrupación para no romper el flujo actual.
+ */
+export function clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback = '') {
   const cfg = cargarConfig();
-  const t = normalizarClienteDestino(obsRaw);
+  const obsNorm = normalizarObservacionMacro(obsRaw);
+  const t = normalizarClienteDestino(obsNorm || obsRaw);
   if (!t) {
-    return fallbackComercial(cfg);
+    return { ...fallbackComercial(cfg), regla: 'fallback_obs_vacia', observacion_normalizada: obsNorm };
   }
 
   const retLibr =
@@ -109,18 +136,18 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
   // Prioridad "tipo macro": primero subgrupos/especiales y destinos nominales,
   // luego bucket general ASURCARNES.
   if (t.includes('asurcarnescol') || (retLibr && t.includes('asurcarnes col'))) {
-    return { codigo: 'asurcarnescol', etiqueta: 'Asurcarnescol' };
+    return { codigo: 'asurcarnescol', etiqueta: 'Asurcarnescol', regla: 'match_asurcarnescol', observacion_normalizada: obsNorm };
   }
   if (
     t.includes('asurcarnes glo') ||
     t.includes('asurcarnesglo') ||
     t.includes('asurcarnesolo')
   ) {
-    return { codigo: 'asurcarnes_glo', etiqueta: 'Asurcarnes GLO' };
+    return { codigo: 'asurcarnes_glo', etiqueta: 'Asurcarnes GLO', regla: 'match_asurcarnes_glo', observacion_normalizada: obsNorm };
   }
 
   if (retLibr && /retirar\s+librillos\s*[:\-]?\s*cat\b/.test(t)) {
-    return { codigo: 'cat', etiqueta: 'CAT' };
+    return { codigo: 'cat', etiqueta: 'CAT', regla: 'match_cat_retirar', observacion_normalizada: obsNorm };
   }
 
   if (
@@ -134,7 +161,7 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
     (retLibr && /\blarrota\s*edin(ison|son)\b/.test(t)) ||
     /\bjuan(\s+carlos)?\s+rueda\b/.test(t)
   ) {
-    return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos' };
+    return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos', regla: 'match_derivados_keywords', observacion_normalizada: obsNorm };
   }
 
   if (
@@ -142,45 +169,45 @@ export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallbac
     t.includes('salomon') ||
     (retLibr && /\bhides\b/.test(t))
   ) {
-    return { codigo: 'global_hides', etiqueta: 'Global Hides' };
+    return { codigo: 'global_hides', etiqueta: 'Global Hides', regla: 'match_global_hides_keywords', observacion_normalizada: obsNorm };
   }
 
   // Equivalente a lógica macro: si no hay instrucción RETIRAR LIBRILLOS,
   // no se fuerza cliente comercial por alias; se considera cocido.
   if (!retLibr) {
-    return { codigo: 'cocidos', etiqueta: 'Cocidos' };
+    return { codigo: 'cocidos', etiqueta: 'Cocidos', regla: 'sin_retirar_librillos', observacion_normalizada: obsNorm };
   }
 
   const porAliasEnTexto = resolverGrupoPorAliases(t, cfg);
   if (porAliasEnTexto) {
-    return porAliasEnTexto;
+    return { ...porAliasEnTexto, regla: 'alias_texto_completo', observacion_normalizada: obsNorm };
   }
 
   // Safety net: cuando el parse previo de cliente falla, intenta extraer destino desde la observación.
   const destinoEnObs = normalizarClienteDestino(extraerDestinoDesdeObservacionNormalizada(t));
   if (destinoEnObs) {
     const porDestinoObs = resolverGrupoPorAliases(destinoEnObs, cfg);
-    if (porDestinoObs) return porDestinoObs;
-    if (/\basurcarnes\b/.test(destinoEnObs)) return { codigo: 'asurcarnes', etiqueta: 'Asurcarnes' };
-    if (/\bcat\b/.test(destinoEnObs)) return { codigo: 'cat', etiqueta: 'CAT' };
-    if (/\bderivados?\b/.test(destinoEnObs)) return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos' };
+    if (porDestinoObs) return { ...porDestinoObs, regla: 'alias_destino_extraido', observacion_normalizada: obsNorm };
+    if (/\basurcarnes\b/.test(destinoEnObs)) return { codigo: 'asurcarnes', etiqueta: 'Asurcarnes', regla: 'destino_obs_asur', observacion_normalizada: obsNorm };
+    if (/\bcat\b/.test(destinoEnObs)) return { codigo: 'cat', etiqueta: 'CAT', regla: 'destino_obs_cat', observacion_normalizada: obsNorm };
+    if (/\bderivados?\b/.test(destinoEnObs)) return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos', regla: 'destino_obs_derivados', observacion_normalizada: obsNorm };
     if (/\bglobal hides\b|\bsalomon\b|\bhides\b/.test(destinoEnObs)) {
-      return { codigo: 'global_hides', etiqueta: 'Global Hides' };
+      return { codigo: 'global_hides', etiqueta: 'Global Hides', regla: 'destino_obs_global_hides', observacion_normalizada: obsNorm };
     }
   }
 
   // Regla equivalente al resumen de INICIO (COUNTIF "*ASU*" menos subgrupos):
   // si sigue siendo retiro y menciona ASU, cae en ASURCARNES.
   if (/\basu\b|\basurcarnes\b/.test(t)) {
-    return { codigo: 'asurcarnes', etiqueta: 'Asurcarnes' };
+    return { codigo: 'asurcarnes', etiqueta: 'Asurcarnes', regla: 'fallback_asu_texto', observacion_normalizada: obsNorm };
   }
 
   const porCliente = agrupacionDesdeClienteDestino(clienteDestinoFallback, cfg);
   const cod = String(porCliente?.codigo || '');
   if (cod === 'otros' || cod === 'sin_destino') {
-    return fallbackComercial(cfg);
+    return { ...fallbackComercial(cfg), regla: 'fallback_comercial_no_cliente', observacion_normalizada: obsNorm };
   }
-  return porCliente;
+  return { ...porCliente, regla: 'cliente_destino_fallback', observacion_normalizada: obsNorm };
 }
 
 /**

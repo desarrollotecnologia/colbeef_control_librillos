@@ -6,6 +6,7 @@ import {
   getStats,
   getValidacion,
   getDiagnostico,
+  getAuditoriaClasificacion,
   getConfigOperacion,
   getResumenMacro,
 } from '../controllers/librillos.controller.js';
@@ -14,6 +15,7 @@ const router = express.Router();
 
 router.get('/validacion', getValidacion); // ?fecha=YYYY-MM-DD
 router.get('/diagnostico', getDiagnostico); // ?fecha=YYYY-MM-DD
+router.get('/auditoria-clasificacion', getAuditoriaClasificacion); // ?fecha=YYYY-MM-DD
 router.get('/config', getConfigOperacion);
 router.get('/resumen', getResumenMacro); // ?fecha=YYYY-MM-DD
 router.get('/observaciones', getObservaciones); // ?fecha=YYYY-MM-DD
