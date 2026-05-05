@@ -7499,9 +7499,9 @@ const REP_LIB_CANALES = [
 ];
 const REP_LIB_FACTURABLE = new Set([
   'derivados_carnicos',
+  'global_hides',
   'asurcarnes',
   'asurcarnescol',
-  'global_hides',
   'asurcarnes_glo',
 ]);
 const REP_LIB_MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
@@ -7714,9 +7714,15 @@ function repLibCalcularFacturacion(lista, anio, mes) {
     }
   });
   out.periodoTexto = `Se realiza factura de comisión de librillos del ${repLibFmtFecha(fechaCortePrev)} al ${repLibFmtFecha(fechaFinMes)}.`;
-  out.detalle = [...detalle.entries()]
-    .map(([codigo, total]) => ({ codigo, total }))
-    .sort((a, b) => b.total - a.total || a.codigo.localeCompare(b.codigo));
+  const asurCombo =
+    Number(detalle.get('asurcarnes') || 0) +
+    Number(detalle.get('asurcarnescol') || 0) +
+    Number(detalle.get('asurcarnes_glo') || 0);
+  out.detalle = [
+    { codigo: 'derivados_carnicos', total: Number(detalle.get('derivados_carnicos') || 0) },
+    { codigo: 'global_hides', total: Number(detalle.get('global_hides') || 0) },
+    { codigo: 'asur_combo', total: asurCombo },
+  ].filter((x) => Number(x.total || 0) > 0);
   out.totalMes = totalMes;
   out.totalCorteAnterior = totalCorteAnterior;
   out.totalFacturar = totalMes + totalCorteAnterior;
@@ -7729,6 +7735,7 @@ function repLibPintarFacturacion(data) {
   if (!txt || !tbody) return;
   txt.textContent = String(data?.periodoTexto || '');
   const etiqueta = (cod) => {
+    if (cod === 'asur_combo') return 'ASURCARNES -COL-GLO';
     if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
     return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
   };
@@ -7793,6 +7800,7 @@ function descargarReporteLibrillosPDF() {
   const fact = st.facturacion || {};
   const factRows = Array.isArray(fact.detalle) ? fact.detalle : [];
   const factLabel = (cod) => {
+    if (cod === 'asur_combo') return 'ASURCARNES -COL-GLO';
     if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
     return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
   };
