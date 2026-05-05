@@ -7501,6 +7501,7 @@ const REP_LIB_MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'J
 const repLibrillosState = {
   init: false,
   cacheAnio: new Map(),
+  lastRender: null,
 };
 
 function repLibFechaIso(v) {
@@ -7634,6 +7635,93 @@ function repLibPintarChart(filas) {
     .join('');
 }
 
+function repLibNombreArchivo(ext) {
+  const s = repLibrillosState.lastRender || {};
+  const anio = String(s.anio || 'reporte');
+  const mes = Number(s.mes || 0);
+  const mesTxt = mes ? String(mes).padStart(2, '0') : 'todos';
+  return `reporte_librillos_${anio}_${mesTxt}.${ext}`;
+}
+
+function descargarReporteLibrillosPDF() {
+  const st = repLibrillosState.lastRender;
+  if (!st || !Array.isArray(st.filas)) {
+    mostrarToast('Primero genera el reporte para descargar.', 'err');
+    return;
+  }
+  const wrap = document.createElement('div');
+  wrap.style.padding = '20px';
+  wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px">
+      <div>
+        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:30px;color:#2daa41;font-weight:800">Colbeef</div>
+        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:22px;font-weight:700;letter-spacing:.03em">REPORTE DE LIBRILLOS</div>
+      </div>
+      <div style="text-align:right;font-size:12px;color:#444">
+        <div><strong>Año:</strong> ${escapeHtml(String(st.anio || '—'))}</div>
+        <div><strong>Mes:</strong> ${escapeHtml(st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : 'Todos')}</div>
+        <div>Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:12px">
+      <div style="border:1px solid #2f9650;border-radius:10px;padding:8px 12px;min-width:220px">
+        <div style="font-size:10px;color:#666">TOTAL DE LIBROS</div>
+        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:30px;color:#208748;font-weight:700">${fmtNum(st.totalLibros || 0)}</div>
+      </div>
+      <div style="border:1px solid #d96f2f;border-radius:10px;padding:8px 12px;min-width:260px;background:#fff8f1">
+        <div style="font-size:10px;color:#666">CANTIDAD DE LIBROS A FACTURAR</div>
+        <div style="font-family:'Barlow Condensed',Arial,sans-serif;font-size:30px;color:#cf5c2f;font-weight:700">${fmtNum(st.totalFacturar || 0)}</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead>
+        <tr style="background:#0a7f2d;color:#fff">
+          <th style="text-align:left;border:1px solid #06531d;padding:6px">FECHA DE BENEFICIO</th>
+          <th style="text-align:right;border:1px solid #06531d;padding:6px">DERIVADOS CARNICOS</th>
+          <th style="text-align:right;border:1px solid #06531d;padding:6px">ASURCARNES</th>
+          <th style="text-align:right;border:1px solid #06531d;padding:6px">ASURCARNES COL</th>
+          <th style="text-align:right;border:1px solid #06531d;padding:6px">CAT</th>
+          <th style="text-align:right;border:1px solid #06531d;padding:6px">GLOBAL HIDES</th>
+          <th style="text-align:right;border:1px solid #06531d;padding:6px">ASURCARNES GLO</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(st.filas || []).map((f, idx) => `
+          <tr style="background:${idx % 2 ? '#edf8ef' : '#fff'}">
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:left">${repLibFmtFecha(f.fecha)}</td>
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.derivados_carnicos)}</td>
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.asurcarnes)}</td>
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.asurcarnescol)}</td>
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.cat)}</td>
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.global_hides)}</td>
+            <td style="border:1px solid #d7e6d8;padding:5px;text-align:right">${fmtNum(f.asurcarnes_glo)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="background:#0a7f2d;color:#fff;font-weight:700">
+          <td style="border:1px solid #06531d;padding:6px">TOTAL</td>
+          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.derivados_carnicos || 0)}</td>
+          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.asurcarnes || 0)}</td>
+          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.asurcarnescol || 0)}</td>
+          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.cat || 0)}</td>
+          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.global_hides || 0)}</td>
+          <td style="border:1px solid #06531d;padding:6px;text-align:right">${fmtNum(st.totales?.asurcarnes_glo || 0)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
+  const opt = {
+    margin: [8, 8, 8, 8],
+    filename: repLibNombreArchivo('pdf'),
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+  };
+  html2pdf().set(opt).from(wrap).save();
+}
+
 async function cargarReporteLibrillosVista(forzar = false) {
   repLibArmarMesesSelect();
   if (!repLibrillosState.init) {
@@ -7641,9 +7729,11 @@ async function cargarReporteLibrillosVista(forzar = false) {
     const btn = document.getElementById('rep-lib-refrescar');
     const selAnio = document.getElementById('rep-lib-anio');
     const selMes = document.getElementById('rep-lib-mes');
+    const btnPdf = document.getElementById('rep-lib-descargar-pdf');
     btn?.addEventListener('click', () => { void cargarReporteLibrillosVista(true); });
     selAnio?.addEventListener('change', () => { void cargarReporteLibrillosVista(false); });
     selMes?.addEventListener('change', () => { void cargarReporteLibrillosVista(false); });
+    btnPdf?.addEventListener('click', descargarReporteLibrillosPDF);
     repLibrillosState.init = true;
   }
   const selAnio = document.getElementById('rep-lib-anio');
@@ -7679,6 +7769,14 @@ async function cargarReporteLibrillosVista(forzar = false) {
   const k2 = document.getElementById('rep-lib-total-facturar');
   if (k1) k1.textContent = fmtNum(totalLibros);
   if (k2) k2.textContent = fmtNum(totalFacturar);
+  repLibrillosState.lastRender = {
+    filas,
+    totales,
+    totalLibros,
+    totalFacturar,
+    anio,
+    mes: mes || null,
+  };
   repLibPintarTabla(filas, totales);
   repLibPintarChart(filas);
 }
