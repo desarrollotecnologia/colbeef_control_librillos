@@ -5867,13 +5867,16 @@ function ubicacionPlaza(d) {
   const apiPlaza = esPlaceholderTexto(apiPlazaRaw) ? '' : apiPlazaRaw;
   const sucRaw = limpiarPuestoTxt(d?.sucursal);
   const suc = esPlaceholderTexto(sucRaw) ? '' : sucRaw;
+  // Regla operativa solicitada: la sucursal real de BD nunca se remapea.
+  // Si existe, se usa exactamente como llega para etiquetas de crudas.
+  if (suc && !esEtiquetaInstruccionOperativa(suc)) return suc;
   const obsFull = textoObservacionFuente(d);
   const obsPlazaRaw = plazaOperativaDesdeObservacion(obsFull) || plazaDesdeTextoObservacion(obsFull);
   const obsPlaza = esPlaceholderTexto(obsPlazaRaw) ? '' : limpiarPuestoTxt(obsPlazaRaw);
-  const base = apiPlaza || suc || obsPlaza;
+  const base = apiPlaza || obsPlaza;
   if (!base) return '—';
   if (esEtiquetaInstruccionOperativa(base)) return '—';
-  return aplicarMapaPlazasAlias(base, [apiPlaza, suc, obsPlaza, base]);
+  return aplicarMapaPlazasAlias(base, [apiPlaza, obsPlaza, base]);
 }
 
 function destinoTabla(d) {
