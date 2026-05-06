@@ -1028,12 +1028,10 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     // En macro, CRUDAS/CHUNCHULLAS es una marca adicional (se cuenta aparte),
     // pero NO reemplaza la categoría comercial.
     if (esCruda(d)) chunchullasCrudas += 1;
-    // En macro, observación vacía se considera "COCIDOS".
-    // Para no cambiar el dataset base (ni otras vistas), aplicamos esta equivalencia
-    // solo en el resumen macro del backend.
+    // Respetar la clasificación original calculada por agrupación:
+    // no recodificar automáticamente asurcarnes hacia cocidos en el resumen.
     const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
-    const obsTxt = String(d?.observaciones ?? d?.observacion ?? '').trim();
-    const cod = (codRaw === 'asurcarnes' && !obsTxt) ? 'cocidos' : codRaw;
+    const cod = codRaw;
     inc(cod);
   });
 
