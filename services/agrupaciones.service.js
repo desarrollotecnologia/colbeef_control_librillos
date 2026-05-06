@@ -97,12 +97,20 @@ export function normalizarObservacionMacro(obsRaw) {
 }
 
 /**
- * Reglas de negocio (texto completo observación / «Vísceras Blancas»), alineadas al resumen Excel:
- * 1) La marca CRUDAS se cuenta aparte (bandera), NO reemplaza la categoría comercial.
- * 2) Sub-marcas ASUR por palabras clave (CARNESCOL, GLO, ASURCARNES, CAT, DERIVADOS, GLOBAL HIDES).
- * 3) Alias del JSON sobre el texto completo (nombres persona / empresas aunque el parse de cliente falle).
- * 4) Sin RETIRAR LIBRILLOS → cocidos salvo alias ya resuelto arriba.
- * 5) Con RETIRAR → fallback por cliente_destino parseado.
+ * Clasificación comercial por texto (`clasificarAgrupacionConAuditoria`), en orden:
+ * 1) Observación vacía → fallback_comercial del JSON (típ. asurcarnes).
+ * 2) ASURCARNESCOL / «asurcarnes col» con retiro.
+ * 3) ASURCARNES GLO / variantes.
+ * 4) RETIRA(R) LIBRILLOS … CAT → cat.
+ * 5) Derivados cárnicos (palabras clave + Ruth Cacua, Cacua, Carmen, Larrota, Carviscol, etc.).
+ * 6) Global Hides / Salomon / hides (con retiro si aplica).
+ * 7) Sin «RETIRAR LIBRILLOS» (texto no vacío) → cocidos.
+ * 8) Alias del JSON sobre el texto completo.
+ * 9) Destino tras «RETIRAR LIBRILLOS» extraído de la observación.
+ * 10) ASU / ASURCARNES en texto con retiro.
+ * 11) cliente_destino (fallback) + aliases; si no aplica → fallback_comercial.
+ *
+ * La marca CRUDAS en observación no cambia esta categoría; en el resumen del día se cuenta aparte.
  */
 /** Regla operativa: no queda «sin destino» en planta; lo no clasificado va a comercial por defecto. */
 function fallbackComercial(cfg) {
@@ -146,7 +154,7 @@ export function clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback 
     return { codigo: 'asurcarnes_glo', etiqueta: 'Asurcarnes GLO', regla: 'match_asurcarnes_glo', observacion_normalizada: obsNorm };
   }
 
-  if (retLibr && /retirar\s+librillos\s*[:\-]?\s*cat\b/.test(t)) {
+  if (/retira(?:r)?\s+librillos\s*[:\-]?\s*cat\b/.test(t)) {
     return { codigo: 'cat', etiqueta: 'CAT', regla: 'match_cat_retirar', observacion_normalizada: obsNorm };
   }
 

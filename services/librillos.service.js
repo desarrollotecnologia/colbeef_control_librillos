@@ -9,6 +9,7 @@ import {
 } from '../config/plan-faena-obs.js';
 import { agrupacionDesdeObservacionCompleta } from './agrupaciones.service.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
+import { RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS } from '../config/reglas-librillos.js';
 
 let cache = { datos: [], ultimaActualizacion: null };
 let cacheTurnoFecha = null;
@@ -1014,10 +1015,10 @@ export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillo
 export async function obtenerResumenMacroPorFecha(fecha) {
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
-  // Macro consolidado para operación diaria:
-  // debe cuadrar contra el universo planillado del día.
-  // Por eso clasificamos TODO rowsAll (incluye pendientes de parte),
-  // manteniendo métricas de pendientes para auditoría.
+  /**
+   * Resumen diario: mismo universo que el detalle del día (incl. pendiente_registro_parte).
+   * Conteos por `agrupacion_codigo` salvo excepción explícita en config/reglas-librillos.js.
+   */
   const rows = rowsAll;
   const pendientes = rowsAll.filter((d) => Boolean(d?.pendiente_registro_parte)).length;
   const countCod = new Map();
@@ -1025,13 +1026,13 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   const esCruda = (d) => /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''));
   let chunchullasCrudas = 0;
   rows.forEach((d) => {
-    // En macro, CRUDAS/CHUNCHULLAS es una marca adicional (se cuenta aparte),
-    // pero NO reemplaza la categoría comercial.
     if (esCruda(d)) chunchullasCrudas += 1;
-    // Respetar la clasificación original calculada por agrupación:
-    // no recodificar automáticamente asurcarnes hacia cocidos en el resumen.
     const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
-    const cod = codRaw;
+    const recod =
+      RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS &&
+      codRaw === 'asurcarnes' &&
+      Boolean(d?.pendiente_registro_parte);
+    const cod = recod ? 'cocidos' : codRaw;
     inc(cod);
   });
 
@@ -1061,6 +1062,9 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     total_pendientes_registro_parte: pendientes,
     categorias,
     resumen_libros: resumenLibros,
+    opciones_resumen: {
+      recodificar_asur_pendiente_a_cocidos: RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
+    },
   };
 }
 
