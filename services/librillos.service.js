@@ -9,8 +9,11 @@ import {
 } from '../config/plan-faena-obs.js';
 import { agrupacionDesdeObservacionCompleta } from './agrupaciones.service.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
-import { RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS } from '../config/reglas-librillos.js';
-import { RESUMEN_SOLO_PARTE_DIA } from '../config/reglas-librillos.js';
+import {
+  RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
+  RESUMEN_SOLO_PARTE_DIA,
+  LIBRILLOS_TEXTO_INGRESO_CLASIFICACION,
+} from '../config/reglas-librillos.js';
 
 let cache = { datos: [], ultimaActualizacion: null };
 let cacheTurnoFecha = null;
@@ -479,6 +482,56 @@ function mapaTextoPlanFaenaLocalPorFecha(fechaISO) {
   }
 }
 
+/**
+ * Observaciones desde ingreso operativo (`informacion_ingreso_detalle` + cabecera `informacion_ingreso`).
+ * Requiere: d.id_producto, d.id_informacion_ingreso (FK → ii.id), columnas opcionales d.observaciones, ii.observaciones.
+ */
+async function mapaTextoInformacionIngresoPorIds(idsTexto) {
+  if (!LIBRILLOS_TEXTO_INGRESO_CLASIFICACION || !idsTexto?.length) return new Map();
+
+  const unique = [...new Set(idsTexto.map((id) => String(id).trim()).filter(Boolean))];
+  const mapOut = new Map();
+  let warned = false;
+
+  const mergeChunk = async (chunk) => {
+    const sql = `
+      SELECT DISTINCT ON (d.id_producto)
+        d.id_producto::text AS id_producto,
+        TRIM(REGEXP_REPLACE(
+          CONCAT_WS(' ',
+            NULLIF(TRIM(COALESCE(ii.observaciones, '')), ''),
+            NULLIF(TRIM(COALESCE(d.observaciones, '')), '')
+          ),
+          '[ \\t\\r\\n]+', ' ', 'g'
+        )) AS texto_ingreso
+      FROM trazabilidad_proceso.informacion_ingreso_detalle d
+      LEFT JOIN trazabilidad_proceso.informacion_ingreso ii
+        ON ii.id = d.id_informacion_ingreso
+      WHERE d.id_producto::text = ANY($1::text[])
+      ORDER BY d.id_producto ASC, d.ctid DESC
+    `;
+    try {
+      const res = await pool.query(sql, [chunk]);
+      (res.rows || []).forEach((r) => {
+        const id = String(r.id_producto || '').trim();
+        const t = String(r.texto_ingreso || '').trim();
+        if (id && t) mapOut.set(id, t);
+      });
+    } catch (err) {
+      if (!warned) {
+        warned = true;
+        console.warn(
+          `⚠️ mapaTextoInformacionIngresoPorIds (desactivado para este proceso): ${err.message}`
+        );
+      }
+    }
+  };
+
+  const grupos = chunks(unique, VISTA_CHUNK);
+  await procesarGruposConLimite(grupos, mergeChunk, CHUNK_CONCURRENCY);
+  return mapOut;
+}
+
 function mapaTextoRetiroLocalPorFecha(fechaISO) {
   if (!USE_LOCAL_RETIRO_FILES) return new Map();
   const k = String(fechaISO || '');
@@ -898,6 +951,10 @@ const consultarLibrillos = async (fecha = null) => {
       planObsMap = mapaTextoPlanFaenaLocalPorFecha(fechaISO);
     }
 
+    const ingresoObsMap = await mapaTextoInformacionIngresoPorIds(
+      librillos.map((l) => l.id_producto)
+    );
+
     // PASO 3: Unir (datos descriptivos de vista + movimiento real de parte 13)
     const resultado = librillos
       .map((l) => {
@@ -905,7 +962,16 @@ const consultarLibrillos = async (fecha = null) => {
         const obsParte = String(l.observaciones || '');
         const textoRetiro = retiroObsMap.get(String(l.id_producto)) || '';
         const textoPlan = planObsMap.get(String(l.id_producto)) || '';
-        const textoBase = textoRetiro || textoPlan;
+        const textoIngreso = ingresoObsMap.get(String(l.id_producto)) || '';
+        const textoBase = [textoRetiro, textoPlan, textoIngreso]
+          .map((x) =>
+            String(x || '')
+              .replace(/\s+/g, ' ')
+              .trim()
+          )
+          .filter(Boolean)
+          .join(' ')
+          .trim();
         const { obsFuente, observacion_fuente } = fusionarObservacionClasificacion(
           textoBase,
           obsParte
@@ -929,6 +995,7 @@ const consultarLibrillos = async (fecha = null) => {
           observaciones: obsFuente,
           observacion_origen: l.observacion_origen || null,
           observacion_plan: textoPlan.trim() ? textoPlan : null,
+          observacion_ingreso: textoIngreso.trim() ? textoIngreso : null,
           observacion,
           observacion_fuente,
           plaza: plazaFinal,
@@ -1120,13 +1187,23 @@ export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
 export const obtenerObservacionesPorFecha = async (fecha) => {
   const planObsMap = await mapaTextoPlanFaenaPorFecha(fecha);
 
-  const mapFilaObs = (r) => {
+  const mapFilaObs = (r, ingresoObsMapArg) => {
     const ts = r.momento_registro_bd;
     const momento_registro_bd =
       ts instanceof Date && !Number.isNaN(ts.getTime()) ? ts.toISOString() : null;
     const obsParte = String(r.observacion_actual || '');
     const textoPlan = planObsMap.get(String(r.id_producto)) || '';
-    const { obsFuente } = fusionarObservacionClasificacion(textoPlan, obsParte);
+    const textoIngreso = ingresoObsMapArg?.get(String(r.id_producto)) || '';
+    const textoPlanSide = [textoPlan, textoIngreso]
+      .map((x) =>
+        String(x || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+      )
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const { obsFuente } = fusionarObservacionClasificacion(textoPlanSide, obsParte);
     return {
       id_producto: r.id_producto,
       observacion_actual: obsFuente,
@@ -1137,6 +1214,7 @@ export const obtenerObservacionesPorFecha = async (fecha) => {
   if (USE_PLAN_FAENA_UNIVERSE) {
     try {
       const idsOrdenados = await idsUniversoReporteDia(fecha);
+      const ingresoObsMap = await mapaTextoInformacionIngresoPorIds(idsOrdenados);
       if (idsOrdenados.length > 0) {
         const res = await pool.query(
           `
@@ -1157,9 +1235,19 @@ export const obtenerObservacionesPorFecha = async (fecha) => {
         );
         return idsOrdenados.map((id) => {
           const r = porId.get(id);
-          if (r) return mapFilaObs(r);
+          if (r) return mapFilaObs(r, ingresoObsMap);
           const textoPlan = planObsMap.get(String(id)) || '';
-          const { obsFuente } = fusionarObservacionClasificacion(textoPlan, '');
+          const textoIngreso = ingresoObsMap.get(String(id)) || '';
+          const textoPlanSide = [textoPlan, textoIngreso]
+            .map((x) =>
+              String(x || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+            )
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+          const { obsFuente } = fusionarObservacionClasificacion(textoPlanSide, '');
           return {
             id_producto: id,
             observacion_actual: obsFuente,
@@ -1183,7 +1271,9 @@ export const obtenerObservacionesPorFecha = async (fecha) => {
       AND DATE(fecha_registro) = $1::date
     ORDER BY id_producto ASC, fecha_registro DESC NULLS LAST
   `, [fecha]);
-  return res.rows.map(mapFilaObs);
+  const idsLista = (res.rows || []).map((row) => String(row.id_producto));
+  const ingresoObsMap = await mapaTextoInformacionIngresoPorIds(idsLista);
+  return res.rows.map((row) => mapFilaObs(row, ingresoObsMap));
 };
 
 export const obtenerStatsUltimos7Dias = async () => {
