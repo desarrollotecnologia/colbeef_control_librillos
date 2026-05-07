@@ -10,6 +10,7 @@ import {
 import { agrupacionDesdeObservacionCompleta } from './agrupaciones.service.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
 import { RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS } from '../config/reglas-librillos.js';
+import { RESUMEN_SOLO_PARTE_DIA } from '../config/reglas-librillos.js';
 
 let cache = { datos: [], ultimaActualizacion: null };
 let cacheTurnoFecha = null;
@@ -1016,10 +1017,14 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
   /**
-   * Resumen diario: mismo universo que el detalle del día (incl. pendiente_registro_parte).
-   * Conteos por `agrupacion_codigo` salvo excepción explícita en config/reglas-librillos.js.
+   * Resumen diario:
+   * - modo normal: mismo universo que el detalle del día (incl. pendientes).
+   * - modo cierre: solo registros con parte del día (sin pendientes).
+   * Conteos por `agrupacion_codigo` salvo excepciones explícitas en config/reglas-librillos.js.
    */
-  const rows = rowsAll;
+  const rows = RESUMEN_SOLO_PARTE_DIA
+    ? rowsAll.filter((d) => !Boolean(d?.pendiente_registro_parte))
+    : rowsAll;
   const pendientes = rowsAll.filter((d) => Boolean(d?.pendiente_registro_parte)).length;
   const countCod = new Map();
   const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
@@ -1063,6 +1068,7 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     categorias,
     resumen_libros: resumenLibros,
     opciones_resumen: {
+      solo_parte_dia: RESUMEN_SOLO_PARTE_DIA,
       recodificar_asur_pendiente_a_cocidos: RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
     },
   };

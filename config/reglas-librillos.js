@@ -5,7 +5,8 @@
  * y `config/agrupaciones-librillos.json` (orden de reglas y aliases).
  *
  * Resumen del día (`obtenerResumenMacroPorFecha`):
- * - Se cuentan todos los registros del universo del día (incl. pendientes de parte).
+ * - Por defecto se cuentan todos los registros del universo del día (incl. pendientes de parte).
+ * - Opcionalmente puede usarse solo cierre real del día (solo registros con parte).
  * - `chunchullas_crudas`: filas cuya observación contiene la marca CRUDAS (adicional).
  * - Por categoría: se incrementa según `agrupacion_codigo` de cada fila.
  *
@@ -27,5 +28,15 @@ function envBool(name, defaultValue) {
 /** Por defecto false: el resumen respeta la misma agrupación que el detalle. */
 export const RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS = envBool(
   'RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS',
+  false
+);
+
+/**
+ * Modo recomendado para cierres consistentes entre fechas:
+ * true  -> el resumen cuenta solo ítems con parte del día (pendiente=false)
+ * false -> el resumen cuenta todo el universo del día (incl. pendientes)
+ */
+export const RESUMEN_SOLO_PARTE_DIA = envBool(
+  'RESUMEN_SOLO_PARTE_DIA',
   false
 );
