@@ -6,8 +6,7 @@
  *
  * Resumen del día (`obtenerResumenMacroPorFecha`):
  * - Por defecto se cuentan todos los registros del universo del día (incl. pendientes de parte).
- * - Opcional (`LIBRILLOS_TEXTO_INGRESO_CLASIFICACION`): concatenar observaciones de
- *   `informacion_ingreso` + `informacion_ingreso_detalle` por `id_producto` al fusionar con parte/plan.
+ * - Opcionalmente puede usarse solo cierre real del día (solo registros con parte).
  * - `chunchullas_crudas`: filas cuya observación contiene la marca CRUDAS (adicional).
  * - Por categoría: se incrementa según `agrupacion_codigo` de cada fila.
  *
@@ -39,14 +38,5 @@ export const RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS = envBool(
  */
 export const RESUMEN_SOLO_PARTE_DIA = envBool(
   'RESUMEN_SOLO_PARTE_DIA',
-  false
-);
-
-/**
- * Concatenar texto de información de ingreso (cabecera + detalle) al fusionar observación.
- * Por defecto desactivado: activar cuando existan las tablas y columnas estándar (ver librillos.service).
- */
-export const LIBRILLOS_TEXTO_INGRESO_CLASIFICACION = envBool(
-  'LIBRILLOS_TEXTO_INGRESO_CLASIFICACION',
   false
 );
