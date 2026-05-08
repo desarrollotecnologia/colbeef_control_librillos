@@ -2029,6 +2029,22 @@ body{
   color:var(--tx);
   font-weight:700;
 }
+.guia-resumen-hint{
+  color:var(--tx2);
+  font-size:12px;
+}
+.guia-resumen-ok{
+  color:#1a7a42;
+  font-weight:600;
+}
+.guia-resumen-warn{
+  color:#c0392b;
+  font-weight:600;
+}
+.guia-resumen-extra{
+  color:#c27216;
+  font-weight:600;
+}
 
 /* ── REPORTE DE LIBRILLOS ────────────────────────── */
 .rep-lib-header{

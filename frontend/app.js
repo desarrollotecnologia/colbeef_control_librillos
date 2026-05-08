@@ -2478,6 +2478,60 @@ function valorEnteroGuia(id) {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
 }
 
+/** Cantidad manual de libros despachados: null = usar total calculado. */
+function leerLibrosDespachadosManualGuia() {
+  const raw = String(document.getElementById('inp-guia-libros-despachados')?.value || '').trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.trunc(n);
+}
+
+/**
+ * Compara total esperado (tras ajuste/decomiso) con lo despachado manualmente.
+ * @returns {{ tieneManual: boolean, estado: 'completo'|'pendientes'|'adicionales'|null, pendientes: number, adicionales: number, mensaje: string }}
+ */
+function compararDespachoConTotalGuia(totalEsperado, manualDespachados) {
+  const te = Number(totalEsperado);
+  if (!Number.isFinite(te) || te < 0) {
+    return { tieneManual: false, estado: null, pendientes: 0, adicionales: 0, mensaje: '' };
+  }
+  if (manualDespachados == null) {
+    return { tieneManual: false, estado: null, pendientes: 0, adicionales: 0, mensaje: '' };
+  }
+  const m = Number(manualDespachados);
+  if (!Number.isFinite(m) || m < 0) {
+    return { tieneManual: false, estado: null, pendientes: 0, adicionales: 0, mensaje: '' };
+  }
+  const delta = te - m;
+  if (delta === 0) {
+    return {
+      tieneManual: true,
+      estado: 'completo',
+      pendientes: 0,
+      adicionales: 0,
+      mensaje: 'Despacho completo: coincide con el total a despachar.',
+    };
+  }
+  if (delta > 0) {
+    return {
+      tieneManual: true,
+      estado: 'pendientes',
+      pendientes: delta,
+      adicionales: 0,
+      mensaje: `Faltan ${delta} libro(s) — cuentan como pendientes.`,
+    };
+  }
+  const add = -delta;
+  return {
+    tieneManual: true,
+    estado: 'adicionales',
+    pendientes: 0,
+    adicionales: add,
+    mensaje: `Sobran ${add} libro(s) — cuentan como adicionales.`,
+  };
+}
+
 function diaAnteriorIsoLocal(iso) {
   if (!iso) return '';
   const [y, m, d] = String(iso).split('-').map(Number);
@@ -2593,6 +2647,7 @@ function leerManualGuiaDesdeFormulario() {
     decomiso: valorEnteroGuia('inp-guia-decomiso'),
     ajusteTipo: String(document.getElementById('sel-guia-ajuste-tipo')?.value || 'pendientes').trim(),
     ajusteFecha: String(document.getElementById('inp-guia-ajuste-fecha')?.value || '').trim(),
+    librosDespachados: leerLibrosDespachadosManualGuia(),
   };
 }
 
@@ -2607,11 +2662,25 @@ function actualizarResumenControlGuia(data, manual) {
   if (!box) return;
   const calc = calcularControlGuia(data, manual);
   const pendientesApi = Number(data?.cabecera?.resumen_categoria?.pendientes_hoy || 0);
+  const cmp = compararDespachoConTotalGuia(calc.final, manual?.librosDespachados);
+  let estadoBloque = '';
+  if (!cmp.tieneManual) {
+    estadoBloque = `<div class="guia-resumen-linea guia-resumen-hint">Libros despachados: <strong>${calc.final}</strong> (automático, igual al total). Completa el campo manual arriba si el cargue real fue distinto.</div>`;
+  } else {
+    const cls =
+      cmp.estado === 'completo'
+        ? 'guia-resumen-ok'
+        : cmp.estado === 'pendientes'
+          ? 'guia-resumen-warn'
+          : 'guia-resumen-extra';
+    estadoBloque = `<div class="guia-resumen-linea ${cls}"><strong>Control despacho:</strong> ${cmp.mensaje} <span class="guia-resumen-hint">(total esperado: ${calc.final} · ingresado: ${manual.librosDespachados})</span></div>`;
+  }
   box.innerHTML = `
     <div class="guia-resumen-titulo"><strong>Control de cálculo</strong> <span class="guia-resumen-sub">(datos del día y categoría: ajuste/decomiso solo si los editaste)</span></div>
     <div class="guia-resumen-linea">Pendientes hoy (API): <strong>${pendientesApi}</strong></div>
     <div class="guia-resumen-linea">LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong></div>
     <div class="guia-resumen-linea">TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} – ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong></div>
+    ${estadoBloque}
   `;
 }
 
@@ -2778,7 +2847,21 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     ? totalBase - ajusteValor
     : totalBase + ajusteValor;
   const totalFinal = Math.max(0, totalConAjuste - decomisoManual);
-  const cantidadDespachados = totalFinal;
+  const librosDespManual =
+    manual.librosDespachados != null && Number.isFinite(Number(manual.librosDespachados))
+      ? Math.trunc(Number(manual.librosDespachados))
+      : null;
+  const cmpDesp = compararDespachoConTotalGuia(totalFinal, librosDespManual);
+  const cantidadDespachados = librosDespManual != null ? librosDespManual : totalFinal;
+  const estadoPdfHtml = cmpDesp.tieneManual
+    ? `<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">${
+      cmpDesp.estado === 'completo'
+        ? 'DESPACHO COMPLETO'
+        : cmpDesp.estado === 'pendientes'
+          ? `PENDIENTES: ${cmpDesp.pendientes}`
+          : `ADICIONALES: ${cmpDesp.adicionales}`
+    }</span></div>`
+    : '';
   const logoDataUrl = opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null);
   const ajusteLabel = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
   const fechaAjusteTexto = ajusteFecha ? fechaGuiaSolo(ajusteFecha) : '';
@@ -2794,6 +2877,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
       <div class="resumen">
         <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
+        ${estadoPdfHtml}
         <div style="margin-top:8px">CAT: <span class="v">${Number(r.cat || 0)}</span></div>
         <div>ASURCARNESCOL: <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
       </div>
@@ -2803,6 +2887,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
       <div class="resumen">
         <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
+        ${estadoPdfHtml}
         <div style="margin-top:8px">DERIVADOS: <span class="v">${Number(r.derivados || 0)}</span></div>
         <div>ASURCARNES: <span class="v">${Number(r.asurcarnes || 0)}</span></div>
       </div>
@@ -2812,6 +2897,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
       <div class="resumen">
         <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
+        ${estadoPdfHtml}
         <div style="margin-top:8px">GLOBAL HIDES: <span class="v">${Number(r.global_hides || 0)}</span></div>
         <div>ASURCARNESGLO: <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
       </div>
@@ -3033,11 +3119,11 @@ if (selGuiaCategoriaEl) {
     })();
   });
 }
-['inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso']
+['inp-guia-ajuste-valor', 'sel-guia-ajuste-tipo', 'inp-guia-ajuste-fecha', 'inp-guia-decomiso', 'inp-guia-libros-despachados']
   .forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.addEventListener('change', () => {
+    const refrescar = () => {
       const fecha = String(document.getElementById('inp-guia-fecha')?.value || '').trim();
       const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
       if (!fecha || !categoria) return;
@@ -3050,7 +3136,9 @@ if (selGuiaCategoriaEl) {
           /* ignore */
         }
       })();
-    });
+    };
+    el.addEventListener('change', refrescar);
+    if (id === 'inp-guia-libros-despachados') el.addEventListener('input', refrescar);
   });
 
 sincronizarFechaGuiaConFechaGlobal();
