@@ -1022,7 +1022,8 @@ export async function obtenerResumenMacroPorFecha(fecha) {
    * Resumen diario:
    * - modo normal: mismo universo que el detalle del día (incl. pendientes).
    * - modo cierre: solo registros con parte del día (sin pendientes).
-   * Conteos por `agrupacion_codigo` salvo excepciones explícitas en config/reglas-librillos.js.
+   * Conteos por `agrupacion_codigo` salvo excepciones explícitas en config/reglas-librillos.js
+   * y reclasificación resumen: `asurcarnes` + observación vacía → cocidos (macro Excel).
    */
   const rows = RESUMEN_SOLO_PARTE_DIA
     ? rowsAll.filter((d) => !Boolean(d?.pendiente_registro_parte))
@@ -1039,7 +1040,13 @@ export async function obtenerResumenMacroPorFecha(fecha) {
       RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS &&
       codRaw === 'asurcarnes' &&
       Boolean(d?.pendiente_registro_parte);
-    const cod = recod ? 'cocidos' : codRaw;
+    let cod = recod ? 'cocidos' : codRaw;
+    // Misma regla que `codigoAgrupacionMacro` / cuadro HTML: obs vacía + fallback asurcarnes
+    // cuenta en cocidos para el resumen (alineación con macro Excel tipo INICIO).
+    const obsResumen = String(d?.observaciones ?? d?.observacion ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cod === 'asurcarnes' && !obsResumen) cod = 'cocidos';
     inc(cod);
   });
 
