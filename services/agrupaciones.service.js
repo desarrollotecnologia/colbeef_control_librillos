@@ -70,7 +70,7 @@ function resolverGrupoPorAliases(n, cfg) {
 function extraerDestinoDesdeObservacionNormalizada(t) {
   if (!t) return '';
   const m = t.match(
-    /\bretirar\s+librill?os?\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i
+    /\bretira(?:r)?\s+librill?os?\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i
   );
   return String(m?.[1] || '')
     .replace(/\s+/g, ' ')
@@ -78,10 +78,25 @@ function extraerDestinoDesdeObservacionNormalizada(t) {
     .trim();
 }
 
+/** Detecta instrucción de retiro (misma familia que clasificarAgrupacionConAuditoria). */
+function textoTieneRetirarLibrillos(s) {
+  const x = String(s || '');
+  return (
+    /\bretirar\s+librillos\b/i.test(x) ||
+    /\bretirar\s+librilo\b/i.test(x) ||
+    /\bretirar\s+librill\b/i.test(x) ||
+    /\bretira\s+librillos\b/i.test(x) ||
+    /\bretira\s+librilo\b/i.test(x) ||
+    /\bretira\s+librill\b/i.test(x)
+  );
+}
+
 /**
  * Normalización "estilo macro" previa a clasificar:
  * - quita prefijos de turno /LxM/, /VxS/, etc.
  * - si hay paréntesis, usa tramo antes de "(" para evitar ruido de cola operativa
+ * - excepción: si «RETIRAR LIBRILLOS» solo aparece **dentro** del paréntesis (p. ej. plaza + /SxD/ + `( RETIRAR … )`),
+ *   se usa el texto completo sin turno para no clasificar todo como cocido.
  * - comprime espacios
  */
 export function normalizarObservacionMacro(obsRaw) {
@@ -93,7 +108,11 @@ export function normalizarObservacionMacro(obsRaw) {
   const sinTurno = src.replace(/\/[A-Z]X[A-Z]\//gi, ' ').replace(/\s+/g, ' ').trim();
   const idxParen = sinTurno.indexOf('(');
   const base = idxParen >= 0 ? sinTurno.slice(0, idxParen).trim() : sinTurno;
-  return base.replace(/\s+/g, ' ').trim();
+  let out = base;
+  if (!textoTieneRetirarLibrillos(base) && textoTieneRetirarLibrillos(sinTurno)) {
+    out = sinTurno;
+  }
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -139,7 +158,10 @@ export function clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback 
   const retLibr =
     /\bretirar\s+librillos\b/.test(t) ||
     /\bretirar\s+librilo\b/.test(t) ||
-    /\bretirar\s+librill\b/.test(t);
+    /\bretirar\s+librill\b/.test(t) ||
+    /\bretira\s+librillos\b/.test(t) ||
+    /\bretira\s+librilo\b/.test(t) ||
+    /\bretira\s+librill\b/.test(t);
 
   // Prioridad "tipo macro": primero subgrupos/especiales y destinos nominales,
   // luego bucket general ASURCARNES.

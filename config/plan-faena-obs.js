@@ -32,6 +32,25 @@ export function prioridadObsPlanVsParte() {
   return 'plan_first';
 }
 
+/** Misma familia que `retLibr` en agrupaciones: detecta instrucción de retiro en texto libre. */
+function textoIndicaRetiroLibrillos(s) {
+  const t = String(s || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return (
+    /\bretirar\s+librillos\b/.test(t) ||
+    /\bretirar\s+librilo\b/.test(t) ||
+    /\bretirar\s+librill\b/.test(t) ||
+    /\bretira\s+librillos\b/.test(t) ||
+    /\bretira\s+librilo\b/.test(t) ||
+    /\bretira\s+librill\b/.test(t)
+  );
+}
+
 /**
  * @param {string} textoPlan
  * @param {string} obsParte
@@ -58,6 +77,12 @@ export function fusionarObservacionClasificacion(textoPlan, obsParte) {
     if (op) return { obsFuente: op, observacion_fuente: 'a_parte_producto' };
     if (tp) return { obsFuente: tp, observacion_fuente: 'plan_faena' };
     return { obsFuente: '', observacion_fuente: 'a_parte_producto' };
+  }
+
+  // plan_first: si el plan trae texto logístico sin retiro pero el parte sí lo tiene,
+  // clasificar con el parte (evita cocidos masivos cuando PLAN_FAENA_PFP_TEXT_COLUMNS rellena tp).
+  if (tp && !textoIndicaRetiroLibrillos(tp) && textoIndicaRetiroLibrillos(op)) {
+    return { obsFuente: op, observacion_fuente: 'a_parte_producto' };
   }
 
   if (tp) return { obsFuente: tp, observacion_fuente: 'plan_faena' };
