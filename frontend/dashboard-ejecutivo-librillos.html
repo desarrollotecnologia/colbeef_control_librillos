@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<!--
+  Tablero portable (opción A — gerencia)
+  Para compartir / desplegar sin Internet en el navegador:
+    1) Copie este archivo: frontend/dashboard-ejecutivo-librillos.html
+    2) Copie la carpeta:     frontend/vendor/  (incluye chart.umd.min.js · Chart.js 4.4.1 MIT)
+  Debe servirse desde el MISMO origen que la API (mismo host/puerto que el programa Colbeef),
+  p. ej. https://servidor:puerto/dashboard-ejecutivo-librillos.html?fecha=2026-05-08
+  Las peticiones van a /api/librillos/resumen y /api/librillos/stats del mismo servidor.
+-->
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tablero gerencial · Control Librillos</title>
+  <style>
+    :root {
+      --brand: #1a7a42;
+      --brand-soft: #edf7f1;
+      --accent: #0d5c2e;
+      --bg: #eef2ee;
+      --card: #fff;
+      --line: #c5d4c5;
+      --muted: #4a5c4a;
+      --ink: #142214;
+      --warn: #b45309;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(165deg, #f4f7f4 0%, var(--bg) 45%, #e8ede8 100%);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 18px 16px 32px; }
+    header {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 24px rgba(20, 34, 20, 0.06);
+    }
+    header .row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: var(--brand);
+      letter-spacing: -0.02em;
+    }
+    .tagline { font-size: 13px; color: var(--muted); margin-top: 6px; max-width: 560px; line-height: 1.45; }
+    .filtros { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    label { font-size: 12px; font-weight: 700; color: var(--muted); }
+    input[type="date"] {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0 12px;
+      font-size: 14px;
+      background: #fff;
+    }
+    button.primary {
+      height: 40px;
+      padding: 0 18px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(180deg, var(--brand) 0%, var(--accent) 100%);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(26, 122, 66, 0.35);
+    }
+    button.primary:hover { filter: brightness(1.06); }
+    button.primary:disabled { opacity: 0.55; cursor: wait; }
+
+    .fecha-grande {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .insight {
+      margin-top: 10px;
+      padding: 12px 14px;
+      background: var(--brand-soft);
+      border-radius: 10px;
+      border-left: 4px solid var(--brand);
+      font-size: 14px;
+      line-height: 1.5;
+      color: #1f3525;
+    }
+    .insight strong { color: var(--accent); }
+
+    .grid-kpi {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .kpi {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 14px 12px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 2px 12px rgba(20, 34, 20, 0.04);
+    }
+    .kpi::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--brand), #2ea059);
+      opacity: 0.85;
+    }
+    .kpi.warn::before { background: linear-gradient(90deg, #ea580c, #fbbf24); }
+    .kpi.alert::before { background: linear-gradient(90deg, #dc2626, #f87171); }
+    .kpi .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 800; }
+    .kpi .n { font-size: 28px; font-weight: 900; color: var(--ink); margin-top: 6px; line-height: 1; font-variant-numeric: tabular-nums; }
+    .kpi .h { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.35; }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      box-shadow: 0 2px 16px rgba(20, 34, 20, 0.05);
+    }
+    .ph {
+      padding: 12px 16px;
+      background: linear-gradient(180deg, #f0faf3 0%, var(--brand-soft) 100%);
+      font-weight: 800;
+      font-size: 14px;
+      color: #143d24;
+      border-bottom: 1px solid var(--line);
+    }
+    .ph small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .pb { padding: 16px 18px 20px; }
+    .chart-wrap { position: relative; height: min(320px, 52vw); max-height: 340px; margin: 8px 0 4px; }
+    .chart-wrap.tall { height: min(280px, 48vw); max-height: 300px; }
+    .chart-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+    @media (max-width: 860px) { .chart-row { grid-template-columns: 1fr; } }
+
+    .gloss {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      background: #f8faf8;
+      border-radius: 8px;
+      border: 1px solid #e2ebe2;
+    }
+    .err {
+      color: #7f1d1d;
+      padding: 14px 16px;
+      background: #fef2f2;
+      border-radius: 12px;
+      border: 1px solid #fecaca;
+      margin-bottom: 14px;
+    }
+    .url-box {
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+      padding: 10px 12px;
+      background: #f7faf7;
+      border-radius: 8px;
+      border: 1px dashed var(--line);
+      font-family: ui-monospace, Consolas, monospace;
+    }
+    .foot-note { font-size: 11px; color: var(--muted); margin-top: 10px; font-style: italic; }
+    table.mini { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+    table.mini th, table.mini td { padding: 8px 10px; border-top: 1px solid #ecf0ec; text-align: left; }
+    table.mini th { background: #f7faf7; font-weight: 700; }
+    table.mini td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .loading { text-align: center; padding: 28px; color: var(--muted); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="row">
+        <div>
+          <h1>Tablero gerencial · Librillos</h1>
+          <p class="tagline">
+            Vista <strong>solo lectura</strong> del mismo resumen que usa el control operativo. Elija la fecha para ver cómo se distribuyó la producción planillada y la carga de partes en sistema.
+          </p>
+          <div class="fecha-grande" id="fecha-titulo"></div>
+          <div class="insight" id="insight-dia" style="display:none"></div>
+        </div>
+        <div class="filtros">
+          <label for="inp-fecha">Día a consultar</label>
+          <input type="date" id="inp-fecha" />
+          <button type="button" class="primary" id="btn-cargar">Actualizar</button>
+        </div>
+      </div>
+    </header>
+
+    <div id="msg-err" class="err" style="display:none"></div>
+
+    <div id="bloque-datos">
+      <div class="grid-kpi" id="kpi-row"></div>
+
+      <div class="panel">
+        <div class="ph">
+          Mezcla del día por línea comercial
+          <small>Cada segmento es una agrupación contada en el planillado del día seleccionado (no es dinero ni kilos; es cantidad de registros).</small>
+        </div>
+        <div class="pb">
+          <p class="gloss" id="gloss-cat"></p>
+          <div class="chart-row">
+            <div class="chart-wrap"><canvas id="chart-dona-cat" aria-label="Gráfico dona agrupaciones"></canvas></div>
+            <div class="chart-wrap tall"><canvas id="chart-barras-cat" aria-label="Gráfico barras agrupaciones"></canvas></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">
+          Resumen tipo “libros” (visión gerencial simplificada)
+          <small>Agrupa líneas en tres bloques: crudos, cocidos y derivados — útil para explicar el día en una frase.</small>
+        </div>
+        <div class="pb">
+          <p class="gloss" id="gloss-libros"></p>
+          <div class="chart-row">
+            <div class="chart-wrap"><canvas id="chart-dona-libros" aria-label="Gráfico dona libros"></canvas></div>
+            <div class="chart-wrap tall"><canvas id="chart-barras-libros" aria-label="Gráfico barras libros"></canvas></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">
+          Actividad de partes Colbeef (últimos 7 días calendario)
+          <small>Cuenta <strong>productos distintos</strong> con parte tipo Colbeef registrada por día. Sirve de contexto: no es el mismo total que el cuadro superior del día elegido.</small>
+        </div>
+        <div class="pb">
+          <div class="chart-wrap tall" style="max-height: 260px" id="wrap-linea-stats">
+            <canvas id="chart-linea-stats" aria-label="Tendencia siete días"></canvas>
+          </div>
+          <p id="stats-empty" class="loading" style="display: none">No hay datos de tendencia de partes en este momento.</p>
+          <div id="tabla-stats"></div>
+          <p class="foot-note">La línea verde ayuda a ver si el día consultado va en línea con la semana reciente.</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ph">Compartir: enlace, iframe y archivos</div>
+        <div class="pb">
+          <p style="margin:0 0 10px;font-size:13px;color:var(--muted);line-height:1.45">
+            <strong>Enlace directo</strong> (misma base que abre usted ahora). Péguelo en el otro sistema como destino de un botón o envíelo por correo/chat.
+          </p>
+          <div class="url-box" id="url-embed"></div>
+          <p style="margin:14px 0 8px;font-size:13px;color:var(--muted);line-height:1.45">
+            <strong>Iframe</strong> desde otro portal: use la misma URL en <code>src</code> solo si ambos sitios son el mismo origen o tiene proxy/CORS resuelto; si no, abra siempre en nueva pestaña.
+          </p>
+          <p style="margin:0 0 8px;font-size:13px;color:var(--muted);line-height:1.45">
+            <strong>Paquete de archivos</strong> (gráficos sin CDN): en el servidor deben existir juntos
+            <code>dashboard-ejecutivo-librillos.html</code> y la carpeta <code>vendor/chart.umd.min.js</code> (ya incluida en este proyecto). No hace falta conexión a Internet para dibujar los gráficos.
+          </p>
+          <p style="margin:0;font-size:12px;color:var(--muted);line-height:1.45">
+            Los datos siguen saliendo de la API de este programa (<code>/api/librillos/…</code>), así que quien abra el enlace necesita acceso de red al mismo host donde corre Colbeef control librillos.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/chart.umd.min.js"></script>
+  <script>
+    (function () {
+      if (typeof Chart === 'undefined') {
+        const el = document.getElementById('msg-err');
+        el.style.display = 'block';
+        el.textContent =
+          'No se pudo cargar Chart.js. Copie junto a este HTML la carpeta vendor/ con el archivo chart.umd.min.js (viene en el repositorio en frontend/vendor/).';
+        const b = document.getElementById('bloque-datos');
+        if (b) b.style.display = 'none';
+        return;
+      }
+      const COLORS = {
+        cat: '#92400e',
+        asurcarnescol: '#1d4ed8',
+        asurcarnes_glo: '#be185d',
+        global_hides: '#4338ca',
+        asurcarnes: '#b91c1c',
+        derivados: '#b45309',
+        cocidos: '#475569',
+        crudos_mix: '#92400e',
+      };
+
+      const LABELS_CAT = [
+        { key: 'cat', label: 'CAT' },
+        { key: 'asurcarnescol', label: 'Asur Carnes COL' },
+        { key: 'asurcarnes_glo', label: 'Asur Carnes GLO' },
+        { key: 'global_hides', label: 'Global Hides' },
+        { key: 'asurcarnes', label: 'Asur Carnes' },
+        { key: 'derivados', label: 'Derivados cárnicos' },
+        { key: 'cocidos', label: 'Cocidos' },
+      ];
+
+      let chartInstances = [];
+
+      function destroyCharts() {
+        chartInstances.forEach((c) => {
+          try {
+            c.destroy();
+          } catch (e) { /* noop */ }
+        });
+        chartInstances = [];
+      }
+
+      function hoyISO() {
+        return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+      }
+
+      function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+      }
+
+      function fmtFechaEs(iso) {
+        if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || '—';
+        const dt = new Date(iso + 'T12:00:00-05:00');
+        if (Number.isNaN(dt.getTime())) return iso;
+        return dt.toLocaleDateString('es-CO', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        });
+      }
+
+      function fmtNum(n) {
+        return new Intl.NumberFormat('es-CO').format(Number(n) || 0);
+      }
+
+      function setErr(msg) {
+        const el = document.getElementById('msg-err');
+        if (!msg) {
+          el.style.display = 'none';
+          el.textContent = '';
+        } else {
+          el.style.display = 'block';
+          el.textContent = msg;
+        }
+      }
+
+      function commonChartOpts() {
+        return {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: { boxWidth: 12, padding: 10, font: { size: 11 } },
+            },
+            tooltip: {
+              callbacks: {
+                label(ctx) {
+                  const dataArr = ctx.chart?.data?.datasets?.[ctx.datasetIndex]?.data || [];
+                  const t = Number(ctx.raw ?? ctx.parsed ?? 0) || 0;
+                  const sum = dataArr.reduce((a, b) => a + (Number(b) || 0), 0) || 1;
+                  const pct = Math.round((100 * t) / sum);
+                  return ` ${ctx.label}: ${fmtNum(t)} (${pct}%)`;
+                },
+              },
+            },
+          },
+        };
+      }
+
+      function buildInsight(fecha, cat, jr, items) {
+        const totalRes = Number(cat.total || jr.total_registros || 0);
+        const pend = Number(jr.total_pendientes_registro_parte || 0);
+        const plan = Number(jr.total_planillados || 0);
+        const sorted = [...items].filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
+        const top = sorted[0];
+        let html = '';
+        if (plan === 0) {
+          html = 'No hay planillados cargados para este día en el sistema.';
+        } else {
+          const pPend = plan ? Math.round((100 * pend) / plan) : 0;
+          html = `Hay <strong>${fmtNum(plan)}</strong> planillados en total. De ellos, <strong>${fmtNum(totalRes)}</strong> entran en el resumen macro del día`;
+          if (pend > 0) {
+            html += ` y <strong>${fmtNum(pend)}</strong> (${pPend}%) siguen <strong>sin parte Colbeef</strong> registrada para esa fecha`;
+          }
+          html += '.';
+          if (top) {
+            const pctTop = totalRes ? Math.round((100 * top.v) / totalRes) : 0;
+            html += ` La línea con más peso en el resumen es <strong>${esc(top.label)}</strong> (${fmtNum(top.v)} registros, ~${pctTop}% del resumen).`;
+          }
+        }
+        return html;
+      }
+
+      async function cargar() {
+        setErr('');
+        destroyCharts();
+        const btn = document.getElementById('btn-cargar');
+        btn.disabled = true;
+
+        const fecha = document.getElementById('inp-fecha').value || hoyISO();
+        const apiBase = window.location.origin || '';
+        const dashUrl = new URL('dashboard-ejecutivo-librillos.html', window.location.href);
+        dashUrl.searchParams.set('fecha', fecha);
+        document.getElementById('url-embed').textContent = dashUrl.href;
+        document.getElementById('fecha-titulo').textContent = 'Día consultado: ' + fmtFechaEs(fecha);
+
+        try {
+          const [resResumen, resStats] = await Promise.all([
+            fetch(apiBase + '/api/librillos/resumen?fecha=' + encodeURIComponent(fecha)),
+            fetch(apiBase + '/api/librillos/stats'),
+          ]);
+          const jr = await resResumen.json().catch(() => ({}));
+          if (!resResumen.ok) throw new Error(jr.error || 'Error al cargar el resumen (' + resResumen.status + ')');
+          const js = resStats.ok ? await resStats.json().catch(() => []) : [];
+
+          const cat = jr.categorias || {};
+          const opt = jr.opciones_resumen || {};
+          const rl = jr.resumen_libros || {};
+          const modo = opt.solo_parte_dia
+            ? 'El servidor está en modo <strong>solo con parte del día</strong> (no se cuentan pendientes de parte en el macro).'
+            : 'El servidor está en modo <strong>plan completo</strong> (el resumen macro incluye también filas pendientes de parte, según reglas de negocio).';
+
+          const totalRes = Number(cat.total || jr.total_registros || 0);
+          const plan = Number(jr.total_planillados || 0);
+          const pend = Number(jr.total_pendientes_registro_parte || 0);
+          const chunch = Number(cat.chunchullas_crudas || 0);
+
+          const itemsCat = LABELS_CAT.map((row) => ({
+            key: row.key,
+            label: row.label,
+            v: Number(cat[row.key] || 0),
+            c: COLORS[row.key] || '#64748b',
+          }));
+
+          document.getElementById('kpi-row').innerHTML = `
+            <div class="kpi">
+              <div class="l">Resumen macro del día</div>
+              <div class="n">${fmtNum(totalRes)}</div>
+              <div class="h">Registros que entran en el conteo del día según la configuración actual del servidor.</div>
+            </div>
+            <div class="kpi">
+              <div class="l">Planillados (universo)</div>
+              <div class="n">${fmtNum(plan)}</div>
+              <div class="h">Todos los planillados asociados a esa fecha de trabajo, antes de filtrar por parte.</div>
+            </div>
+            <div class="kpi ${pend > 0 ? 'warn' : ''}">
+              <div class="l">Pendiente parte Colbeef</div>
+              <div class="n" style="color:${pend > 0 ? 'var(--warn)' : 'inherit'}">${fmtNum(pend)}</div>
+              <div class="h">Cantidad que aún no tiene parte tipo Colbeef registrada para ese día. Valores altos merecen seguimiento operativo.</div>
+            </div>
+            <div class="kpi">
+              <div class="l">Chunchullas marcadas crudas</div>
+              <div class="n">${fmtNum(chunch)}</div>
+              <div class="h">Conteo adicional por observación (texto con “crudas”). No se resta del resto de categorías.</div>
+            </div>
+            <div class="kpi">
+              <div class="l">Modo de resumen</div>
+              <div class="n" style="font-size:15px;line-height:1.25;color:var(--brand)">${opt.solo_parte_dia ? 'Solo parte día' : 'Plan completo'}</div>
+              <div class="h">${modo}</div>
+            </div>
+          `;
+
+          document.getElementById('gloss-cat').innerHTML =
+            '<strong>Qué ve aquí:</strong> proporción de cada línea comercial dentro del resumen macro (' +
+            fmtNum(totalRes) +
+            ' registros). ' +
+            modo;
+
+          const cr = Number(rl.crudos || 0);
+          const co = Number(rl.cocidos || 0);
+          const de = Number(rl.derivados || 0);
+          document.getElementById('gloss-libros').innerHTML =
+            '<strong>Crudos</strong> agrupa CAT + Asur Carnes COL. <strong>Cocidos</strong> es su propia categoría. <strong>Derivados</strong> incluye derivados cárnicos + Asur Carnes + Global Hides. Total bloques: <strong>' +
+            fmtNum(cr + co + de) +
+            '</strong> registros.';
+
+          const insightEl = document.getElementById('insight-dia');
+          insightEl.style.display = 'block';
+          insightEl.innerHTML = buildInsight(fecha, cat, jr, itemsCat);
+
+          const labels = itemsCat.map((x) => x.label);
+          const dataCat = itemsCat.map((x) => x.v);
+          const colorsCat = itemsCat.map((x) => x.c);
+
+          const donutCommon = {
+            type: 'doughnut',
+            data: {
+              labels,
+              datasets: [{ data: dataCat, backgroundColor: colorsCat, borderWidth: 2, borderColor: '#fff' }],
+            },
+            options: {
+              ...commonChartOpts(),
+              cutout: '58%',
+              plugins: {
+                ...commonChartOpts().plugins,
+                title: { display: true, text: 'Participación por línea', font: { size: 13, weight: '600' } },
+              },
+            },
+          };
+          const c1 = new Chart(document.getElementById('chart-dona-cat'), donutCommon);
+          chartInstances.push(c1);
+
+          const orderIdx = itemsCat.map((_, i) => i).sort((a, b) => dataCat[b] - dataCat[a]);
+          const c2 = new Chart(document.getElementById('chart-barras-cat'), {
+            type: 'bar',
+            data: {
+              labels: orderIdx.map((i) => labels[i]),
+              datasets: [
+                {
+                  label: 'Registros',
+                  data: orderIdx.map((i) => dataCat[i]),
+                  backgroundColor: orderIdx.map((i) => colorsCat[i]),
+                  borderRadius: 6,
+                },
+              ],
+            },
+            options: {
+              indexAxis: 'y',
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                title: { display: true, text: 'Volumen por línea (ordenado)', font: { size: 13, weight: '600' } },
+                tooltip: {
+                  callbacks: {
+                    label(ctx) {
+                      return ' ' + fmtNum(ctx.parsed.x) + ' registros';
+                    },
+                  },
+                },
+              },
+              scales: {
+                x: {
+                  beginAtZero: true,
+                  ticks: { font: { size: 11 } },
+                  grid: { color: 'rgba(0,0,0,0.06)' },
+                },
+                y: { ticks: { font: { size: 11 } }, grid: { display: false } },
+              },
+            },
+          });
+          chartInstances.push(c2);
+
+          const libLabels = ['Crudos (CAT + Asur COL)', 'Cocidos', 'Derivados (der. + Asur + GH)'];
+          const libData = [cr, co, de];
+          const libColors = [COLORS.crudos_mix, COLORS.cocidos, COLORS.derivados];
+          const c3 = new Chart(document.getElementById('chart-dona-libros'), {
+            type: 'doughnut',
+            data: {
+              labels: libLabels,
+              datasets: [{ data: libData, backgroundColor: libColors, borderWidth: 2, borderColor: '#fff' }],
+            },
+            options: {
+              ...commonChartOpts(),
+              cutout: '55%',
+              plugins: {
+                ...commonChartOpts().plugins,
+                title: { display: true, text: 'Tres grandes grupos', font: { size: 13, weight: '600' } },
+              },
+            },
+          });
+          chartInstances.push(c3);
+
+          const c4 = new Chart(document.getElementById('chart-barras-libros'), {
+            type: 'bar',
+            data: {
+              labels: libLabels,
+              datasets: [
+                {
+                  label: 'Registros',
+                  data: libData,
+                  backgroundColor: libColors,
+                  borderRadius: 8,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                title: { display: true, text: 'Comparación directa', font: { size: 13, weight: '600' } },
+                tooltip: {
+                  callbacks: {
+                    label(ctx) {
+                      return ' ' + fmtNum(ctx.parsed.y) + ' registros';
+                    },
+                  },
+                },
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: { font: { size: 11 } },
+                  grid: { color: 'rgba(0,0,0,0.06)' },
+                },
+                x: { ticks: { font: { size: 10 }, maxRotation: 22 } },
+              },
+            },
+          });
+          chartInstances.push(c4);
+
+          const statsArr = Array.isArray(js) ? js : [];
+          const fechasStats = statsArr.map((r) => String(r.fecha || '').slice(5));
+          const totalsStats = statsArr.map((r) => Number(r.total || 0));
+          const idxSel = statsArr.findIndex((r) => String(r.fecha) === fecha);
+          const pointBg = statsArr.map((_, i) => (i === idxSel ? '#15803d' : '#1a7a42'));
+          const pointR = statsArr.map((_, i) => (i === idxSel ? 7 : 4));
+
+          const wrapLinea = document.getElementById('wrap-linea-stats');
+          const statsEmpty = document.getElementById('stats-empty');
+          wrapLinea.style.display = statsArr.length ? 'block' : 'none';
+          statsEmpty.style.display = statsArr.length ? 'none' : 'block';
+
+          if (statsArr.length) {
+            const c5 = new Chart(document.getElementById('chart-linea-stats'), {
+              type: 'line',
+              data: {
+                labels: fechasStats,
+                datasets: [
+                  {
+                    label: 'Productos con parte Colbeef (distintos)',
+                    data: totalsStats,
+                    borderColor: '#1a7a42',
+                    backgroundColor: 'rgba(26, 122, 66, 0.12)',
+                    fill: true,
+                    tension: 0.35,
+                    pointBackgroundColor: pointBg,
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: pointR,
+                    pointHoverRadius: 9,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: 'top' },
+                  title: {
+                    display: true,
+                    text: 'Contexto semanal (punto más grande = día consultado, si cae en la ventana)',
+                    font: { size: 12, weight: '600' },
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label(ctx) {
+                        return ' ' + fmtNum(ctx.parsed.y) + ' productos distintos';
+                      },
+                    },
+                  },
+                },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    ticks: { font: { size: 11 } },
+                    grid: { color: 'rgba(0,0,0,0.06)' },
+                  },
+                  x: { ticks: { font: { size: 11 } }, grid: { display: false } },
+                },
+              },
+            });
+            chartInstances.push(c5);
+            document.getElementById('tabla-stats').innerHTML =
+              '<table class="mini"><thead><tr><th>Fecha</th><th class="num">Partes (productos distintos)</th></tr></thead><tbody>' +
+              statsArr
+                .map(
+                  (r) =>
+                    `<tr${String(r.fecha) === fecha ? ' style="background:#ecfdf5;font-weight:700"' : ''}><td>${esc(r.fecha)}</td><td class="num">${fmtNum(r.total)}</td></tr>`
+                )
+                .join('') +
+              '</tbody></table>';
+          } else {
+            document.getElementById('tabla-stats').innerHTML = '';
+          }
+        } catch (e) {
+          setErr(String(e.message || e));
+          destroyCharts();
+          document.getElementById('kpi-row').innerHTML = '';
+          document.getElementById('gloss-cat').textContent = '';
+          document.getElementById('gloss-libros').textContent = '';
+          document.getElementById('insight-dia').style.display = 'none';
+          document.getElementById('tabla-stats').innerHTML = '';
+          const w = document.getElementById('wrap-linea-stats');
+          const se = document.getElementById('stats-empty');
+          if (w) w.style.display = 'none';
+          if (se) se.style.display = 'none';
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const fechaQ = params.get('fecha');
+      document.getElementById('inp-fecha').value = fechaQ && /^\d{4}-\d{2}-\d{2}$/.test(fechaQ) ? fechaQ : hoyISO();
+      document.getElementById('btn-cargar').addEventListener('click', cargar);
+      document.getElementById('inp-fecha').addEventListener('change', cargar);
+      cargar();
+    })();
+  </script>
+</body>
+</html>

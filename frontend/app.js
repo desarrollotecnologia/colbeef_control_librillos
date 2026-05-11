@@ -773,6 +773,7 @@ function renderAnalyticsDashboardHtml(data, ctx = {}) {
         <input id="a-hasta" type="date" value="${escapeHtml(hasta)}" />
         <button class="primary" id="a-refresh">Actualizar</button>
         <button id="a-key">Cambiar clave</button>
+        <button type="button" id="a-dash-lib" title="Tablero gerencial librillos (nueva pestaña)">Tablero librillos (gerencia) ↗</button>
       </div>
     </div>
 
@@ -997,6 +998,13 @@ async function abrirDashboardAnaliticaPrivado(key, desde = '', hasta = '') {
         String(doc.getElementById('a-desde')?.value || ''),
         String(doc.getElementById('a-hasta')?.value || '')
       );
+    });
+    const btnDashLib = doc.getElementById('a-dash-lib');
+    btnDashLib?.addEventListener('click', () => {
+      const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+      const dash = new URL('dashboard-ejecutivo-librillos.html', window.location.href);
+      dash.searchParams.set('fecha', hoy);
+      window.open(dash.href, '_blank', 'noopener,noreferrer');
     });
   };
 
