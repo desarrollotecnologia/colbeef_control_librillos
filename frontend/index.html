@@ -361,35 +361,40 @@
     <section class="vista" id="vista-clientes">
       <div class="topbar-vista cli-topbar">
         <input class="srch srch-busca-todo" id="srch-cli" type="search" placeholder="Buscar en cualquier columna o dato…" autocomplete="off" oninput="filtrarCli()">
-        <div class="subtabs subtabs-inline cli-subtabs">
-          <button type="button" class="subtab active" id="stab-cli-librillos" onclick="cambiarSubtabClientes('librillos')">Librillos</button>
-          <button type="button" class="subtab" id="stab-cli-crudas" onclick="cambiarSubtabClientes('crudas')">Crudas</button>
-        </div>
         <span class="badge-count" id="cli-count">0</span>
       </div>
       <div class="panel">
         <div class="ph">
-          <span class="pt" id="cli-title">Información — Librillos</span>
+          <span class="pt" id="cli-title">Información — Consulta unificada</span>
           <span id="cli-total-label" style="font-size:12px;color:var(--tx2)">0 registros</span>
         </div>
-        <div id="subtab-cli-librillos" class="tw">
-          <table class="dt">
-            <thead><tr>
-              <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th><th>Agrupación</th>
-              <th>Observación</th><th>Destino</th><th>Sucursal</th><th>Empresa destino</th>
-              <th>Ingreso Cava</th><th>Salida</th><th>Total</th>
-            </tr></thead>
-            <tbody id="tbody-cli"><tr><td colspan="11" class="empty">Cargando...</td></tr></tbody>
-          </table>
-        </div>
-        <div id="subtab-cli-crudas" class="tw" style="display:none">
-          <table class="dt">
-            <thead><tr>
-              <th>ID Producto</th><th>Propietario</th><th>Observación</th>
-              <th>Destino</th><th>Sucursal</th><th>Empresa destino</th>
-              <th>Ingreso Cava</th><th>Salida</th><th>Total</th>
-            </tr></thead>
-            <tbody id="tbody-cli-crud"><tr><td colspan="9" class="empty">Cargando...</td></tr></tbody>
+        <div id="subtab-cli-unificado" class="tw">
+          <table class="dt cli-dt-unificada">
+            <thead>
+              <tr>
+                <th>ID Producto</th>
+                <th>Propietario</th>
+                <th>Agrupación</th>
+                <th>Observación</th>
+                <th>Sucursal</th>
+                <th>Empresa destino</th>
+                <th>Ingreso cava</th>
+                <th>Salida</th>
+                <th>Total</th>
+              </tr>
+              <tr class="cli-filter-row">
+                <th><input type="search" id="srch-cli-c-id" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-prop" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-agr" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-obs" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-suc" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-emp" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-ing" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-sal" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+                <th><input type="search" id="srch-cli-c-tot" class="cli-col-filter" placeholder="Filtrar…" autocomplete="off" oninput="filtrarCli()"></th>
+              </tr>
+            </thead>
+            <tbody id="tbody-cli"><tr><td colspan="9" class="empty">Cargando...</td></tr></tbody>
           </table>
         </div>
       </div>

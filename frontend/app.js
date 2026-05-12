@@ -5392,101 +5392,72 @@ async function guardarEditSalida() {
 // Eliminación deshabilitada (solo existía para admin)
 
 // ── CLIENTES ──────────────────────────────────────────────────────────────────
+/** Observación completa tal como viene del API (prioriza `observaciones` fusionadas). Solo vista Por cliente. */
+function textoObservacionCompletaPorCliente(d) {
+  return String(d?.observaciones ?? d?.observacion ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function esFilaVistaPorCliente(d) {
+  return esVistaHistorialLibrillos(d) || esVistaHistorialCrudasSolo(d);
+}
+
+function leerFiltroColumnaCliente(domId) {
+  const el = document.getElementById(domId);
+  if (!el) return '';
+  return String(el.value || '').trim().toLowerCase();
+}
+
 function renderTablaClientes(lista) {
   const tbody = document.getElementById('tbody-cli');
-  const tbodyCrud = document.getElementById('tbody-cli-crud');
   const titulo = document.getElementById('cli-title');
-  const subC = document.getElementById('subtab-cli-crudas');
-
-  let active = 'librillos';
-  if (subC && subC.style.display !== 'none') active = 'crudas';
+  if (titulo) titulo.textContent = 'Información — Consulta unificada';
 
   const datos = Array.isArray(lista) ? lista : [];
-  const librillos = datos.filter(esVistaHistorialLibrillos);
-  const crudas = datos.filter(esVistaHistorialCrudasSolo);
+  const rows = datos.filter(esFilaVistaPorCliente);
 
-  if (active === 'crudas') {
-    if (titulo) titulo.textContent = 'Información — Crudas';
-    document.getElementById('cli-count').textContent = crudas.length + ' registros';
-    const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
-    const mov = resumenMovimientoRealInventario(crudas, fechaSel);
-    document.getElementById('cli-total-label').textContent =
-      `${crudas.length} registros · Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día`;
-    if (!crudas.length) {
-      if (tbodyCrud) tbodyCrud.innerHTML = '<tr><td colspan="9" class="empty">Sin registros</td></tr>';
-      return;
-    }
-    const sortedCrud = [...crudas].sort((a, b) =>
-      String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
-    );
-    if (tbodyCrud) {
-      tbodyCrud.innerHTML = sortedCrud.map((d) => {
-        const sal = salidaUltimaGrupo([d]);
-        const titProp = d.propietario_origen === 'vista_ultimo'
-          ? 'Propietario según último registro disponible en la vista'
-          : '';
-        return `<tr>
-      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}</td>
-      <td style="font-weight:600"${titProp ? ` title="${escapeHtml(titProp).replace(/"/g, '&quot;')}"` : ''}>${escapeHtml(d.propietario || 'Sin asignar')}${d.propietario_origen === 'vista_ultimo' ? ' <span class="prop-origen" aria-hidden="true">·</span>' : ''}</td>
-      <td>${badgeObs(d.observacion, d, 'viscera')}</td>
-      <td>${escapeHtml(ubicacionPlaza(d))}</td>
-      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
-      <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
-      <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
-      <td style="font-size:12px">${sal ? formatFecha(sal) : '—'}</td>
-      <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:var(--verde)">1</span></td>
-    </tr>`;
-      }).join('');
-    }
-    return;
-  }
-
-  if (titulo) titulo.textContent = 'Información — Librillos';
-  document.getElementById('cli-count').textContent = librillos.length + ' registros';
+  const cnt = document.getElementById('cli-count');
+  if (cnt) cnt.textContent = rows.length + ' registros';
   const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
-  const mov = resumenMovimientoRealInventario(librillos, fechaSel);
-  document.getElementById('cli-total-label').textContent =
-    `${librillos.length} registros · Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día`;
-  if (!librillos.length) {
-    tbody.innerHTML = '<tr><td colspan="11" class="empty">Sin registros</td></tr>';
+  const mov = resumenMovimientoRealInventario(rows, fechaSel);
+  const elLab = document.getElementById('cli-total-label');
+  if (elLab) {
+    elLab.textContent = `${rows.length} registros · Mov. real: ${mov.despachadoDia} día · ${mov.pendiente} pendiente · ${mov.salioOtroDia} otro día`;
+  }
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Sin registros</td></tr>';
     return;
   }
 
-  const sorted = [...librillos].sort((a, b) =>
+  const sorted = [...rows].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true })
   );
   tbody.innerHTML = sorted.map((d) => {
     const sal = salidaUltimaGrupo([d]);
     const prop = d.propietario || 'Sin asignar';
-    const titProp = d.propietario_origen === 'vista_ultimo'
-      ? 'Propietario según último registro disponible en la vista'
-      : '';
+    const titProp =
+      d.propietario_origen === 'vista_ultimo'
+        ? 'Propietario según último registro disponible en la vista'
+        : '';
+    const obsCompleta = textoObservacionCompletaPorCliente(d);
+    const obsShown = obsCompleta || '—';
+    const escObs = escapeHtml(obsShown).replace(/"/g, '&quot;');
+    const soloCrudaSinRetiro = esVistaHistorialCrudasSolo(d) && !esVistaHistorialLibrillos(d);
+    const colorTotal = soloCrudaSinRetiro ? 'var(--verde)' : 'var(--rojo)';
     return `<tr class="client-row" style="${estilosFilaCliente(d.cliente_destino || '—')}">
       <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(d.id_producto || '—')}</td>
       <td style="font-weight:600"${titProp ? ` title="${escapeHtml(titProp).replace(/"/g, '&quot;')}"` : ''}>${escapeHtml(prop)}${d.propietario_origen === 'vista_ultimo' ? ' <span class="prop-origen" aria-hidden="true">·</span>' : ''}</td>
-      <td>${clienteChipHtml(d.cliente_destino || '—')}</td>
       <td><span class="b b-agru">${escapeHtml(etiquetaAgrupacionMacro(d))}</span></td>
-      <td>${badgeObs(d.observacion, d, 'librillo')}</td>
-      <td>${escapeHtml(ubicacionPlaza(d))}</td>
+      <td class="cli-obs-cell" title="${escObs}">${escapeHtml(obsShown)}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.sucursal || '—')}</td>
       <td style="font-size:12px;color:var(--tx2)">${escapeHtml(d.empresa_destino || '—')}</td>
       <td style="font-size:12px">${formatFecha(d.fecha_ingreso_cava)}</td>
       <td style="font-size:12px">${sal ? formatFecha(sal) : '—'}</td>
-      <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:var(--rojo)">1</span></td>
+      <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:${colorTotal}">1</span></td>
     </tr>`;
   }).join('');
-}
-
-function cambiarSubtabClientes(tab) {
-  const bL = document.getElementById('stab-cli-librillos');
-  const bC = document.getElementById('stab-cli-crudas');
-  const sL = document.getElementById('subtab-cli-librillos');
-  const sC = document.getElementById('subtab-cli-crudas');
-  if (bL) bL.classList.toggle('active', tab === 'librillos');
-  if (bC) bC.classList.toggle('active', tab === 'crudas');
-  if (sL) sL.style.display = tab === 'librillos' ? 'block' : 'none';
-  if (sC) sC.style.display = tab === 'crudas' ? 'block' : 'none';
-  filtrarCli();
 }
 
 /** Texto agregado de un registro para búsqueda global en vista Clientes (todas las columnas visibles + campos API). */
@@ -5502,6 +5473,8 @@ function textoBusquedaClienteRow(d) {
   add(d.cliente_destino);
   add(d.destino);
   add(d.observacion);
+  add(d.observaciones);
+  add(textoObservacionCompletaPorCliente(d));
   add(d.sucursal);
   add(d.empresa_destino);
   add(d.agrupacion);
@@ -5522,13 +5495,44 @@ function textoBusquedaClienteRow(d) {
 }
 
 function filtrarCli() {
-  const raw = (document.getElementById('srch-cli').value || '').trim();
-  const txt = raw.toLowerCase();
-  if (!txt) {
-    renderTablaClientes(datosClientes);
-    return;
-  }
-  renderTablaClientes(datosClientes.filter(d => textoBusquedaClienteRow(d).includes(txt)));
+  const raw = (document.getElementById('srch-cli')?.value || '').trim().toLowerCase();
+  const fId = leerFiltroColumnaCliente('srch-cli-c-id');
+  const fProp = leerFiltroColumnaCliente('srch-cli-c-prop');
+  const fAgr = leerFiltroColumnaCliente('srch-cli-c-agr');
+  const fObs = leerFiltroColumnaCliente('srch-cli-c-obs');
+  const fSuc = leerFiltroColumnaCliente('srch-cli-c-suc');
+  const fEmp = leerFiltroColumnaCliente('srch-cli-c-emp');
+  const fIng = leerFiltroColumnaCliente('srch-cli-c-ing');
+  const fSal = leerFiltroColumnaCliente('srch-cli-c-sal');
+  const fTot = leerFiltroColumnaCliente('srch-cli-c-tot');
+
+  const pre = (datosClientes || []).filter(esFilaVistaPorCliente);
+
+  const filtrados = pre.filter((d) => {
+    if (raw && !textoBusquedaClienteRow(d).includes(raw)) return false;
+    if (fId && !String(d.id_producto || '').toLowerCase().includes(fId)) return false;
+    if (fProp && !String(d.propietario || '').toLowerCase().includes(fProp)) return false;
+    let agrTxt = '';
+    try {
+      agrTxt = String(etiquetaAgrupacionMacro(d) || '').toLowerCase();
+    } catch (_) {
+      agrTxt = String(d?.agrupacion || d?.agrupacion_codigo || '').toLowerCase();
+    }
+    if (fAgr && !agrTxt.includes(fAgr)) return false;
+    const obsFull = textoObservacionCompletaPorCliente(d).toLowerCase();
+    if (fObs && !obsFull.includes(fObs)) return false;
+    if (fSuc && !String(d.sucursal || '').toLowerCase().includes(fSuc)) return false;
+    if (fEmp && !String(d.empresa_destino || '').toLowerCase().includes(fEmp)) return false;
+    const ingTxt = String(formatFecha(d.fecha_ingreso_cava) || '').toLowerCase();
+    if (fIng && !ingTxt.includes(fIng)) return false;
+    const sal = salidaUltimaGrupo([d]);
+    const salTxt = (sal ? String(formatFecha(sal) || '') : '—').toLowerCase();
+    if (fSal && !salTxt.includes(fSal)) return false;
+    if (fTot && !'1'.includes(fTot)) return false;
+    return true;
+  });
+
+  renderTablaClientes(filtrados);
 }
 
 // ── MODAL IDs ─────────────────────────────────────────────────────────────────
