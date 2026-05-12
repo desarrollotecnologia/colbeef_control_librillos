@@ -1168,6 +1168,12 @@ body{
   word-break:break-word;
 }
 
+.muted{
+  color:var(--tx2);
+  opacity:.72;
+  font-size:12px;
+}
+
 /* Iconos en botones (inline SVG) */
 .btn-ico{display:inline-flex;align-items:center;gap:8px;vertical-align:middle;}
 .btn-ico svg{width:16px;height:16px;flex-shrink:0;}

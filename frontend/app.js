@@ -1129,6 +1129,8 @@ let _autoObsTimer = null;
 let _autoObsSnapshot = '';
 let _obsTextoMapPrev = new Map();
 let historialCambiosObs = [];
+/** IDs (crudas) seleccionados en modal logística para reimprimir etiquetas tras cambio de sucursal. */
+let _seleccionReimpSucursalCrudas = new Set();
 /** Historial de cambios de observación solo en este navegador (sin tablas en servidor). */
 const LS_HIST_OBS = 'colbeef_historial_obs_v1';
 let _modoCambiosObsActual = 'normal';
@@ -3617,7 +3619,6 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
     // Caso 1: sigue en la vista, pero cambió observación.
     if (p && n && antes !== despues) {
       cambios.push({ id, tipo: tipoRegistroNotificacion(n), antes, despues });
-      return;
     }
     // Caso 2: salió de la vista actual por cambio de observación (no cuenta en librillo/cruda).
     if (p && !n) {
@@ -3640,6 +3641,30 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
         antes: obsAnterior || '[No estaba en vista]',
         despues,
       });
+    }
+
+    // Crudas: cambio de sucursal en planilla (logística debe reimprimir etiqueta con puesto correcto).
+    if (p && n) {
+      const nObsRaw = String(n.observaciones ?? n.observacion ?? '');
+      const nObsNorm = normalizarObs(nObsRaw);
+      if (/\bCRUDAS?\b/.test(nObsNorm)) {
+        const sAnt = String(p.sucursal ?? '').replace(/\s+/g, ' ').trim();
+        const sNue = String(n.sucursal ?? '').replace(/\s+/g, ' ').trim();
+        if (sAnt !== sNue) {
+          cambios.push({
+            id,
+            tipo: 'CRUDA_SUCURSAL',
+            antes: sAnt || '—',
+            despues: sNue || '—',
+            sucursal_antes: sAnt,
+            sucursal_despues: sNue,
+            observacion_texto: nObsRaw.replace(/\s+/g, ' ').trim(),
+            propietario: String(n.propietario || p.propietario || '').trim(),
+            empresa_destino: String(n.empresa_destino || p.empresa_destino || '').trim(),
+            identificacion: String(n.identificacion || p.identificacion || '').trim(),
+          });
+        }
+      }
     }
   });
   return cambios;
@@ -3701,7 +3726,7 @@ function mergeHistorialCambios(...listas) {
   for (const arr of listas) {
     for (const c of arr || []) {
       if (!c) continue;
-      const k = `${String(c.id)}|${String(c.antes || '').trim()}|${String(c.despues || '').trim()}`;
+      const k = `${String(c.id)}|${String(c.tipo || '')}|${String(c.antes || '').trim()}|${String(c.despues || '').trim()}`;
       if (seen.has(k)) continue;
       seen.add(k);
       out.push(c);
@@ -3718,7 +3743,74 @@ function ordenarHistorialPorMomento(lista) {
   });
 }
 
+function aplicarTheadModalCambiosObs(modo) {
+  const table = document.querySelector('#modal-cambios-obs table.dt');
+  const btnEtq = document.getElementById('btn-etq-reimp-suc');
+  if (btnEtq) btnEtq.style.display = modo === 'logistica' ? '' : 'none';
+  if (!table) return;
+  const thead = table.querySelector('thead');
+  if (!thead) return;
+  if (modo === 'logistica') {
+    thead.innerHTML = `<tr>
+      <th class="no-print" style="width:44px;text-align:center" title="Marcar todas las filas con cambio de sucursal (crudas)">
+        <input type="checkbox" onclick="toggleTodosReimpSucursal(this)" aria-label="Seleccionar todas" />
+      </th>
+      <th title="Prioriza la fecha/hora del registro en trazabilidad; si no hay, la hora en que la app detectó el cambio">Momento</th>
+      <th>Tipo</th>
+      <th>ID</th>
+      <th>Propietario</th>
+      <th>Sucursal (antes)</th>
+      <th>Sucursal (nueva)</th>
+      <th>Observación / detalle</th>
+      <th>Empresa destino</th>
+    </tr>`;
+  } else {
+    thead.innerHTML = `<tr>
+      <th title="Prioriza la fecha/hora del registro en trazabilidad; si no hay, la hora en que la app detectó el cambio">Momento</th><th>Tipo</th><th>ID</th><th>Antes</th><th>Ahora</th>
+    </tr>`;
+  }
+}
+
+function renderFilasModalCambiosObsLogistica(tbody, lista) {
+  _seleccionReimpSucursalCrudas.clear();
+  tbody.innerHTML = lista.map((c) => {
+    const momentoMostrar = c.momento_bd || c.detectado_en;
+    const hora = momentoMostrar ? formatFecha(momentoMostrar) : '—';
+    const titleMomento = c.momento_bd
+      ? 'Fecha/hora del registro en trazabilidad (tabla a_parte_producto)'
+      : 'Hora en que la app detectó el cambio (sin momento de BD en este evento)';
+    const esSuc = String(c.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL';
+    const idRaw = String(c.id || '');
+    const chk = esSuc
+      ? `<input type="checkbox" class="js-chk-reimp-suc" data-reimp-id="${idRaw.replace(/"/g, '&quot;')}" onchange="toggleReimpSucursalDesdeModal(this)" />`
+      : '<span class="muted">—</span>';
+    const prop = escapeHtml(String(c.propietario || '—'));
+    const sa = escapeHtml(esSuc ? String(c.sucursal_antes ?? c.antes ?? '—') : '—');
+    const sn = escapeHtml(esSuc ? String(c.sucursal_despues ?? c.despues ?? '—') : '—');
+    const obsDet = esSuc
+      ? escapeHtml(String(c.observacion_texto || '—'))
+      : `${escapeHtml(String(c.antes || '—'))} → ${escapeHtml(String(c.despues || '—'))}`;
+    const emp = escapeHtml(String(c.empresa_destino || '—'));
+    const tipoLbl = esSuc ? escapeHtml('Cruda · sucursal') : escapeHtml(String(c.tipo || 'REGISTRO'));
+    return `<tr>
+      <td class="no-print" style="text-align:center">${chk}</td>
+      <td style="font-size:12px" title="${escapeHtml(titleMomento)}">${escapeHtml(hora)}</td>
+      <td style="font-size:12px;font-weight:600">${tipoLbl}</td>
+      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(idRaw || '—')}</td>
+      <td style="font-size:12px">${prop}</td>
+      <td style="font-size:12px">${esSuc ? sa : '—'}</td>
+      <td style="font-size:12px">${esSuc ? sn : '—'}</td>
+      <td style="font-size:12px;max-width:360px;word-break:break-word">${obsDet}</td>
+      <td style="font-size:12px;color:var(--tx2)">${emp}</td>
+    </tr>`;
+  }).join('');
+}
+
 function renderFilasModalCambiosObs(tbody, lista) {
+  if (_modoCambiosObsActual === 'logistica') {
+    renderFilasModalCambiosObsLogistica(tbody, lista);
+    return;
+  }
   tbody.innerHTML = lista.map((c) => {
     const momentoMostrar = c.momento_bd || c.detectado_en;
     const hora = momentoMostrar ? formatFecha(momentoMostrar) : '—';
@@ -3745,6 +3837,8 @@ function extraerClienteRetiro(obs) {
 }
 
 function esCambioCriticoReimpresion(c) {
+  const t0 = String(c?.tipo || '').toUpperCase();
+  if (t0 === 'CRUDA_SUCURSAL') return true;
   const antes = String(c?.antes || '').trim();
   const despues = String(c?.despues || '').trim();
   if (!despues || antes === despues) return false;
@@ -3778,11 +3872,12 @@ async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
       ? 'Reimpresiones logística (cambios detectados)'
       : 'Cambios de observación (antes / ahora)';
   }
+  aplicarTheadModalCambiosObs(modo);
   modal.classList.add('open');
   const lista = listaCambiosObsActual(cambiosExplicitos, modo);
   if (!lista.length) {
     tbody.innerHTML = modo === 'logistica'
-      ? '<tr><td colspan="5" class="empty">Sin cambios críticos para reimpresión</td></tr>'
+      ? '<tr><td colspan="9" class="empty">Sin cambios críticos para reimpresión</td></tr>'
       : '<tr><td colspan="5" class="empty">Sin cambios detectados</td></tr>';
     return;
   }
@@ -3813,22 +3908,43 @@ function imprimirListadoCambiosObs() {
     mostrarToast('No hay cambios para imprimir', 'err');
     return;
   }
-  const rows = lista.slice(0, 200).map((c) => `
-    <tr>
+  const esLog = _modoCambiosObsActual === 'logistica';
+  const rows = lista.slice(0, 200).map((c) => {
+    if (!esLog) {
+      return `<tr>
       <td>${escapeHtml(c.momento_bd || c.detectado_en ? formatFecha(c.momento_bd || c.detectado_en) : '—')}</td>
       <td>${escapeHtml(String(c.id || '—'))}</td>
       <td>${escapeHtml(String(c.tipo || 'REGISTRO'))}</td>
       <td>${escapeHtml(String(c.antes || '—'))}</td>
       <td>${escapeHtml(String(c.despues || '—'))}</td>
-    </tr>
-  `).join('');
+    </tr>`;
+    }
+    const esSuc = String(c.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL';
+    const sa = esSuc ? escapeHtml(String(c.sucursal_antes ?? c.antes ?? '—')) : '—';
+    const sn = esSuc ? escapeHtml(String(c.sucursal_despues ?? c.despues ?? '—')) : '—';
+    const obsDet = esSuc
+      ? escapeHtml(String(c.observacion_texto || '—'))
+      : `${escapeHtml(String(c.antes || '—'))} → ${escapeHtml(String(c.despues || '—'))}`;
+    return `<tr>
+      <td>${escapeHtml(c.momento_bd || c.detectado_en ? formatFecha(c.momento_bd || c.detectado_en) : '—')}</td>
+      <td>${escapeHtml(String(c.id || '—'))}</td>
+      <td>${escapeHtml(esSuc ? 'Cruda · sucursal' : String(c.tipo || 'REGISTRO'))}</td>
+      <td>${escapeHtml(String(c.propietario || '—'))}</td>
+      <td>${sa}</td>
+      <td>${sn}</td>
+      <td>${obsDet}</td>
+      <td>${escapeHtml(String(c.empresa_destino || '—'))}</td>
+    </tr>`;
+  }).join('');
   const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+  const headNorm = '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Antes</th><th>Ahora</th></tr>';
+  const headLog = '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Propietario</th><th>Sucursal (antes)</th><th>Sucursal (nueva)</th><th>Observación / detalle</th><th>Empresa destino</th></tr>';
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Reimpresiones logística</title>
     <style>body{font-family:Arial,sans-serif;margin:20px}h2{margin:0 0 10px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:6px;text-align:left}th{background:#f0f0f0}.meta{margin:0 0 10px;color:#666}</style>
   </head><body>
     <h2>Reimpresiones logística</h2>
     <p class="meta">Fecha operativa: ${escapeHtml(fecha)} · Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}</p>
-    <table><thead><tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Antes</th><th>Ahora</th></tr></thead><tbody>${rows}</tbody></table>
+    <table><thead>${esLog ? headLog : headNorm}</thead><tbody>${rows}</tbody></table>
   </body></html>`;
   const w = window.open('', '_blank', 'width=1200,height=800');
   if (!w) {
@@ -3843,6 +3959,52 @@ function imprimirListadoCambiosObs() {
 
 function cerrarModalCambiosObs() {
   document.getElementById('modal-cambios-obs')?.classList.remove('open');
+  _seleccionReimpSucursalCrudas.clear();
+  const btnEtq = document.getElementById('btn-etq-reimp-suc');
+  if (btnEtq) btnEtq.style.display = 'none';
+}
+
+function toggleReimpSucursalDesdeModal(el) {
+  const id = el?.getAttribute?.('data-reimp-id');
+  if (!id) return;
+  if (el.checked) _seleccionReimpSucursalCrudas.add(id);
+  else _seleccionReimpSucursalCrudas.delete(id);
+}
+
+function toggleTodosReimpSucursal(master) {
+  const tbody = document.getElementById('tbody-cambios-obs');
+  if (!tbody || !master) return;
+  const on = !!master.checked;
+  tbody.querySelectorAll('input.js-chk-reimp-suc[type="checkbox"]').forEach((el) => {
+    el.checked = on;
+    const id = el.getAttribute('data-reimp-id');
+    if (!id) return;
+    if (on) _seleccionReimpSucursalCrudas.add(id);
+    else _seleccionReimpSucursalCrudas.delete(id);
+  });
+}
+
+function imprimirEtiquetasReimpSucursalSeleccion() {
+  const ids = [..._seleccionReimpSucursalCrudas].map(String).filter(Boolean);
+  if (!ids.length) {
+    mostrarToast('Selecciona filas «Cruda · sucursal» con la casilla', 'err');
+    return;
+  }
+  return runWithAppLoader('Preparando etiquetas (sucursal actualizada)…', async () => {
+    const fecha = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
+    const datosDia = await fetchPorFecha(fecha);
+    const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
+    const lista = ids
+      .map((id) => map.get(String(id)))
+      .filter(Boolean)
+      .filter(esVistaHistorialCrudasSolo);
+    if (!lista.length) {
+      mostrarToast('No se encontraron crudas vigentes en la fecha para esos IDs', 'err');
+      return;
+    }
+    abrirVentanaEtiquetasCrudas(lista);
+    mostrarToast(`${lista.length} etiqueta(s) con datos actuales (misma plantilla que inventario)`, 'ok');
+  });
 }
 
 async function irHistorialYMostrarCambios(cambios) {
