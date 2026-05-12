@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "verify": "node scripts/verify-setup.mjs",
+    "cuenta:crudas": "node scripts/cuenta-crudas-macro.mjs",
     "migrate:salidas": "node scripts/migrate-salidas-json-to-pg.mjs",
     "db:salidas-schema": "node scripts/apply-salidas-schema.mjs"
   },

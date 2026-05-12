@@ -9,6 +9,7 @@ import {
   getAuditoriaClasificacion,
   getConfigOperacion,
   getResumenMacro,
+  getCrudasCambioSucursal,
 } from '../controllers/librillos.controller.js';
 
 const router = express.Router();
@@ -18,6 +19,7 @@ router.get('/diagnostico', getDiagnostico); // ?fecha=YYYY-MM-DD
 router.get('/auditoria-clasificacion', getAuditoriaClasificacion); // ?fecha=YYYY-MM-DD
 router.get('/config', getConfigOperacion);
 router.get('/resumen', getResumenMacro); // ?fecha=YYYY-MM-DD
+router.get('/crudas-cambio-sucursal', getCrudasCambioSucursal); // ?fecha=YYYY-MM-DD
 router.get('/observaciones', getObservaciones); // ?fecha=YYYY-MM-DD
 router.get('/', getLibrillos);            // ?fecha=YYYY-MM-DD opcional
 router.get('/estado', getEstadoCache);    // Info del cache

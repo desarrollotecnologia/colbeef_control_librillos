@@ -5,6 +5,7 @@ import {
   obtenerResumenMacroPorFecha,
   obtenerObservacionesPorFecha,
   obtenerStatsUltimos7Dias,
+  obtenerCrudasCambioSucursalCruceDiaAnterior,
 } from '../services/librillos.service.js';
 import {
   obtenerValidacionMovimientos,
@@ -140,6 +141,21 @@ export const getAuditoriaClasificacion = async (req, res) => {
 // GET /api/librillos/config — parámetros operativos del backend
 export const getConfigOperacion = (req, res) => {
   res.json(obtenerConfigOperacion());
+};
+
+// GET /api/librillos/crudas-cambio-sucursal?fecha=YYYY-MM-DD — BD: crudas con sucursal distinta vs día anterior
+export const getCrudasCambioSucursal = async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ error: 'Parámetro fecha requerido (YYYY-MM-DD)' });
+    }
+    const datos = await obtenerCrudasCambioSucursalCruceDiaAnterior(fecha);
+    return res.json(datos);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Error al obtener cambios de sucursal en crudas' });
+  }
 };
 
 // GET /api/librillos/resumen?fecha=YYYY-MM-DD — resumen macro estricto del día

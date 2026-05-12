@@ -3974,6 +3974,20 @@ function esCambioCriticoReimpresion(c) {
   return t === 'LIBRILLO' || t === 'CRUDA';
 }
 
+/** Cruce crudas / sucursal vs día anterior: mismo criterio que antes, pero calculado en el servidor (BD al vuelo). */
+async function fetchCrudasCambioSucursalDesdeBd(fechaIso) {
+  try {
+    const f = String(fechaIso || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return [];
+    const res = await fetch(`${API_URL}/crudas-cambio-sucursal?fecha=${encodeURIComponent(f)}`);
+    if (!res.ok) return [];
+    const j = await res.json();
+    return Array.isArray(j.cambios) ? j.cambios : [];
+  } catch {
+    return [];
+  }
+}
+
 function listaCambiosObsActual(cambiosExplicitos = null, modo = 'normal') {
   let lista = mergeHistorialCambios(cargarHistorialCambiosObsLS(), historialCambiosObs);
   if (cambiosExplicitos?.length) {
@@ -4003,7 +4017,7 @@ async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
       const fg = document.getElementById('fecha-global')?.value || hoyISO();
       const fSig = sumarDiasISO(fg, 1) || fg;
       sub.style.display = 'block';
-      sub.textContent = `Solo cambios de sucursal en crudas. Las etiquetas se imprimen con los datos del día siguiente al turno (${fSig}), fecha de despacho prevista. Turno actual en barra: ${fg}.`;
+      sub.textContent = `Lista principal desde la base de datos: crudas con sucursal distinta respecto al día anterior (${fg}). Las etiquetas se imprimen con los datos del día siguiente al turno (${fSig}), fecha de despacho prevista. Se combinan con avisos guardados en este navegador si los hay.`;
     } else {
       sub.style.display = 'none';
       sub.textContent = '';
@@ -4011,7 +4025,14 @@ async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
   }
   aplicarTheadModalCambiosObs(modo);
   modal.classList.add('open');
-  const lista = listaCambiosObsActual(cambiosExplicitos, modo);
+  let lista = listaCambiosObsActual(cambiosExplicitos, modo);
+  if (modo === 'logistica') {
+    const fg = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
+    const desdeBd = await fetchCrudasCambioSucursalDesdeBd(fg);
+    lista = mergeHistorialCambios(desdeBd, lista);
+    lista = lista.filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
+    lista = ordenarHistorialPorMomento(lista);
+  }
   if (!lista.length) {
     tbody.innerHTML = modo === 'logistica'
       ? '<tr><td colspan="6" class="empty">Sin cambios de sucursal en crudas para reimpresión</td></tr>'

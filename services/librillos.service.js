@@ -171,6 +171,100 @@ function hoyBogotaISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
+/** Día calendario anterior en Bogotá (misma convención que el modal de reimpresión logística). */
+function diaAnteriorIsoBogota(fechaISO) {
+  const s = String(fechaISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+  const d = new Date(`${s}T12:00:00-05:00`);
+  if (Number.isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
+function esCrudaHistorialLibrillosRow(d) {
+  return /\bCRUDAS?\b/i.test(
+    String(d?.observaciones ?? d?.observacion ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+}
+
+function sucursalNormLibrilloRow(d) {
+  return String(d?.sucursal ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Crudas con cambio de sucursal respecto al día anterior (mismo criterio que el modal logística).
+ * Consulta `consultarLibrillos` dos veces **sin** pasar por el caché HTTP del servidor, para reflejar la BD al instante.
+ */
+export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
+  const fecha = String(fechaISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw new Error('fecha debe ser YYYY-MM-DD');
+  }
+  const ayer = diaAnteriorIsoBogota(fecha);
+  if (!ayer) {
+    return {
+      fecha,
+      fecha_referencia_anterior: '',
+      cambios: [],
+      generado_en: new Date().toISOString(),
+    };
+  }
+
+  const [datosHoy, datosAyer] = await Promise.all([
+    consultarLibrillos(fecha),
+    consultarLibrillos(ayer),
+  ]);
+  const arrHoy = Array.isArray(datosHoy) ? datosHoy : [];
+  const arrAyer = Array.isArray(datosAyer) ? datosAyer : [];
+  const mapAyer = new Map();
+  for (const d of arrAyer) {
+    if (!d || !esCrudaHistorialLibrillosRow(d)) continue;
+    const id = String(d.id_producto ?? '').trim();
+    if (id) mapAyer.set(id, d);
+  }
+
+  const generado = new Date().toISOString();
+  const cambios = [];
+  for (const n of arrHoy) {
+    if (!n || !esCrudaHistorialLibrillosRow(n)) continue;
+    const id = String(n.id_producto ?? '').trim();
+    if (!id) continue;
+    const p = mapAyer.get(id);
+    if (!p) continue;
+    const sAnt = sucursalNormLibrilloRow(p);
+    const sNue = sucursalNormLibrilloRow(n);
+    if (sAnt === sNue) continue;
+    const nObsRaw = String(n.observaciones ?? n.observacion ?? '');
+    cambios.push({
+      id,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: sAnt || '—',
+      despues: sNue || '—',
+      sucursal_antes: sAnt,
+      sucursal_despues: sNue,
+      observacion_texto: nObsRaw.replace(/\s+/g, ' ').trim(),
+      propietario: String(n.propietario || p.propietario || '').trim(),
+      empresa_destino: String(n.empresa_destino || p.empresa_destino || '').trim(),
+      identificacion: String(n.identificacion || p.identificacion || '').trim(),
+      detectado_en: generado,
+      momento_bd: null,
+      fuente: 'bd_servidor',
+      cruce_dia_anterior: ayer,
+    });
+  }
+
+  return {
+    fecha,
+    fecha_referencia_anterior: ayer,
+    cambios,
+    generado_en: generado,
+  };
+}
+
 function leerCacheFecha(fechaISO) {
   const k = String(fechaISO || '').trim();
   if (!k) return null;
