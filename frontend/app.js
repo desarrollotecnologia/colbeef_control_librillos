@@ -2437,8 +2437,8 @@ function plantillaGuiaPredeterminada(categoria) {
     tipo_vehiculo: 'TRANSPORTE DE ALIMENTO NO COMESTIBLE',
   };
   const baseFirma = {
-    firma_responsable: 'YERSON JAVIER RINCON BOTELLO',
-    firma_cedula: '1.127.947.335',
+    firma_responsable: 'Maria Filomena Segura Barrera',
+    firma_cedula: '1056908061',
   };
   if (categoria === 'cat') {
     return {
@@ -2447,8 +2447,7 @@ function plantillaGuiaPredeterminada(categoria) {
       conductor_nombre: 'GILBERTO ZAMBRANO ROJAS',
       id_conductor: '1100220267',
       placa: 'UFW 238',
-      isotermo: '',
-      firma_cargo: 'COORDINADOR DE SUBPRODUCTOS',
+      firma_cargo: 'Directora de Calidad',
     };
   }
   if (categoria === 'derivados') {
@@ -2457,7 +2456,7 @@ function plantillaGuiaPredeterminada(categoria) {
       ...baseFirma,
       conductor_nombre: 'Jorge Parra',
       placa: 'CRA-782',
-      firma_cargo: 'COORDINADOR DE PRODUCTOS CARNICOS COMESTIBLES',
+      firma_cargo: 'Directora de Calidad',
     };
   }
   if (categoria === 'global_hides') {
@@ -2467,7 +2466,7 @@ function plantillaGuiaPredeterminada(categoria) {
       conductor_nombre: 'Franki Alexis Gamarra',
       id_conductor: '91534708',
       placa: 'SUF-086',
-      firma_cargo: 'COORDINADOR DE PRODUCTOS CARNICOS COMESTIBLES',
+      firma_cargo: 'Directora de Calidad',
     };
   }
   return { ...basePlanta, ...baseFirma };
@@ -2843,8 +2842,6 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   const manual = opts.manual || {};
   const partes = descomponerTotalesGuia(c);
   const librosADespachar = Number(partes.a || 0) + Number(partes.b || 0);
-  const pendientesHoyApi = Number(r.pendientes_hoy || 0);
-  const pendientesHoy = pendientesHoyApi;
   const ajusteValor = Number.isFinite(manual.ajusteValor) ? manual.ajusteValor : 0;
   const ajusteTipo = manual.ajusteTipo === 'adicionales' ? 'adicionales' : 'pendientes';
   const ajusteFecha = String(manual.ajusteFecha || '').trim();
@@ -2863,53 +2860,76 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
       : null;
   const cmpDesp = compararDespachoConTotalGuia(totalFinal, librosDespManual);
   const cantidadDespachados = librosDespManual != null ? librosDespManual : totalFinal;
-  const estadoPdfHtml = cmpDesp.tieneManual
-    ? `<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">${
-      cmpDesp.estado === 'completo'
-        ? 'DESPACHO COMPLETO'
-        : cmpDesp.estado === 'pendientes'
-          ? `PENDIENTES: ${cmpDesp.pendientes}`
-          : `ADICIONALES: ${cmpDesp.adicionales}`
-    }</span></div>`
-    : '';
-  const logoDataUrl = opts.logoDataUrl || (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null);
-  const ajusteLabel = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
+  const controlPdfHtml = (() => {
+    if (!cmpDesp.tieneManual) {
+      return '<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">—</span></div>';
+    }
+    if (cmpDesp.estado === 'completo') {
+      return '<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">DESPACHO COMPLETO</span></div>';
+    }
+    if (cmpDesp.estado === 'pendientes') {
+      return `<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">PENDIENTES: ${cmpDesp.pendientes}</span></div>`;
+    }
+    if (cmpDesp.estado === 'adicionales') {
+      return `<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">ADICIONALES: ${cmpDesp.adicionales}</span></div>`;
+    }
+    return '<div style="margin-top:6px;font-size:15px;line-height:1.3"><span class="k">CONTROL:</span> <span class="v">—</span></div>';
+  })();
   const fechaAjusteTexto = ajusteFecha ? fechaGuiaSolo(ajusteFecha) : '';
-  const signoAjuste = ajusteTipo === 'adicionales' ? '-' : '+';
-  const ajusteBloque = ajusteValor > 0
-    ? `${signoAjuste} ${ajusteValor} ${ajusteLabel}${fechaAjusteTexto ? ` DEL ${fechaAjusteTexto}` : ''}`
-    : '';
-  const descomisoTxt = decomisoManual > 0 ? ` - ${decomisoManual} DECOMISO` : '';
+  const sufijoAjusteHastaTotal = (() => {
+    const tieneExtra = ajusteValor > 0 || decomisoManual > 0;
+    let s = '';
+    if (ajusteValor > 0) {
+      const sign = ajusteTipo === 'adicionales' ? '-' : '+';
+      const lbl = ajusteTipo === 'adicionales' ? 'ADICIONALES' : 'PENDIENTES';
+      s += ` ${sign} ${ajusteValor} ${lbl}`;
+      if (fechaAjusteTexto) s += ` DEL ${fechaAjusteTexto}`;
+    }
+    if (decomisoManual > 0) s += ` - ${decomisoManual} DECOMISO`;
+    if (tieneExtra) s += ` = ${totalFinal}`;
+    return s;
+  })();
+
+  let firmaSrc = 'img/firma-responsable-planta.png';
+  if (typeof window !== 'undefined') {
+    try {
+      firmaSrc = new URL('img/firma-responsable-planta.png', window.location.href).href;
+    } catch {
+      /* mantener ruta relativa */
+    }
+    if (window.GUIA_FIRMA_RESPONSABLE_DATA_URL) firmaSrc = window.GUIA_FIRMA_RESPONSABLE_DATA_URL;
+  }
+  if (opts.firmaDataUrl) firmaSrc = opts.firmaDataUrl;
 
   let bloqueTotales = '';
   if (tipo.includes('CAT')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.cat || 0)} + ${Number(r.asurcarnescol || 0)} = ${librosADespachar}${sufijoAjusteHastaTotal}</span></div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
-        ${estadoPdfHtml}
-        <div style="margin-top:8px">CAT: <span class="v">${Number(r.cat || 0)}</span></div>
-        <div>ASURCARNESCOL: <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
+        ${controlPdfHtml}
+        <div style="margin-top:8px"><span class="k">CAT:</span> <span class="v">${Number(r.cat || 0)}</span></div>
+        <div><span class="k">ASURCARNESCOL:</span> <span class="v">${Number(r.asurcarnescol || 0)}</span></div>
       </div>
     `;
   } else if (tipo.includes('DERIVADOS')) {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.derivados || 0)} + ${Number(r.asurcarnes || 0)} = ${librosADespachar}${sufijoAjusteHastaTotal}</span></div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
-        ${estadoPdfHtml}
-        <div style="margin-top:8px">DERIVADOS: <span class="v">${Number(r.derivados || 0)}</span></div>
-        <div>ASURCARNES: <span class="v">${Number(r.asurcarnes || 0)}</span></div>
+        ${controlPdfHtml}
+        <div style="margin-top:8px"><span class="k">DERIVADOS:</span> <span class="v">${Number(r.derivados || 0)}</span></div>
+        <div><span class="k">ASURCARNES:</span> <span class="v">${Number(r.asurcarnes || 0)}</span></div>
       </div>
     `;
   } else {
     bloqueTotales = `
       <div class="resumen">
-        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}</span> <span class="v" style="margin-left:30px">${ajusteValor > 0 ? `${ajusteValor} ${ajusteLabel}` : ''}</span></div>
+        <div><span class="k">LIBROS A DESPACHAR:</span> <span class="v">${Number(r.global_hides || 0)} + ${Number(r.asurcarnes_glo || 0)} = ${librosADespachar}${sufijoAjusteHastaTotal}</span></div>
         <div style="margin-top:6px"><span class="k">LIBROS DESPACHADOS:</span> <span class="v">${cantidadDespachados}</span></div>
-        ${estadoPdfHtml}
-        <div style="margin-top:8px">GLOBAL HIDES: <span class="v">${Number(r.global_hides || 0)}</span></div>
-        <div>ASURCARNESGLO: <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
+        ${controlPdfHtml}
+        <div style="margin-top:8px"><span class="k">GLOBAL HIDES:</span> <span class="v">${Number(r.global_hides || 0)}</span></div>
+        <div><span class="k">ASURCARNESGLO:</span> <span class="v">${Number(r.asurcarnes_glo || 0)}</span></div>
       </div>
     `;
   }
@@ -2982,17 +3002,18 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     <tr><td>Tipo de vehículo</td><td>${escapeHtml(c.tipo_vehiculo || 'TRANSPORTE DE ALIMENTO NO COMESTIBLE')}</td></tr>
     <tr><td>Placas</td><td>${escapeHtml(c.placa || '—')}</td></tr>
     <tr><td>Precinto</td><td>${escapeHtml(c.precinto || '—')}</td></tr>
-    ${String(tipo).includes('CAT') ? `<tr><td>Isotermo</td><td>${escapeHtml(c.isotermo || '')}</td></tr>` : ''}
   </table>
 
   <div class="sec sec-title">4. DESTINO: ${escapeHtml(destinoTxt)}${tipo ? `, ${escapeHtml(tipo)}` : ''}</div>
   ${bloqueTotales}
-  <div class="resumen" style="margin-top:6px">
-    TOTAL: <span class="v">${totalBase}${ajusteBloque ? ` ${escapeHtml(ajusteBloque)}` : ''}${escapeHtml(descomisoTxt)} = ${totalFinal}</span>
-  </div>
 
   <table class="t t-kv firma">
-    <tr><td>FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
+    <tr><td>FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>
+      <div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px">
+        <img src="${escapeHtml(firmaSrc)}" alt="" style="max-height:46px;max-width:220px;object-fit:contain;display:block" />
+        <span style="font-weight:700">${escapeHtml(c.firma_responsable || c.responsable || '—')}</span>
+      </div>
+    </td></tr>
     <tr><td>CEDULA DE CIUDADANIA:</td><td>${escapeHtml(c.firma_cedula || '—')}</td></tr>
     <tr><td>CARGO:</td><td>${escapeHtml(c.firma_cargo || '—')}</td></tr>
   </table>
