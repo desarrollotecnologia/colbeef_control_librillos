@@ -2958,6 +2958,8 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .firma{margin-top:8px;page-break-inside:avoid}
     .firma td{padding:4px 6px;font-size:10.5px}
     .firma td:first-child{width:50%;font-weight:700}
+    .guia-firma-wrap{display:inline-block;line-height:0}
+    .guia-firma-img{max-height:48px;max-width:260px;width:auto;height:auto;object-fit:contain;display:block;vertical-align:top}
     .nota{font-size:9px;margin-top:6px;line-height:1.3;text-align:justify}
   </style>
 <div class="guia-pdf-root">
@@ -3008,10 +3010,10 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
   ${bloqueTotales}
 
   <table class="t t-kv firma">
+    <tr><td>NOMBRE COMPLETO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
     <tr><td>FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>
-      <div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px">
-        <img src="${escapeHtml(firmaSrc)}" alt="" style="max-height:46px;max-width:220px;object-fit:contain;display:block" />
-        <span style="font-weight:700">${escapeHtml(c.firma_responsable || c.responsable || '—')}</span>
+      <div class="guia-firma-wrap">
+        <img class="guia-firma-img" src="${escapeHtml(firmaSrc)}" alt="Firma responsable" />
       </div>
     </td></tr>
     <tr><td>CEDULA DE CIUDADANIA:</td><td>${escapeHtml(c.firma_cedula || '—')}</td></tr>
