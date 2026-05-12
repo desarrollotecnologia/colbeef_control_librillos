@@ -2956,8 +2956,9 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .v{font-weight:800;color:#C0392B}
     .resumen{font-size:16px;margin-top:5px;line-height:1.25;page-break-inside:avoid}
     .firma{margin-top:8px;page-break-inside:avoid}
-    .firma td{padding:4px 6px;font-size:10.5px}
-    .firma td:first-child{width:50%;font-weight:700}
+    table.t.t-kv.firma{table-layout:auto}
+    .firma td{padding:4px 6px;font-size:10.5px;overflow:visible}
+    .firma td:first-child{width:36%;min-width:140px;font-weight:700;white-space:normal}
     .guia-firma-wrap{display:inline-block;line-height:0}
     .guia-firma-img{max-height:48px;max-width:260px;width:auto;height:auto;object-fit:contain;display:block;vertical-align:top}
     .nota{font-size:9px;margin-top:6px;line-height:1.3;text-align:justify}
@@ -3077,7 +3078,7 @@ async function descargarPdfGuiaDespacho() {
         .set({
           margin: [6, 6, 6, 6],
           filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
-          image: { type: 'jpeg', quality: 0.96 },
+          image: { type: 'png', quality: 1 },
           html2canvas: {
             scale: 2,
             useCORS: true,
