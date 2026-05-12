@@ -2781,12 +2781,12 @@ async function generarVistaPreviaGuiaDespacho() {
       final: check.calc.final,
     },
   });
-  const firmaDataUrl = await resolverFirmaGuiaDataUrlParaPdf();
+  const firmaGuia = await resolverFirmaGuiaParaHtml();
   const html = construirHtmlGuiaDespachoPdf(data, {
     logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
     categoria,
     manual,
-    ...(firmaDataUrl ? { firmaDataUrl } : {}),
+    firmaGuia,
   });
   const panel = document.getElementById('guia-preview-panel');
   const body = document.getElementById('guia-preview-body');
@@ -2889,18 +2889,54 @@ async function firmaGuiaPngDataUrlSinFondoClaro(imageUrl) {
   });
 }
 
-async function resolverFirmaGuiaDataUrlParaPdf() {
+/** Firma en guía: recorte del trazo; capturas de pantalla muy grandes se rechazan. */
+const FIRMA_GUIA_MAX_ANCHO = 720;
+const FIRMA_GUIA_MAX_ALTO = 560;
+
+function medirImagenFirmaGuia(src) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.onload = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+    im.onerror = () => resolve(null);
+    im.src = src;
+  });
+}
+
+/**
+ * @returns {Promise<{ modo: 'imagen', dataUrl: string } | { modo: 'linea' }>}
+ */
+async function resolverFirmaGuiaParaHtml() {
+  const candidato =
+    typeof window !== 'undefined' && window.GUIA_FIRMA_RESPONSABLE_DATA_URL
+      ? window.GUIA_FIRMA_RESPONSABLE_DATA_URL
+      : urlFirmaGuiaResponsableEstatica();
+  const dim = await medirImagenFirmaGuia(candidato);
+  if (!dim) {
+    if (typeof window !== 'undefined' && !window.__firmaGuiaAvisoCargaHecho) {
+      window.__firmaGuiaAvisoCargaHecho = true;
+      mostrarToast(
+        'No se cargó la firma (revisar img/firma-responsable-planta.png o variable GUIA_FIRMA_RESPONSABLE_DATA_URL). Se deja línea para firmar a mano.',
+        'err'
+      );
+    }
+    return { modo: 'linea' };
+  }
+  if (dim.w > FIRMA_GUIA_MAX_ANCHO || dim.h > FIRMA_GUIA_MAX_ALTO) {
+    if (typeof window !== 'undefined' && !window.__firmaGuiaAvisoTamanoHecho) {
+      window.__firmaGuiaAvisoTamanoHecho = true;
+      mostrarToast(
+        `La imagen de firma mide ${dim.w}×${dim.h}px: es demasiado grande (máx. ${FIRMA_GUIA_MAX_ANCHO}×${FIRMA_GUIA_MAX_ALTO}px, solo el recorte del trazo). Se usa línea en blanco.`,
+        'err'
+      );
+    }
+    return { modo: 'linea' };
+  }
   if (typeof window !== 'undefined' && window.GUIA_FIRMA_RESPONSABLE_DATA_URL) {
-    return window.GUIA_FIRMA_RESPONSABLE_DATA_URL;
+    return { modo: 'imagen', dataUrl: candidato };
   }
-  if (typeof window !== 'undefined' && window.__firmaGuiaProcCache !== undefined) {
-    return window.__firmaGuiaProcCache;
-  }
-  const processed = await firmaGuiaPngDataUrlSinFondoClaro(urlFirmaGuiaResponsableEstatica());
-  if (typeof window !== 'undefined') {
-    window.__firmaGuiaProcCache = processed || null;
-  }
-  return processed || null;
+  const processed = await firmaGuiaPngDataUrlSinFondoClaro(candidato);
+  if (processed) return { modo: 'imagen', dataUrl: processed };
+  return { modo: 'linea' };
 }
 
 function construirHtmlGuiaDespachoPdf(data, opts = {}) {
@@ -2969,16 +3005,13 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     return s;
   })();
 
-  let firmaSrc = 'img/firma-responsable-planta.png';
-  if (typeof window !== 'undefined') {
-    try {
-      firmaSrc = new URL('img/firma-responsable-planta.png', window.location.href).href;
-    } catch {
-      /* mantener ruta relativa */
-    }
-    if (window.GUIA_FIRMA_RESPONSABLE_DATA_URL) firmaSrc = window.GUIA_FIRMA_RESPONSABLE_DATA_URL;
-  }
-  if (opts.firmaDataUrl) firmaSrc = opts.firmaDataUrl;
+  const fg = opts.firmaGuia && opts.firmaGuia.modo === 'imagen' && opts.firmaGuia.dataUrl
+    ? opts.firmaGuia
+    : { modo: 'linea' };
+  const firmaCeldaHtml =
+    fg.modo === 'imagen' && fg.dataUrl
+      ? `<div class="guia-firma-wrap"><img class="guia-firma-img" src="${escapeHtml(fg.dataUrl)}" alt="" /></div>`
+      : '<div class="guia-firma-line" aria-hidden="true"></div>';
 
   let bloqueTotales = '';
   if (tipo.includes('CAT')) {
@@ -3040,6 +3073,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
     .firma td:first-child{width:36%;min-width:140px;font-weight:700;white-space:normal}
     .guia-firma-wrap{display:inline-block;line-height:0}
     .guia-firma-img{max-height:48px;max-width:260px;width:auto;height:auto;object-fit:contain;display:block;vertical-align:top}
+    .guia-firma-line{min-height:38px;border-bottom:1.5px solid #111;max-width:100%;width:100%;box-sizing:border-box;margin-top:4px}
     .nota{font-size:9px;margin-top:6px;line-height:1.3;text-align:justify}
   </style>
 <div class="guia-pdf-root">
@@ -3091,11 +3125,7 @@ function construirHtmlGuiaDespachoPdf(data, opts = {}) {
 
   <table class="t t-kv firma">
     <tr><td>NOMBRE COMPLETO:</td><td>${escapeHtml(c.firma_responsable || c.responsable || '—')}</td></tr>
-    <tr><td>FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>
-      <div class="guia-firma-wrap">
-        <img class="guia-firma-img" src="${escapeHtml(firmaSrc)}" alt="Firma responsable" />
-      </div>
-    </td></tr>
+    <tr><td>FIRMA RESPONSABLE PLANTA DE BENEFICIO:</td><td>${firmaCeldaHtml}</td></tr>
     <tr><td>CEDULA DE CIUDADANIA:</td><td>${escapeHtml(c.firma_cedula || '—')}</td></tr>
     <tr><td>CARGO:</td><td>${escapeHtml(c.firma_cargo || '—')}</td></tr>
   </table>
@@ -3142,12 +3172,12 @@ async function descargarPdfGuiaDespacho() {
       });
       return;
     }
-    const firmaDataUrl = await resolverFirmaGuiaDataUrlParaPdf();
+    const firmaGuia = await resolverFirmaGuiaParaHtml();
     const html = construirHtmlGuiaDespachoPdf(data, {
       logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
       categoria,
       manual,
-      ...(firmaDataUrl ? { firmaDataUrl } : {}),
+      firmaGuia,
     });
     // Formato CARTA (Letter 8.5" x 11" = 215.9 x 279.4 mm).
     // Margen 6mm => area util ~ 203.9 x 267.4 mm.
