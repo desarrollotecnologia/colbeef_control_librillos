@@ -2781,10 +2781,12 @@ async function generarVistaPreviaGuiaDespacho() {
       final: check.calc.final,
     },
   });
+  const firmaDataUrl = await resolverFirmaGuiaDataUrlParaPdf();
   const html = construirHtmlGuiaDespachoPdf(data, {
     logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
     categoria,
     manual,
+    ...(firmaDataUrl ? { firmaDataUrl } : {}),
   });
   const panel = document.getElementById('guia-preview-panel');
   const body = document.getElementById('guia-preview-body');
@@ -2822,6 +2824,83 @@ async function autocompletarAjusteGuiaDesdeDiaAnterior() {
   } catch {
     // Si no hay guía previa, se mantiene edición manual sin bloquear.
   }
+}
+
+function urlFirmaGuiaResponsableEstatica() {
+  if (typeof window === 'undefined') return 'img/firma-responsable-planta.png';
+  try {
+    return new URL('img/firma-responsable-planta.png', window.location.href).href;
+  } catch {
+    return 'img/firma-responsable-planta.png';
+  }
+}
+
+/**
+ * Quita blanco y grises muy uniformes (p. ej. tablero exportado por error) para dejar solo el trazo de la firma.
+ * @returns {Promise<string|null>} data URL PNG o null si no aplica / falla
+ */
+async function firmaGuiaPngDataUrlSinFondoClaro(imageUrl) {
+  if (!imageUrl || typeof document === 'undefined') return null;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        if (!w || !h) {
+          resolve(null);
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i];
+          const g = d[i + 1];
+          const b = d[i + 2];
+          const maxc = Math.max(r, g, b);
+          const minc = Math.min(r, g, b);
+          const spread = maxc - minc;
+          const sum = r + g + b;
+          if (sum >= 3 * 246) {
+            d[i + 3] = 0;
+            continue;
+          }
+          if (spread <= 12 && minc >= 170 && maxc <= 248) {
+            d[i + 3] = 0;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = imageUrl;
+  });
+}
+
+async function resolverFirmaGuiaDataUrlParaPdf() {
+  if (typeof window !== 'undefined' && window.GUIA_FIRMA_RESPONSABLE_DATA_URL) {
+    return window.GUIA_FIRMA_RESPONSABLE_DATA_URL;
+  }
+  if (typeof window !== 'undefined' && window.__firmaGuiaProcCache !== undefined) {
+    return window.__firmaGuiaProcCache;
+  }
+  const processed = await firmaGuiaPngDataUrlSinFondoClaro(urlFirmaGuiaResponsableEstatica());
+  if (typeof window !== 'undefined') {
+    window.__firmaGuiaProcCache = processed || null;
+  }
+  return processed || null;
 }
 
 function construirHtmlGuiaDespachoPdf(data, opts = {}) {
@@ -3063,10 +3142,12 @@ async function descargarPdfGuiaDespacho() {
       });
       return;
     }
+    const firmaDataUrl = await resolverFirmaGuiaDataUrlParaPdf();
     const html = construirHtmlGuiaDespachoPdf(data, {
       logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
       categoria,
       manual,
+      ...(firmaDataUrl ? { firmaDataUrl } : {}),
     });
     // Formato CARTA (Letter 8.5" x 11" = 215.9 x 279.4 mm).
     // Margen 6mm => area util ~ 203.9 x 267.4 mm.
