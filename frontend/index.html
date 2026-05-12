@@ -743,12 +743,13 @@
         <div class="modal-head">
           <span class="modal-title" id="modal-cambios-obs-title">Cambios de observación (antes / ahora)</span>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button type="button" class="btn-gen btn-gen-sec" style="padding:6px 10px;font-size:12px" onclick="copiarIdsCambiosObs()">Copiar IDs</button>
-            <button type="button" class="btn-gen btn-gen-sec" style="padding:6px 10px;font-size:12px" onclick="imprimirListadoCambiosObs()">Imprimir lista</button>
+            <button type="button" id="btn-copiar-cambios-obs" class="btn-gen btn-gen-sec" style="padding:6px 10px;font-size:12px" onclick="copiarIdsCambiosObs()">Copiar IDs</button>
+            <button type="button" id="btn-imprimir-lista-cambios-obs" class="btn-gen btn-gen-sec" style="padding:6px 10px;font-size:12px" onclick="imprimirListadoCambiosObs()">Imprimir lista</button>
             <button type="button" class="btn-gen" id="btn-etq-reimp-suc" style="display:none;padding:6px 10px;font-size:12px" onclick="imprimirEtiquetasReimpSucursalSeleccion()">Imprimir etiquetas (selección)</button>
           </div>
           <button type="button" class="modal-close" onclick="cerrarModalCambiosObs()" aria-label="Cerrar">×</button>
         </div>
+        <p id="modal-cambios-obs-sub" style="display:none;margin:0;padding:4px 16px 10px;font-size:12px;color:#5a7060;line-height:1.35"></p>
         <div class="tw">
           <table class="dt">
             <thead>

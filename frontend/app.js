@@ -3746,23 +3746,24 @@ function ordenarHistorialPorMomento(lista) {
 function aplicarTheadModalCambiosObs(modo) {
   const table = document.querySelector('#modal-cambios-obs table.dt');
   const btnEtq = document.getElementById('btn-etq-reimp-suc');
+  const btnCopiar = document.getElementById('btn-copiar-cambios-obs');
+  const btnLista = document.getElementById('btn-imprimir-lista-cambios-obs');
+  if (btnCopiar) btnCopiar.style.display = modo === 'logistica' ? 'none' : '';
+  if (btnLista) btnLista.style.display = modo === 'logistica' ? 'none' : '';
   if (btnEtq) btnEtq.style.display = modo === 'logistica' ? '' : 'none';
   if (!table) return;
   const thead = table.querySelector('thead');
   if (!thead) return;
   if (modo === 'logistica') {
     thead.innerHTML = `<tr>
-      <th class="no-print" style="width:44px;text-align:center" title="Marcar todas las filas con cambio de sucursal (crudas)">
+      <th class="no-print" style="width:44px;text-align:center" title="Seleccionar todas">
         <input type="checkbox" onclick="toggleTodosReimpSucursal(this)" aria-label="Seleccionar todas" />
       </th>
-      <th title="Prioriza la fecha/hora del registro en trazabilidad; si no hay, la hora en que la app detectó el cambio">Momento</th>
-      <th>Tipo</th>
       <th>ID</th>
-      <th>Propietario</th>
-      <th>Sucursal (antes)</th>
-      <th>Sucursal (nueva)</th>
-      <th>Observación / detalle</th>
-      <th>Empresa destino</th>
+      <th>Tipo</th>
+      <th>Hora del cambio</th>
+      <th>Sucursal antes</th>
+      <th>Sucursal nueva</th>
     </tr>`;
   } else {
     thead.innerHTML = `<tr>
@@ -3773,35 +3774,24 @@ function aplicarTheadModalCambiosObs(modo) {
 
 function renderFilasModalCambiosObsLogistica(tbody, lista) {
   _seleccionReimpSucursalCrudas.clear();
-  tbody.innerHTML = lista.map((c) => {
+  const solo = (lista || []).filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
+  tbody.innerHTML = solo.map((c) => {
     const momentoMostrar = c.momento_bd || c.detectado_en;
     const hora = momentoMostrar ? formatFecha(momentoMostrar) : '—';
     const titleMomento = c.momento_bd
       ? 'Fecha/hora del registro en trazabilidad (tabla a_parte_producto)'
       : 'Hora en que la app detectó el cambio (sin momento de BD en este evento)';
-    const esSuc = String(c.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL';
     const idRaw = String(c.id || '');
-    const chk = esSuc
-      ? `<input type="checkbox" class="js-chk-reimp-suc" data-reimp-id="${idRaw.replace(/"/g, '&quot;')}" onchange="toggleReimpSucursalDesdeModal(this)" />`
-      : '<span class="muted">—</span>';
-    const prop = escapeHtml(String(c.propietario || '—'));
-    const sa = escapeHtml(esSuc ? String(c.sucursal_antes ?? c.antes ?? '—') : '—');
-    const sn = escapeHtml(esSuc ? String(c.sucursal_despues ?? c.despues ?? '—') : '—');
-    const obsDet = esSuc
-      ? escapeHtml(String(c.observacion_texto || '—'))
-      : `${escapeHtml(String(c.antes || '—'))} → ${escapeHtml(String(c.despues || '—'))}`;
-    const emp = escapeHtml(String(c.empresa_destino || '—'));
-    const tipoLbl = esSuc ? escapeHtml('Cruda · sucursal') : escapeHtml(String(c.tipo || 'REGISTRO'));
+    const chk = `<input type="checkbox" class="js-chk-reimp-suc" data-reimp-id="${idRaw.replace(/"/g, '&quot;')}" onchange="toggleReimpSucursalDesdeModal(this)" />`;
+    const sa = escapeHtml(String(c.sucursal_antes ?? c.antes ?? '—'));
+    const sn = escapeHtml(String(c.sucursal_despues ?? c.despues ?? '—'));
     return `<tr>
       <td class="no-print" style="text-align:center">${chk}</td>
-      <td style="font-size:12px" title="${escapeHtml(titleMomento)}">${escapeHtml(hora)}</td>
-      <td style="font-size:12px;font-weight:600">${tipoLbl}</td>
       <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(idRaw || '—')}</td>
-      <td style="font-size:12px">${prop}</td>
-      <td style="font-size:12px">${esSuc ? sa : '—'}</td>
-      <td style="font-size:12px">${esSuc ? sn : '—'}</td>
-      <td style="font-size:12px;max-width:360px;word-break:break-word">${obsDet}</td>
-      <td style="font-size:12px;color:var(--tx2)">${emp}</td>
+      <td style="font-size:12px;font-weight:600">Crudas</td>
+      <td style="font-size:12px" title="${escapeHtml(titleMomento)}">${escapeHtml(hora)}</td>
+      <td style="font-size:12px">${sa}</td>
+      <td style="font-size:12px">${sn}</td>
     </tr>`;
   }).join('');
 }
@@ -3855,7 +3845,7 @@ function listaCambiosObsActual(cambiosExplicitos = null, modo = 'normal') {
     lista = mergeHistorialCambios(lista, cambiosExplicitos);
   }
   if (modo === 'logistica') {
-    lista = lista.filter(esCambioCriticoReimpresion);
+    lista = lista.filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
   }
   return ordenarHistorialPorMomento(lista);
 }
@@ -3869,15 +3859,27 @@ async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
   _modoCambiosObsActual = modo;
   if (ttl) {
     ttl.textContent = modo === 'logistica'
-      ? 'Reimpresiones logística (cambios detectados)'
+      ? 'Reimpresiones logística — crudas (cambio de sucursal)'
       : 'Cambios de observación (antes / ahora)';
+  }
+  const sub = document.getElementById('modal-cambios-obs-sub');
+  if (sub) {
+    if (modo === 'logistica') {
+      const fg = document.getElementById('fecha-global')?.value || hoyISO();
+      const fSig = sumarDiasISO(fg, 1) || fg;
+      sub.style.display = 'block';
+      sub.textContent = `Solo cambios de sucursal en crudas. Las etiquetas se imprimen con los datos del día siguiente al turno (${fSig}), fecha de despacho prevista. Turno actual en barra: ${fg}.`;
+    } else {
+      sub.style.display = 'none';
+      sub.textContent = '';
+    }
   }
   aplicarTheadModalCambiosObs(modo);
   modal.classList.add('open');
   const lista = listaCambiosObsActual(cambiosExplicitos, modo);
   if (!lista.length) {
     tbody.innerHTML = modo === 'logistica'
-      ? '<tr><td colspan="9" class="empty">Sin cambios críticos para reimpresión</td></tr>'
+      ? '<tr><td colspan="6" class="empty">Sin cambios de sucursal en crudas para reimpresión</td></tr>'
       : '<tr><td colspan="5" class="empty">Sin cambios detectados</td></tr>';
     return;
   }
@@ -3962,6 +3964,15 @@ function cerrarModalCambiosObs() {
   _seleccionReimpSucursalCrudas.clear();
   const btnEtq = document.getElementById('btn-etq-reimp-suc');
   if (btnEtq) btnEtq.style.display = 'none';
+  const btnCopiar = document.getElementById('btn-copiar-cambios-obs');
+  const btnLista = document.getElementById('btn-imprimir-lista-cambios-obs');
+  if (btnCopiar) btnCopiar.style.display = '';
+  if (btnLista) btnLista.style.display = '';
+  const sub = document.getElementById('modal-cambios-obs-sub');
+  if (sub) {
+    sub.style.display = 'none';
+    sub.textContent = '';
+  }
 }
 
 function toggleReimpSucursalDesdeModal(el) {
@@ -3987,23 +3998,27 @@ function toggleTodosReimpSucursal(master) {
 function imprimirEtiquetasReimpSucursalSeleccion() {
   const ids = [..._seleccionReimpSucursalCrudas].map(String).filter(Boolean);
   if (!ids.length) {
-    mostrarToast('Selecciona filas «Cruda · sucursal» con la casilla', 'err');
+    mostrarToast('Selecciona al menos una fila con la casilla', 'err');
     return;
   }
-  return runWithAppLoader('Preparando etiquetas (sucursal actualizada)…', async () => {
-    const fecha = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
-    const datosDia = await fetchPorFecha(fecha);
+  return runWithAppLoader('Preparando etiquetas (día siguiente al turno)…', async () => {
+    const fechaTurno = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
+    const fechaImpresion = sumarDiasISO(fechaTurno, 1) || fechaTurno;
+    const datosDia = await fetchPorFecha(fechaImpresion);
     const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
     const lista = ids
       .map((id) => map.get(String(id)))
       .filter(Boolean)
       .filter(esVistaHistorialCrudasSolo);
     if (!lista.length) {
-      mostrarToast('No se encontraron crudas vigentes en la fecha para esos IDs', 'err');
+      mostrarToast(
+        `No se encontraron crudas en ${fechaImpresion} para esos IDs (verifique plan del día siguiente).`,
+        'err'
+      );
       return;
     }
     abrirVentanaEtiquetasCrudas(lista);
-    mostrarToast(`${lista.length} etiqueta(s) con datos actuales (misma plantilla que inventario)`, 'ok');
+    mostrarToast(`${lista.length} etiqueta(s) con datos de ${fechaImpresion} (sucursal / puesto actual en sistema)`, 'ok');
   });
 }
 
