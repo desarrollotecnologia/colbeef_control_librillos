@@ -25,6 +25,8 @@ let cacheTurnoSnapshot = new Map();
 let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no existe
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
+/** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
+const CACHE_FECHA_ROW_SCHEMA = 2;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -277,8 +279,13 @@ export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
   };
 }
 
+function claveCacheFecha(fechaISO) {
+  const f = String(fechaISO || '').trim();
+  return f ? `${f}|${CACHE_FECHA_ROW_SCHEMA}` : '';
+}
+
 function leerCacheFecha(fechaISO) {
-  const k = String(fechaISO || '').trim();
+  const k = claveCacheFecha(fechaISO);
   if (!k) return null;
   const hit = cachePorFecha.get(k);
   if (!hit) return null;
@@ -290,7 +297,7 @@ function leerCacheFecha(fechaISO) {
 }
 
 function guardarCacheFecha(fechaISO, data) {
-  const k = String(fechaISO || '').trim();
+  const k = claveCacheFecha(fechaISO);
   if (!k) return;
   cachePorFecha.set(k, { ts: Date.now(), data: Array.isArray(data) ? data : [] });
 }
@@ -1043,12 +1050,16 @@ const consultarLibrillos = async (fecha = null) => {
         /** Plaza operativa: primero la plaza parseada desde observación (p.ej. "01014 CAVA"), luego sucursal BD. */
         const plazaFinal = textoNoVacio(plaza, v.sucursal);
         const clienteDestinoFinal = textoNoVacio(clienteClasificacion, v.empresa_destino);
+        const obsParteTrim = obsParte.replace(/\s+/g, ' ').trim();
+        const textoRetiroTrim = String(textoRetiro || '').replace(/\s+/g, ' ').trim();
         return {
           id_producto: l.id_producto,
           identificacion: l.identificacion,
           usuario_planillaje: l.usuario_planillaje || null,
           fecha: l.fecha,
           observaciones: obsFuente,
+          observaciones_parte: obsParteTrim || null,
+          texto_retiro_obs: textoRetiroTrim || null,
           observacion_origen: l.observacion_origen || null,
           observacion_plan: textoPlan.trim() ? textoPlan : null,
           observacion,
@@ -1145,7 +1156,7 @@ export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillo
  * `observaciones` puede traer solo el plan y ocultar el texto de `parte_producto`.
  */
 function textoMarcasResumenLibrillo(d) {
-  return [d?.observaciones, d?.observacion, d?.observacion_plan]
+  return [d?.observaciones, d?.observacion, d?.observacion_plan, d?.observaciones_parte, d?.texto_retiro_obs]
     .map((x) => String(x ?? '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
     .join(' ')
@@ -1184,8 +1195,11 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     return u.includes('ESTILO BOGOTA');
   };
   const esSucursalOlimpica = (d) => {
-    const u = sinMarcasDiacriticos(String(d?.sucursal ?? '')).toUpperCase();
-    return u.includes('OLIMPICA');
+    const u = (s) => sinMarcasDiacriticos(String(s ?? '')).toUpperCase();
+    return (
+      u(d?.sucursal).includes('OLIMPICA') ||
+      u(d?.plaza).includes('OLIMPICA')
+    );
   };
   let chunchullasCrudas = 0;
   let estiloBogota = 0;

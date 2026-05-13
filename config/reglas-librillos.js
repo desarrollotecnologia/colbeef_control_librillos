@@ -9,7 +9,7 @@
  * - Opcionalmente puede usarse solo cierre real del día (solo registros con parte).
  * - `chunchullas_crudas`: observación con CRUDAS y sin texto «ESTILO BOGOTA».
  * - `estilo_bogota`: crudas con «ESTILO BOGOTA» / «ESTILO BOGOTÁ» en observación, observación parseada o texto de plan faena (se unen para no perder marca si `plan_first` oculta el parte).
- * - `olimpica`: filas cuya sucursal contiene «OLIMPICA» (normalizado sin tildes).
+ * - `olimpica`: filas cuya sucursal o plaza contiene «OLIMPICA» (normalizado sin tildes).
  * - Por categoría: se incrementa según `agrupacion_codigo` de cada fila.
  *
  * Excepción opcional (solo resumen, no cambia `agrupacion` del ítem en `/api/librillos`):
