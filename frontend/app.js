@@ -2555,7 +2555,7 @@ function plantillaGuiaPredeterminada(categoria) {
       conductor_nombre: 'GILBERTO ZAMBRANO ROJAS',
       id_conductor: '1100220267',
       placa: 'UFW 238',
-      firma_cargo: 'Directora de Calidad',
+      firma_cargo: 'Directora de Planta',
     };
   }
   if (categoria === 'derivados') {
@@ -2564,7 +2564,7 @@ function plantillaGuiaPredeterminada(categoria) {
       ...baseFirma,
       conductor_nombre: 'Jorge Parra',
       placa: 'CRA-782',
-      firma_cargo: 'Directora de Calidad',
+      firma_cargo: 'Directora de Planta',
     };
   }
   if (categoria === 'global_hides') {
@@ -2574,7 +2574,7 @@ function plantillaGuiaPredeterminada(categoria) {
       conductor_nombre: 'Franki Alexis Gamarra',
       id_conductor: '91534708',
       placa: 'SUF-086',
-      firma_cargo: 'Directora de Calidad',
+      firma_cargo: 'Directora de Planta',
     };
   }
   return { ...basePlanta, ...baseFirma };
