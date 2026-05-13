@@ -2175,14 +2175,14 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
         </table>
         </div>
         <div class="tw rep-table-wrap resumen-dia-tabla-extras">
-          <table class="dt resumen-dia-table" style="max-width:280px">
+          <table class="dt resumen-dia-table" style="max-width:520px">
             <thead><tr><th>Indicador</th><th>Total</th></tr></thead>
             <tbody>
               <tr><td>OLIMPICA</td><td>${vOlimpica}</td></tr>
               <tr><td>ESTILO BOGOTA</td><td>${vEstiloBogota}</td></tr>
             </tbody>
           </table>
-          <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:280px">
+          <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:520px">
             OLIMPICA: sucursal contiene «OLIMPICA». ESTILO BOGOTA: crudas con ese texto en observación (no entran en CHUNCHULLAS CRUDAS).
           </p>
         </div>
@@ -7531,8 +7531,8 @@ function cssExportVistaTotales() {
 .rep-bloque-resumen-lch{margin:12px 0;padding:14px 16px;background:#fafbfa;border:1px solid #c4cfc6;border-radius:12px}
 .rep-bloque-resumen-h{font-size:16px;font-weight:800;margin:0 0 8px;color:#1a1a1a}
 .rep-bloque-resumen-meta{font-size:12px;color:#555;margin:0 0 10px}
-.resumen-dia-dos-tablas{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start;width:100%}
-.resumen-dia-tabla-extras{flex:0 1 auto;min-width:220px;margin-left:auto}
+.resumen-dia-dos-tablas{display:flex;flex-direction:column;gap:14px;align-items:stretch;width:100%}
+.resumen-dia-tabla-extras{flex:0 0 auto;max-width:520px}
 .resumen-dia-table{width:100%;max-width:520px;border-collapse:collapse;font-size:11px}
 .resumen-dia-table th,.resumen-dia-table td{border:1px solid #bbb;padding:8px 10px}
 .resumen-dia-head td{background:#fff34f;font-weight:800}
