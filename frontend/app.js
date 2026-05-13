@@ -2026,16 +2026,23 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   });
   const mapAgr = conteoAgr;
   const textoObsResumenLch = (d) =>
-    String(d?.observaciones ?? d?.observacion ?? '')
+    [d?.observaciones, d?.observacion, d?.observacion_plan]
+      .map((x) => String(x ?? '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join(' ')
       .replace(/\s+/g, ' ')
       .trim();
+  const sinTildesLch = (s) =>
+    String(s || '')
+      .normalize('NFD')
+      .replace(/\p{M}/gu, '');
   const esCrudaLch = (d) => /\bCRUDAS?\b/i.test(textoObsResumenLch(d));
-  const esCrudaEstiloBogotaLch = (d) =>
-    esCrudaLch(d) && textoObsResumenLch(d).toUpperCase().includes('ESTILO BOGOTA');
+  const esCrudaEstiloBogotaLch = (d) => {
+    if (!esCrudaLch(d)) return false;
+    return sinTildesLch(textoObsResumenLch(d)).toUpperCase().includes('ESTILO BOGOTA');
+  };
   const esSucursalOlimpicaLch = (d) =>
-    String(d?.sucursal ?? '')
-      .replace(/\s+/g, ' ')
-      .trim()
+    sinTildesLch(String(d?.sucursal ?? ''))
       .toUpperCase()
       .includes('OLIMPICA');
 
@@ -2183,7 +2190,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
             </tbody>
           </table>
           <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:520px">
-            OLIMPICA: sucursal contiene «OLIMPICA». ESTILO BOGOTA: crudas con ese texto en observación (no entran en CHUNCHULLAS CRUDAS).
+            OLIMPICA: sucursal contiene «OLIMPICA» (con o sin tilde). ESTILO BOGOTA: crudas con ese texto en observación o en plan faena (no entran en CHUNCHULLAS CRUDAS).
           </p>
         </div>
       </div>

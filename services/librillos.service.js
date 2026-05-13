@@ -1140,6 +1140,25 @@ export const obtenerLibrillos = () => ({
 
 export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillosConCache(fecha);
 
+/**
+ * Texto unido para marcas en resumen (CRUDAS / ESTILO BOGOTA): con `plan_first`,
+ * `observaciones` puede traer solo el plan y ocultar el texto de `parte_producto`.
+ */
+function textoMarcasResumenLibrillo(d) {
+  return [d?.observaciones, d?.observacion, d?.observacion_plan]
+    .map((x) => String(x ?? '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sinMarcasDiacriticos(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+}
+
 export async function obtenerResumenMacroPorFecha(fecha) {
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
@@ -1156,23 +1175,17 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   const pendientes = rowsAll.filter((d) => Boolean(d?.pendiente_registro_parte)).length;
   const countCod = new Map();
   const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
-  const textoObs = (d) =>
-    String(d?.observaciones ?? d?.observacion ?? '')
-      .replace(/\s+/g, ' ')
-      .trim();
+  const textoObs = (d) => textoMarcasResumenLibrillo(d);
   const esCruda = (d) => /\bCRUDAS?\b/i.test(textoObs(d));
-  /** Crudas con marca «Estilo Bogotá» en observación: van aparte, no en chunchullas_crudas. */
+  /** Crudas con «Estilo Bogotá» en observación/plan (sin tildes para BOGOTÁ). */
   const esCrudaEstiloBogota = (d) => {
     if (!esCruda(d)) return false;
-    const u = textoObs(d).toUpperCase();
+    const u = sinMarcasDiacriticos(textoObs(d)).toUpperCase();
     return u.includes('ESTILO BOGOTA');
   };
   const esSucursalOlimpica = (d) => {
-    const s = String(d?.sucursal ?? '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toUpperCase();
-    return s.includes('OLIMPICA');
+    const u = sinMarcasDiacriticos(String(d?.sucursal ?? '')).toUpperCase();
+    return u.includes('OLIMPICA');
   };
   let chunchullasCrudas = 0;
   let estiloBogota = 0;
