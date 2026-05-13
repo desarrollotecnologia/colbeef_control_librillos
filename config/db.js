@@ -59,7 +59,8 @@ pool.on('error', (err) => {
   console.error('❌ Error inesperado en el Pool de Conexiones:', err.message);
 });
 
-// Pool para la vista vw_pbi01 (consultas más pesadas; menos conexiones concurrentes por defecto)
+// Pool secundario (misma BD que `pool`). Hoy las consultas van con `pool` a tablas base (sin vw_pbi01).
+// Se mantiene el export por compatibilidad con scripts o despliegues antiguos.
 export const poolVista = new Pool({
   ...base,
   connectionTimeoutMillis: connectTimeoutVista,

@@ -177,7 +177,7 @@ export async function obtenerValidacionMovimientos(fechaISO) {
   if (sin_datos_vista > 0) {
     alertas.push({
       codigo: 'sin_vista',
-      texto: `${sin_datos_vista} registro(s) sin fila en vw_pbi01 para el ID (revisar trazabilidad)`,
+      texto: `${sin_datos_vista} registro(s) sin datos enriquecidos de trazabilidad para el ID (parte_producto/empresa; revisar trazabilidad)`,
     });
   }
   if (retiros_sin_cliente_parseado > 0) {

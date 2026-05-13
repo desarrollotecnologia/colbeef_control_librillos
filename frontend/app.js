@@ -5211,7 +5211,8 @@ function esVistaHistorialCrudasSolo(d) {
 
 /**
  * Librillos en reportes por bloque tipo Excel: todo retiro de librillos según observación/API
- * (mismos buckets que pivots ASURCARNES / DERIVADOS / …); no se exige cliente parseado ni vw_pbi01.
+ * (mismos buckets que pivots ASURCARNES / DERIVADOS / …); no se exige cliente parseado.
+ * Los datos del turno vienen del API (consultas a tablas base, sin vista analítica vw_pbi01).
  */
 function esLibrilloParaReporteAgrupacion(d) {
   const obs = normalizarObs(String(d?.observaciones ?? d?.observacion ?? ''));

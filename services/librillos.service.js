@@ -48,14 +48,21 @@ const localPlanObsCache = new Map();
 const localRetiroObsCache = new Map();
 const planSnapshotCache = new Map();
 const PLAN_SNAPSHOT_DIR = path.resolve(process.cwd(), 'data', 'plan-faena-historico');
-/** Lotes para consultas por IDs. */
-const VISTA_CHUNK = (() => {
-  const n = parseInt(String(process.env.VISTA_CHUNK_SIZE || ''), 10);
+/**
+ * Lotes para `metaRaizPorIds` y cava (solo tablas `trazabilidad_proceso.*` / `organizaciones.*`).
+ * No se consulta `vw_pbi01` ni vistas analíticas Power BI.
+ * Env: `META_RAIZ_BATCH_SIZE` (o alias heredado `VISTA_CHUNK_SIZE`).
+ */
+const META_RAIZ_BATCH = (() => {
+  const raw = String(process.env.META_RAIZ_BATCH_SIZE || process.env.VISTA_CHUNK_SIZE || '').trim();
+  const n = parseInt(raw, 10);
   if (Number.isFinite(n) && n >= 15 && n <= 300) return n;
   return 120;
 })();
-const CHUNK_CONCURRENCY = (() => {
-  const n = parseInt(String(process.env.VISTA_CHUNK_CONCURRENCY || ''), 10);
+/** Concurrencia de lotes para metadatos raíz + cava. Env: `META_RAIZ_CONCURRENCY` o `VISTA_CHUNK_CONCURRENCY`. */
+const META_RAIZ_CONCURRENCY = (() => {
+  const raw = String(process.env.META_RAIZ_CONCURRENCY || process.env.VISTA_CHUNK_CONCURRENCY || '').trim();
+  const n = parseInt(raw, 10);
   if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
   return 3;
 })();
@@ -647,9 +654,15 @@ async function idsParteProductoColbeefDia(fechaISO) {
  */
 async function idsUniversoReporteDia(fechaISO) {
   const merged = new Set();
-  (await idsPlanFaenaPorFecha(fechaISO)).forEach((id) => merged.add(id));
   if (USE_UNION_PARTE_PLAN_DIA) {
-    (await idsParteProductoColbeefDia(fechaISO)).forEach((id) => merged.add(id));
+    const [plan, parte] = await Promise.all([
+      idsPlanFaenaPorFecha(fechaISO),
+      idsParteProductoColbeefDia(fechaISO),
+    ]);
+    plan.forEach((id) => merged.add(id));
+    parte.forEach((id) => merged.add(id));
+  } else {
+    (await idsPlanFaenaPorFecha(fechaISO)).forEach((id) => merged.add(id));
   }
   return [...merged].sort((a, b) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
@@ -738,9 +751,9 @@ async function filasParteProductoDia(fechaISO) {
  * Unifica datos descriptivos raíz con el último movimiento real de cava
  * de la parte tipo Colbeef (librillos), evitando mezclar fechas de otras partes.
  */
-function mergeVistaRow(idProducto, metaMapUltimo, cavaParte13Map) {
+function mergeMetaRaizYCava(idProducto, metaRaizPorCodigo, cavaParte13Map) {
   const k = keyCodigo(idProducto);
-  const ult = metaMapUltimo[k];
+  const ult = metaRaizPorCodigo[k];
   const u = ult || {};
   const c13 = cavaParte13Map[k] || {};
   const nombre = String(u.nombre_propietario || '').trim() || null;
@@ -932,30 +945,30 @@ const consultarLibrillos = async (fecha = null) => {
       return [];
     }
 
-    // PASO 2: Metadatos raíz por IDs + último movimiento real de cava.
+    // PASO 2: Metadatos raíz, cava y texto de plan faena (independientes entre sí → en paralelo).
     const idProductos = [...new Set(librillos.map(l => l.id_producto))];
     if (COLBEEF_DEBUG) {
-      console.log(`📦 ${idProductos.length} IDs únicos — consulta raíz en lotes de ${VISTA_CHUNK}…`);
+      console.log(`📦 ${idProductos.length} IDs únicos — metadatos raíz + cava + plan (paralelo, lotes ${META_RAIZ_BATCH})…`);
     }
 
-    const grupos = chunks(idProductos, VISTA_CHUNK);
-    const vistaMapUltimo = {};
-    await procesarGruposConLimite(
+    const grupos = chunks(idProductos, META_RAIZ_BATCH);
+    const metaRaizPorCodigo = {};
+    const cavaParte13Map = {};
+
+    const cargarMetaRaiz = procesarGruposConLimite(
       grupos,
       async (grupo) => {
         try {
           const m = await metaRaizPorIds(grupo.map(String));
-          Object.assign(vistaMapUltimo, m);
+          Object.assign(metaRaizPorCodigo, m);
         } catch (err) {
           console.warn(`⚠️ Error en metadatos raíz por IDs: ${err.message}`);
         }
       },
-      CHUNK_CONCURRENCY
+      META_RAIZ_CONCURRENCY
     );
 
-    /** Último movimiento real de CAVA para parte 13 (librillos) por código. */
-    const cavaParte13Map = {};
-    await procesarGruposConLimite(
+    const cargarCava = procesarGruposConLimite(
       grupos,
       async (grupo) => {
         try {
@@ -987,24 +1000,30 @@ const consultarLibrillos = async (fecha = null) => {
           console.warn(`⚠️ Error en chunk cava parte 13: ${err.message}`);
         }
       },
-      CHUNK_CONCURRENCY
+      META_RAIZ_CONCURRENCY
     );
 
+    const [, , planObsMapRaw] = await Promise.all([
+      cargarMetaRaiz,
+      cargarCava,
+      mapaTextoPlanFaenaPorFecha(fechaISO),
+    ]);
+    let planObsMap = planObsMapRaw instanceof Map ? planObsMapRaw : new Map();
+
     if (COLBEEF_DEBUG) {
-      console.log(`✅ Metadatos raíz: ${Object.keys(vistaMapUltimo).length} · cava parte 13: ${Object.keys(cavaParte13Map).length}`);
+      console.log(`✅ Metadatos raíz: ${Object.keys(metaRaizPorCodigo).length} · cava parte 13: ${Object.keys(cavaParte13Map).length}`);
     }
 
     const retiroObsMap = mapaTextoRetiroLocalPorFecha(fechaISO);
-    let planObsMap = await mapaTextoPlanFaenaPorFecha(fechaISO);
     if (!planObsMap.size) {
       // Fallback local: usa archivos PlanFaena*.xls en data/ para replicar macro.
       planObsMap = mapaTextoPlanFaenaLocalPorFecha(fechaISO);
     }
 
-    // PASO 3: Unir (datos descriptivos de vista + movimiento real de parte 13)
+    // PASO 3: Unir (metadatos desde tablas + movimiento real de parte 13)
     const resultado = librillos
       .map((l) => {
-        const v = mergeVistaRow(l.id_producto, vistaMapUltimo, cavaParte13Map);
+        const v = mergeMetaRaizYCava(l.id_producto, metaRaizPorCodigo, cavaParte13Map);
         const obsParte = String(l.observaciones || '');
         const textoRetiro = retiroObsMap.get(String(l.id_producto)) || '';
         const textoPlan = planObsMap.get(String(l.id_producto)) || '';

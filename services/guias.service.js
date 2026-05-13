@@ -1,4 +1,5 @@
-import { pool, poolVista } from '../config/db.js';
+import { pool } from '../config/db.js';
+import { ID_TIPO_PARTE_COLBEEF } from '../config/tipo-parte.js';
 import { obtenerLibrillosPorFecha } from './librillos.service.js';
 import { obtenerSalidas } from './salidas.service.js';
 
@@ -98,7 +99,7 @@ function palabrasCategoria(def) {
   return ['GLOBAL HIDES', 'ASURCARNESGLO'];
 }
 
-function valorDecomisoDesdeVista(v) {
+function valorDecomisoNormalizado(v) {
   if (v == null) return 0;
   if (typeof v === 'number') return v > 0 ? 1 : 0;
   const s = String(v).trim().toLowerCase();
@@ -109,23 +110,76 @@ function valorDecomisoDesdeVista(v) {
   return 1;
 }
 
-async function contarDecomisosVistaPorIds(ids) {
+/**
+ * Decomisos por id_producto leyendo tablas `sai.decomiso` y `trazabilidad_proceso.parte_producto`
+ * (sin vistas tipo vw_pbi01).
+ */
+async function contarDecomisosPorIdsDesdeTablas(ids) {
   const clean = [...new Set((ids || []).map((x) => String(x || '').trim()).filter(Boolean))];
   if (!clean.length) return 0;
-  try {
-    const res = await poolVista.query(
-      `
-      SELECT DISTINCT codigo::text AS codigo, decomiso
-      FROM trazabilidad_proceso.vw_pbi01
-      WHERE codigo = ANY($1::text[])
-        AND decomiso IS NOT NULL
-      `,
-      [clean]
-    );
-    return (res.rows || []).reduce((acc, r) => acc + Math.max(0, valorDecomisoDesdeVista(r?.decomiso)), 0);
-  } catch {
-    return 0;
+
+  const tipos = [13, ID_TIPO_PARTE_COLBEEF];
+  const params = [clean, tipos];
+  const sumarFilas = (rows) =>
+    (rows || []).reduce((acc, r) => acc + Math.max(0, valorDecomisoNormalizado(r?.decomiso)), 0);
+
+  const intentos = [
+    `
+    SELECT DISTINCT pp.id_producto::text AS codigo, d.decomiso AS decomiso
+    FROM sai.decomiso d
+    INNER JOIN trazabilidad_proceso.parte_producto pp ON pp.id = d.id_parte_producto
+    WHERE pp.id_producto::text = ANY($1::text[])
+      AND d.id_tipo_parte_producto = ANY($2::int[])
+      AND d.decomiso IS NOT NULL
+    `,
+    `
+    SELECT DISTINCT pp.id_producto::text AS codigo, TRUE AS decomiso
+    FROM sai.decomiso d
+    INNER JOIN trazabilidad_proceso.parte_producto pp ON pp.id = d.id_parte_producto
+    WHERE pp.id_producto::text = ANY($1::text[])
+      AND d.id_tipo_parte_producto = ANY($2::int[])
+    `,
+    `
+    SELECT DISTINCT d.id_producto::text AS codigo, COALESCE(d.decomiso, TRUE) AS decomiso
+    FROM sai.decomiso d
+    WHERE d.id_producto::text = ANY($1::text[])
+      AND d.id_tipo_parte_producto = ANY($2::int[])
+      AND d.decomiso IS NOT NULL
+    `,
+    `
+    SELECT DISTINCT d.id_producto::text AS codigo, TRUE AS decomiso
+    FROM sai.decomiso d
+    WHERE d.id_producto::text = ANY($1::text[])
+      AND d.id_tipo_parte_producto = ANY($2::int[])
+    `,
+    `
+    SELECT DISTINCT TRIM(d.codigo::text) AS codigo, COALESCE(d.decomiso, TRUE) AS decomiso
+    FROM sai.decomiso d
+    WHERE TRIM(d.codigo::text) = ANY($1::text[])
+      AND d.id_tipo_parte_producto = ANY($2::int[])
+      AND d.decomiso IS NOT NULL
+    `,
+    `
+    SELECT DISTINCT TRIM(d.codigo::text) AS codigo, TRUE AS decomiso
+    FROM sai.decomiso d
+    WHERE TRIM(d.codigo::text) = ANY($1::text[])
+      AND d.id_tipo_parte_producto = ANY($2::int[])
+    `,
+  ];
+
+  let lastErr = null;
+  for (const sql of intentos) {
+    try {
+      const res = await pool.query(sql, params);
+      return sumarFilas(res.rows);
+    } catch (e) {
+      lastErr = e;
+    }
   }
+  if (lastErr) {
+    console.warn('[guias] contarDecomisosPorIdsDesdeTablas: ningún SQL encajó en el esquema:', lastErr.message);
+  }
+  return 0;
 }
 
 async function contarDecomisosSaiPorFecha(fechaIso, tiposParte = [13]) {
@@ -465,10 +519,10 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
   const isotermoReal = txt(first(cabeceraReal, ['isotermo']));
   const decomisoCabecera = num(first(cabeceraReal, ['decomiso', 'cantidad_decomiso', 'hallazgos_productos']));
   const decomisoSai = await contarDecomisosSaiPorFecha(fechaIso, [13]);
-  const decomisoVista = await contarDecomisosVistaPorIds(detalle.map((x) => x.id_producto));
+  const decomisoPorIds = await contarDecomisosPorIdsDesdeTablas(detalle.map((x) => x.id_producto));
   const decomisoReal = decomisoCabecera > 0
     ? decomisoCabecera
-    : (decomisoSai > 0 ? decomisoSai : decomisoVista);
+    : (decomisoSai > 0 ? decomisoSai : decomisoPorIds);
 
   return {
     cabecera: {
@@ -530,8 +584,8 @@ export async function generarGuiaPorFechaYCategoria(fecha, categoria) {
         decomiso: decomisoCabecera > 0
           ? 'desposte.guia_desposte.hallazgos_productos'
           : (decomisoSai > 0
-              ? 'sai.decomiso (id_tipo_parte_producto=13 Visceras Blancas)'
-              : 'trazabilidad_proceso.vw_pbi01.decomiso'),
+              ? 'sai.decomiso (conteo por fecha, tipos 13 y parte Colbeef)'
+              : 'sai.decomiso + trazabilidad_proceso.parte_producto (por id_producto)'),
       },
     },
     detalle,
