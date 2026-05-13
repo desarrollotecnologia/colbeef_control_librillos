@@ -231,17 +231,13 @@ export async function obtenerHistoricoCambios({
   }
   const whereSql = `WHERE ${parts.join(' AND ')}`;
 
-  const countRes = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM app_auditoria_cambios ${whereSql}`,
-    params
-  );
-  const totalCoincidentes = Number(countRes.rows?.[0]?.n || 0);
-
   const selParams = [...params, lim];
   const limPlaceholder = selParams.length;
+  // Una sola ida a la BD: total coincidente en subconsulta escalar (mismos $1..$n que el WHERE exterior).
   const dataRes = await pool.query(
     `
-    SELECT id, event_time, modulo, accion, entidad, id_entidad, usuario, antes, despues, meta
+    SELECT id, event_time, modulo, accion, entidad, id_entidad, usuario, antes, despues, meta,
+           (SELECT COUNT(*)::int FROM app_auditoria_cambios ${whereSql}) AS __total_coincidentes
     FROM app_auditoria_cambios
     ${whereSql}
     ORDER BY event_time DESC
@@ -249,7 +245,13 @@ export async function obtenerHistoricoCambios({
     `,
     selParams
   );
-  const items = (dataRes.rows || []).map(mapDbRowToItem);
+  const rawRows = dataRes.rows || [];
+  const totalCoincidentes =
+    rawRows.length > 0 ? Number(rawRows[0].__total_coincidentes || 0) : 0;
+  const items = rawRows.map((row) => {
+    const { __total_coincidentes: _t, ...rest } = row;
+    return mapDbRowToItem(rest);
+  });
   return {
     total: totalCoincidentes,
     totalCoincidentes,

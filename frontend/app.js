@@ -1167,6 +1167,12 @@ let _toastOnClick = null;
 let historicoCambios = [];
 let historicoCambiosFiltrados = [];
 let historicoCrudasSeleccionadas = new Set();
+/** Cancelación incremental: tablas principal y crudas usan contadores distintos (evita cruce al marcar checkboxes). */
+let _histMainPaintGen = 0;
+let _histCrudasPaintGen = 0;
+let _histSearchDebounceT = null;
+const HIST_RENDER_CHUNK = 110;
+const HIST_RENDER_SYNC_MAX = 180;
 let historialSoloPendientes = false;
 const gruposHistorialColapsados = new Set();
 let tablaCompacta = false;
@@ -1626,7 +1632,19 @@ function irVista(nombre, btn) {
   if (['historial', 'inventario', 'clientes'].includes(nombre)) {
     sub = labelFecha(document.getElementById('fecha-global').value);
   } else if (nombre === 'totales') {
-    sub = labelFecha(document.getElementById('fecha-global').value);
+    const d = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim();
+    const h = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim();
+    sub =
+      d && h && d !== h
+        ? `${labelFecha(d)} — ${labelFecha(h)}`
+        : labelFecha(document.getElementById('fecha-global')?.value || hoyISO());
+  } else if (nombre === 'reportes') {
+    const d = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim();
+    const h = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim();
+    sub =
+      d && h
+        ? `${labelFecha(d)} — ${labelFecha(h)}`
+        : labelFecha(document.getElementById('fecha-global')?.value || hoyISO());
   }
   document.getElementById('pg-sub').textContent = sub;
   const fg = document.getElementById('fecha-global');
@@ -1642,11 +1660,11 @@ function irVista(nombre, btn) {
   if (nombre === 'totales') void actualizarVistaTotales();
   if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
-    const fechaBase = document.getElementById('fecha-global')?.value || hoyISO();
+    const fechaBase = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
     const fd = document.getElementById('fecha-historico-desde');
     const fh = document.getElementById('fecha-historico-hasta');
-    if (fd && !fd.value) fd.value = fechaBase;
-    if (fh && !fh.value) fh.value = fechaBase;
+    if (fd) fd.value = fechaBase;
+    if (fh) fh.value = fechaBase;
     void cargarHistoricoCambios();
   }
   trackVista(nombre);
@@ -2192,63 +2210,92 @@ function validarRangoReportes(desde, hasta) {
   return true;
 }
 
+/** Alinea «Desde / Hasta» del reporte por agrupación y del histórico de auditoría con la fecha de la barra superior. */
+function sincronizarFechasSecundariasConFechaGlobal() {
+  const fg = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  const de = document.getElementById('fecha-rep-cli-desde');
+  const ha = document.getElementById('fecha-rep-cli-hasta');
+  if (de) de.value = fg;
+  if (ha) ha.value = fg;
+  const hd = document.getElementById('fecha-historico-desde');
+  const hh = document.getElementById('fecha-historico-hasta');
+  if (hd) hd.value = fg;
+  if (hh) hh.value = fg;
+}
+
 function vistaReporteCliente() {
   // Reportes queda fijo en modo resumido.
   return 'resumen';
 }
 
-/** Totales: un día = fecha global, vista resumida fija. */
+/** Resumen del día (vista Totales): usa el mismo rango «Desde / Hasta» que el reporte por agrupación (alineado con la fecha de la barra al actualizar). */
 async function actualizarVistaTotales() {
-  return runWithAppLoader('Cargando resumen del dia...', async () => {
-    const fecha = document.getElementById('fecha-global')?.value || hoyISO();
+  return runWithAppLoader('Cargando resumen...', async () => {
+    const fg = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+    const desde = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim() || fg;
+    const hasta = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim() || fg;
+    if (!validarRangoReportes(desde, hasta)) return false;
+
+    const unDia = desde === hasta;
     let datos;
     let salidas;
     let resumenMacro = null;
+
     try {
-      const usarCacheDia = fecha && fecha === fechaDatosGlobal && Array.isArray(datosGlobal) && datosGlobal.length > 0;
-      if (usarCacheDia) {
-        [salidas, resumenMacro] = await Promise.all([
-          fetchSalidas(),
-          fetchResumenMacro(fecha),
-        ]);
-        datos = datosGlobal;
+      if (unDia) {
+        const fecha = desde;
+        const usarCacheDia =
+          fecha && fecha === fechaDatosGlobal && Array.isArray(datosGlobal) && datosGlobal.length > 0;
+        if (usarCacheDia) {
+          [salidas, resumenMacro] = await Promise.all([fetchSalidas(), fetchResumenMacro(fecha)]);
+          datos = datosGlobal;
+        } else {
+          [datos, salidas, resumenMacro] = await Promise.all([
+            fetchPorFecha(fecha),
+            fetchSalidas(),
+            fetchResumenMacro(fecha),
+          ]);
+        }
+        if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
+          throw new Error('Resumen macro no disponible');
+        }
       } else {
-        [datos, salidas, resumenMacro] = await Promise.all([
-          fetchPorFecha(fecha),
-          fetchSalidas(),
-          fetchResumenMacro(fecha),
-        ]);
-      }
-      if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
-        throw new Error('Resumen macro no disponible');
+        const dias = rangoFechasISO(desde, hasta).length;
+        if (dias > 95) {
+          mostrarToast('El rango no puede superar 95 días', 'err');
+          return false;
+        }
+        [datos, salidas] = await Promise.all([fetchDatosRango(desde, hasta), fetchSalidas()]);
       }
     } catch (e) {
-      mostrarToast('No se pudo cargar el resumen macro estricto. Intenta actualizar.', 'err');
+      mostrarToast('No se pudo cargar el resumen. Intenta actualizar.', 'err');
       const prev = document.getElementById('rep-preview');
       const body = document.getElementById('rep-prev-body');
       const t = document.getElementById('rep-prev-title');
       if (prev && body) {
         if (t) t.textContent = 'Totales';
-        body.innerHTML = '<p class="empty" style="padding:24px;text-align:center">Error al cargar datos.</p>';
+        body.innerHTML =
+          '<p class="empty" style="padding:24px;text-align:center">Error al cargar datos.</p>';
         prev.style.display = 'block';
       }
       return false;
     }
+
     const prev = document.getElementById('rep-preview');
     const body = document.getElementById('rep-prev-body');
     const t = document.getElementById('rep-prev-title');
     if (!prev || !body) return false;
     if (t) t.textContent = 'Totales';
+    const fechaLabel = unDia ? labelFecha(desde) : `${labelFecha(desde)} a ${labelFecha(hasta)}`;
     if (!datos.length) {
-      body.innerHTML =
-        `<p class="empty" style="padding:24px;text-align:center">Sin datos para <strong>${escapeHtml(labelFecha(fecha))}</strong>.</p>`;
+      body.innerHTML = `<p class="empty" style="padding:24px;text-align:center">Sin datos para <strong>${escapeHtml(fechaLabel)}</strong>.</p>`;
       prev.style.display = 'block';
       prev.scrollIntoView({ behavior: 'smooth' });
       return false;
     }
-    mostrarPreview('Totales', labelFecha(fecha), fecha, datos, salidas, {
-      desde: fecha,
-      hasta: fecha,
+    mostrarPreview('Totales', fechaLabel, hasta, datos, salidas, {
+      desde,
+      hasta,
       vistaReporte: 'resumen',
       incluirResumenLibrosChunchullas: true,
       ocultarKpis: true,
@@ -2260,12 +2307,22 @@ async function actualizarVistaTotales() {
 }
 
 async function descargarExcelTotales() {
-  const fecha = document.getElementById('fecha-global')?.value || hoyISO();
-  const desde = fecha;
-  const hasta = fecha;
+  const fg = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  const desde = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim() || fg;
+  const hasta = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim() || fg;
+  if (!validarRangoReportes(desde, hasta)) return;
   let datos;
   try {
-    datos = await fetchPorFecha(fecha);
+    if (desde === hasta) {
+      datos = await fetchPorFecha(desde);
+    } else {
+      const dias = rangoFechasISO(desde, hasta).length;
+      if (dias > 95) {
+        mostrarToast('El rango no puede superar 95 días', 'err');
+        return;
+      }
+      datos = await fetchDatosRango(desde, hasta);
+    }
   } catch (e) {
     mostrarToast(String(e.message || e) || 'Error al cargar', 'err');
     return;
@@ -2282,6 +2339,8 @@ async function descargarExcelTotales() {
   const n = rows.length;
   const gen = new Date().toLocaleString('es-CO');
   const NC = 14;
+  const rangoTxt = desde === hasta ? desde : `${desde} a ${hasta}`;
+  const nombreArchivo = desde === hasta ? `Totales_${desde}` : `Totales_${desde}_a_${hasta}`;
   const body = rows.map((d) => {
     const salTxt = textoSalidaReporteExport(d, salidas, desde, hasta);
     const diaOp = d.fecha ? formatFechaSolo(String(d.fecha)) : '—';
@@ -2311,9 +2370,9 @@ async function descargarExcelTotales() {
     .meta td{background:#f5f5f5;font-weight:600;border-color:#bbb}
     .nota{font-size:10px;color:#444;margin-top:10px;max-width:900px}
   </style></head><body>
-    <div class="rep-xls-head">${marca}<span style="font-weight:700;color:#333">Totales (día operativo)</span></div>
+    <div class="rep-xls-head">${marca}<span style="font-weight:700;color:#333">Totales (rango operativo)</span></div>
     <table border="1">
-      <tr class="meta"><td colspan="${NC}">Fecha: ${escapeHtml(fecha)}</td></tr>
+      <tr class="meta"><td colspan="${NC}">Rango: ${escapeHtml(rangoTxt)}</td></tr>
       <tr class="meta"><td colspan="${NC}">Total registros: ${n} · Generado: ${escapeHtml(gen)}</td></tr>
       <tr>
         <th>ID producto</th>
@@ -2335,7 +2394,7 @@ async function descargarExcelTotales() {
     </table>
     <p class="nota"><strong>Nota:</strong> Misma lógica de columnas que el reporte por cliente. «Salida» usa despacho Colbeef en el día o salida de cava en trazabilidad.</p>
   </body></html>`;
-  descargarExcel(`Totales_${fecha}`, html);
+  descargarExcel(nombreArchivo, html);
 }
 
 async function descargarPDFTotales() {
@@ -2432,13 +2491,6 @@ async function generarReporteCliente() {
 
 async function generarReporteGeneralRango() {
   return actualizarVistaTotales();
-}
-
-async function descargarPDFReporteCliente() {
-  return runWithAppLoader('Generando documento PDF...', async () => {
-    const ok = await generarReporteCliente();
-    if (ok) await descargarPDFReporte();
-  });
 }
 
 function fechaGuiaTexto(iso) {
@@ -4322,21 +4374,12 @@ function normalizarCambioHistorico(item) {
   };
 }
 
-function pintarTablaHistoricoCambios() {
-  const tbody = document.getElementById('tbody-historico');
-  const count = document.getElementById('historico-count');
-  if (!tbody) return;
-  if (count) count.textContent = `${historicoCambiosFiltrados.length} cambios`;
-  if (!historicoCambiosFiltrados.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin cambios en el rango seleccionado</td></tr>';
-    return;
-  }
-  tbody.innerHTML = historicoCambiosFiltrados.map((r) => {
-    const cls = r.tipo === 'cruda' ? 'row-hist-cruda' : (r.tipo === 'vacia' ? 'row-hist-vacia' : 'row-hist-otro');
-    const badgeCls = r.tipo === 'cruda' ? 'hist-badge-cruda' : (r.tipo === 'vacia' ? 'hist-badge-vacia' : 'hist-badge-otro');
-    const sAnt = r.sucursalAntes || '—';
-    const sDes = r.sucursalDespues || '—';
-    return `<tr class="${cls}">
+function htmlFilaHistoricoCambio(r) {
+  const cls = r.tipo === 'cruda' ? 'row-hist-cruda' : (r.tipo === 'vacia' ? 'row-hist-vacia' : 'row-hist-otro');
+  const badgeCls = r.tipo === 'cruda' ? 'hist-badge-cruda' : (r.tipo === 'vacia' ? 'hist-badge-vacia' : 'hist-badge-otro');
+  const sAnt = r.sucursalAntes || '—';
+  const sDes = r.sucursalDespues || '—';
+  return `<tr class="${cls}">
       <td>${escapeHtml(r.momento)}</td>
       <td>${escapeHtml(r.usuario)}</td>
       <td>${escapeHtml(r.idProducto || '—')}</td>
@@ -4346,7 +4389,34 @@ function pintarTablaHistoricoCambios() {
       <td title="${escapeHtml(sDes)}">${escapeHtml((sDes || '—').slice(0, 80))}</td>
       <td><span class="hist-badge ${badgeCls}">${escapeHtml(r.tipoLabel)}</span></td>
     </tr>`;
-  }).join('');
+}
+
+function pintarTablaHistoricoCambios(gen) {
+  const g = gen == null ? ++_histMainPaintGen : gen;
+  const tbody = document.getElementById('tbody-historico');
+  if (!tbody) return;
+  const rows = historicoCambiosFiltrados;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin cambios en el rango seleccionado</td></tr>';
+    return;
+  }
+  if (rows.length <= HIST_RENDER_SYNC_MAX) {
+    tbody.innerHTML = rows.map(htmlFilaHistoricoCambio).join('');
+    return;
+  }
+  const firstEnd = Math.min(HIST_RENDER_CHUNK, rows.length);
+  tbody.innerHTML = rows.slice(0, firstEnd).map(htmlFilaHistoricoCambio).join('');
+  let i = firstEnd;
+  const pump = () => {
+    if (_histMainPaintGen !== g) return;
+    const end = Math.min(i + HIST_RENDER_CHUNK, rows.length);
+    if (i >= end) return;
+    const chunk = rows.slice(i, end).map(htmlFilaHistoricoCambio).join('');
+    tbody.insertAdjacentHTML('beforeend', chunk);
+    i = end;
+    if (i < rows.length) requestAnimationFrame(pump);
+  };
+  requestAnimationFrame(pump);
 }
 
 function actualizarContadorHistoricoCrudas() {
@@ -4354,7 +4424,24 @@ function actualizarContadorHistoricoCrudas() {
   if (el) el.textContent = String(historicoCrudasSeleccionadas.size);
 }
 
-function pintarTablaHistoricoCrudas() {
+function htmlFilaHistoricoCruda(r) {
+  const checked = historicoCrudasSeleccionadas.has(r.idProducto) ? 'checked' : '';
+  const sAnt = r.sucursalAntes || '—';
+  const sDes = r.sucursalDespues || '—';
+  return `<tr class="row-hist-cruda">
+      <td><input type="checkbox" ${checked} onchange="toggleSeleccionHistoricoCruda('${escapeHtml(r.idProducto)}', this)"></td>
+      <td>${escapeHtml(r.momento)}</td>
+      <td>${escapeHtml(r.usuario)}</td>
+      <td>${escapeHtml(r.idProducto)}</td>
+      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 100))}</td>
+      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 100))}</td>
+      <td title="${escapeHtml(sAnt)}">${escapeHtml((sAnt || '—').slice(0, 72))}</td>
+      <td title="${escapeHtml(sDes)}">${escapeHtml((sDes || '—').slice(0, 72))}</td>
+    </tr>`;
+}
+
+function pintarTablaHistoricoCrudas(gen) {
+  const g = gen == null ? ++_histCrudasPaintGen : gen;
   const tbody = document.getElementById('tbody-historico-crudas');
   const chkAll = document.getElementById('chk-historico-crudas');
   if (!tbody) return;
@@ -4368,36 +4455,55 @@ function pintarTablaHistoricoCrudas() {
   }
   rows.forEach((r) => {
     if (!historicoCrudasSeleccionadas.has(r.idProducto)) return;
-    // Conserva seleccionados válidos.
   });
   const valid = new Set(rows.map((r) => r.idProducto));
   historicoCrudasSeleccionadas = new Set([...historicoCrudasSeleccionadas].filter((id) => valid.has(id)));
   if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
   actualizarContadorHistoricoCrudas();
-  tbody.innerHTML = rows.map((r) => {
-    const checked = historicoCrudasSeleccionadas.has(r.idProducto) ? 'checked' : '';
-    const sAnt = r.sucursalAntes || '—';
-    const sDes = r.sucursalDespues || '—';
-    return `<tr class="row-hist-cruda">
-      <td><input type="checkbox" ${checked} onchange="toggleSeleccionHistoricoCruda('${escapeHtml(r.idProducto)}', this)"></td>
-      <td>${escapeHtml(r.momento)}</td>
-      <td>${escapeHtml(r.usuario)}</td>
-      <td>${escapeHtml(r.idProducto)}</td>
-      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 100))}</td>
-      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 100))}</td>
-      <td title="${escapeHtml(sAnt)}">${escapeHtml((sAnt || '—').slice(0, 72))}</td>
-      <td title="${escapeHtml(sDes)}">${escapeHtml((sDes || '—').slice(0, 72))}</td>
-    </tr>`;
-  }).join('');
+  if (rows.length <= HIST_RENDER_SYNC_MAX) {
+    tbody.innerHTML = rows.map(htmlFilaHistoricoCruda).join('');
+    return;
+  }
+  const firstEnd = Math.min(HIST_RENDER_CHUNK, rows.length);
+  tbody.innerHTML = rows.slice(0, firstEnd).map(htmlFilaHistoricoCruda).join('');
+  let i = firstEnd;
+  const pump = () => {
+    if (_histCrudasPaintGen !== g) return;
+    const end = Math.min(i + HIST_RENDER_CHUNK, rows.length);
+    if (i >= end) return;
+    const chunk = rows.slice(i, end).map(htmlFilaHistoricoCruda).join('');
+    tbody.insertAdjacentHTML('beforeend', chunk);
+    i = end;
+    if (i < rows.length) requestAnimationFrame(pump);
+  };
+  requestAnimationFrame(pump);
 }
 
-function filtrarHistoricoCambios() {
+function aplicarFiltroHistoricoCambios() {
   const q = String(document.getElementById('srch-historico')?.value || '').trim().toLowerCase();
   historicoCambiosFiltrados = q
     ? historicoCambios.filter((r) => r.searchText.includes(q))
     : [...historicoCambios];
-  pintarTablaHistoricoCambios();
-  pintarTablaHistoricoCrudas();
+  const count = document.getElementById('historico-count');
+  if (count) count.textContent = `${historicoCambiosFiltrados.length} cambios`;
+  _histMainPaintGen++;
+  _histCrudasPaintGen++;
+  const gMain = _histMainPaintGen;
+  const gCrud = _histCrudasPaintGen;
+  pintarTablaHistoricoCrudas(gCrud);
+  pintarTablaHistoricoCambios(gMain);
+}
+
+function filtrarHistoricoCambios() {
+  aplicarFiltroHistoricoCambios();
+}
+
+function filtrarHistoricoCambiosDebounced() {
+  clearTimeout(_histSearchDebounceT);
+  _histSearchDebounceT = setTimeout(() => {
+    _histSearchDebounceT = null;
+    aplicarFiltroHistoricoCambios();
+  }, 240);
 }
 
 function toggleSeleccionHistoricoCruda(id, chk) {
@@ -4437,6 +4543,8 @@ async function cargarHistoricoCambios() {
       mostrarToast('La fecha desde no puede ser mayor que hasta', 'err');
       return;
     }
+    clearTimeout(_histSearchDebounceT);
+    _histSearchDebounceT = null;
     const q = new URLSearchParams({ desde, hasta, modulo: 'planillaje', limit: '1000' });
     const headers = { Accept: 'application/json' };
     try {
@@ -4658,6 +4766,7 @@ async function cambiarFecha() {
       actualizarPanelCuadre();
       poblarSelectReporteCliente(datosGlobal);
       _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
+      sincronizarFechasSecundariasConFechaGlobal();
     } catch (e) {
       console.error(e);
       actualizarEstado(false);
@@ -4690,6 +4799,7 @@ async function cargarDatos() {
       actualizarPanelCuadre();
       poblarSelectReporteCliente(datos);
       _autoInvSnapshot = snapshotPendientes(datos, salidasRegistradas);
+      sincronizarFechasSecundariasConFechaGlobal();
       if (document.getElementById('vista-totales')?.classList.contains('active')) {
         void actualizarVistaTotales();
       }

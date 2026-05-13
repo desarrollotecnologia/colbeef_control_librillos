@@ -40,7 +40,7 @@
       </button>
       <button type="button" class="nav-item" data-vista="reportes" onclick="irVista('reportes',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h8l4 4v10a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="10" x2="13" y2="10" stroke="currentColor" stroke-width="1.8"/><line x1="7" y1="13" x2="13" y2="13" stroke="currentColor" stroke-width="1.8"/></svg>
-        <span class="nav-item-label"><span class="nav-item-title">Reportes</span><span class="nav-item-hint">Agrupación · Excel/PDF</span></span>
+        <span class="nav-item-label"><span class="nav-item-title">Reportes</span><span class="nav-item-hint">Agrupación · Excel</span></span>
       </button>
       <button type="button" class="nav-item" data-vista="rep-librillos" onclick="irVista('rep-librillos',this)">
         <svg class="ni" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
@@ -437,7 +437,6 @@
             </div>
             <div class="rep-mini-actions">
               <button type="button" class="btn-gen" onclick="generarReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 4v10M6 10l4 4 4-4"/></svg></span>Vista previa</button>
-              <button type="button" class="btn-gen btn-gen-sec" onclick="descargarPDFReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2h9l4 4v12a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M6 11h8M6 14h5"/></svg></span>Guardar como PDF</button>
               <button type="button" class="btn-gen btn-gen-sec" onclick="descargarExcelReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="2.5" width="14" height="15" rx="1.8"/><path d="M3 7.5h14M8 2.5v15M13 10l2 2m0-2l-2 2"/></svg></span>Descargar Excel</button>
             </div>
             <div class="rep-mini-actions" style="margin-top:8px">
@@ -650,7 +649,7 @@
     <!-- ═══ HISTÓRICO CAMBIOS ═══ -->
     <section class="vista" id="vista-historico">
       <div class="topbar-vista">
-        <input class="srch srch-busca-todo" id="srch-historico" type="search" placeholder="Buscar por ID, usuario, observación, sucursal, fecha o tipo..." autocomplete="off" oninput="filtrarHistoricoCambios()">
+        <input class="srch srch-busca-todo" id="srch-historico" type="search" placeholder="Buscar por ID, usuario, observación, sucursal, fecha o tipo..." autocomplete="off" oninput="filtrarHistoricoCambiosDebounced()">
         <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
           <div>
             <label class="fl">Desde</label>
