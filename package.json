@@ -11,7 +11,9 @@
     "verify": "node scripts/verify-setup.mjs",
     "cuenta:crudas": "node scripts/cuenta-crudas-macro.mjs",
     "migrate:salidas": "node scripts/migrate-salidas-json-to-pg.mjs",
-    "db:salidas-schema": "node scripts/apply-salidas-schema.mjs"
+    "db:salidas-schema": "node scripts/apply-salidas-schema.mjs",
+    "db:auditoria-schema": "node scripts/apply-auditoria-schema.mjs",
+    "migrate:auditoria": "node scripts/migrate-auditoria-json-to-pg.mjs"
   },
   "dependencies": {
     "cors": "^2.8.6",
