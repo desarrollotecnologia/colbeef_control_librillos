@@ -13,6 +13,10 @@ import {
   RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
   RESUMEN_SOLO_PARTE_DIA,
 } from '../config/reglas-librillos.js';
+import {
+  SQL_EXPR_FECHA_PARTE_BOGOTA,
+  SQL_WHERE_PARTE_DIA_BOGOTA_P1,
+} from '../config/parte-dia-bogota-sql.js';
 
 let cache = { datos: [], ultimaActualizacion: null };
 let cacheTurnoFecha = null;
@@ -627,7 +631,7 @@ async function idsParteProductoColbeefDia(fechaISO) {
     SELECT DISTINCT id_producto::text AS id_producto
     FROM trazabilidad_proceso.parte_producto
     WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-      AND DATE(fecha_registro) = $1::date
+      AND ${SQL_WHERE_PARTE_DIA_BOGOTA_P1}
     `,
     [fechaISO]
   );
@@ -662,11 +666,11 @@ async function filasParteProductoPorIdsYFecha(fechaISO, idsTexto) {
     SELECT DISTINCT ON (id_producto)
       id_producto, identificacion, observaciones, NULL::text AS accion,
       id_tipo_parte_producto,
-      DATE(fecha_registro)::text AS fecha,
+      ${SQL_EXPR_FECHA_PARTE_BOGOTA}::text AS fecha,
       ${exprUsuario}
     FROM trazabilidad_proceso.parte_producto
     WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-      AND DATE(fecha_registro) = $1::date
+      AND ${SQL_WHERE_PARTE_DIA_BOGOTA_P1}
       AND id_producto::text = ANY($2::text[])
     ORDER BY id_producto ASC, fecha_registro DESC NULLS LAST
     `,
@@ -689,7 +693,7 @@ async function observacionesUltimasPorIds(idsTexto) {
     `
     SELECT DISTINCT ON (id_producto)
       id_producto, identificacion, observaciones,
-      DATE(fecha_registro)::text AS fecha,
+      ${SQL_EXPR_FECHA_PARTE_BOGOTA}::text AS fecha,
       ${exprUsuario}
     FROM trazabilidad_proceso.parte_producto
     WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
@@ -715,11 +719,11 @@ async function filasParteProductoDia(fechaISO) {
     SELECT DISTINCT ON (id_producto)
       id_producto, identificacion, observaciones, NULL::text AS accion,
       id_tipo_parte_producto,
-      DATE(fecha_registro)::text AS fecha,
+      ${SQL_EXPR_FECHA_PARTE_BOGOTA}::text AS fecha,
       ${exprUsuario}
     FROM trazabilidad_proceso.parte_producto
     WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-      AND DATE(fecha_registro) = $1::date
+      AND ${SQL_WHERE_PARTE_DIA_BOGOTA_P1}
     ORDER BY id_producto ASC, fecha_registro DESC NULLS LAST
     `,
     [fechaISO]
@@ -1250,7 +1254,7 @@ export const obtenerObservacionesPorFecha = async (fecha) => {
             fecha_registro AS momento_registro_bd
           FROM trazabilidad_proceso.parte_producto
           WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-            AND DATE(fecha_registro) = $1::date
+            AND ${SQL_WHERE_PARTE_DIA_BOGOTA_P1}
             AND id_producto::text = ANY($2::text[])
           ORDER BY id_producto ASC, fecha_registro DESC NULLS LAST
           `,
@@ -1284,7 +1288,7 @@ export const obtenerObservacionesPorFecha = async (fecha) => {
       fecha_registro AS momento_registro_bd
     FROM trazabilidad_proceso.parte_producto
     WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-      AND DATE(fecha_registro) = $1::date
+      AND ${SQL_WHERE_PARTE_DIA_BOGOTA_P1}
     ORDER BY id_producto ASC, fecha_registro DESC NULLS LAST
   `, [fecha]);
   return res.rows.map(mapFilaObs);
@@ -1293,12 +1297,13 @@ export const obtenerObservacionesPorFecha = async (fecha) => {
 export const obtenerStatsUltimos7Dias = async () => {
   try {
     const res = await pool.query(`
-      SELECT DATE(fecha_registro)::text AS dia,
+      SELECT ${SQL_EXPR_FECHA_PARTE_BOGOTA}::text AS dia,
              COUNT(DISTINCT id_producto) AS total
       FROM trazabilidad_proceso.parte_producto
       WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-        AND DATE(fecha_registro) >= (now() AT TIME ZONE 'America/Bogota')::date - INTERVAL '6 days'
-      GROUP BY DATE(fecha_registro)
+        AND fecha_registro >= ((now() AT TIME ZONE 'America/Bogota')::date - INTERVAL '6 days') AT TIME ZONE 'America/Bogota'
+        AND fecha_registro < ((now() AT TIME ZONE 'America/Bogota')::date + INTERVAL '1 day') AT TIME ZONE 'America/Bogota'
+      GROUP BY ${SQL_EXPR_FECHA_PARTE_BOGOTA}
       ORDER BY dia ASC
     `);
     const resultado = [];

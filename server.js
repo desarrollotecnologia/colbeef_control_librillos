@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -18,6 +19,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(cors());
+const httpCompression =
+  String(process.env.HTTP_COMPRESSION || '1').trim() !== '0' &&
+  String(process.env.HTTP_COMPRESSION || '1').trim().toLowerCase() !== 'false';
+if (httpCompression) {
+  app.use(compression({ threshold: 1024 }));
+}
 app.use(express.json());
 
 // URL oficial de acceso en red local (evita confusión localhost vs IP compartida).

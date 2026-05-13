@@ -339,6 +339,7 @@ function iniciarAnalyticsUso() {
 
   if (_analyticsHeartbeat) clearInterval(_analyticsHeartbeat);
   _analyticsHeartbeat = setInterval(() => {
+    if (document.hidden) return;
     enviarEventoAnalytics({
       eventName: 'heartbeat',
       viewName: _analyticsViewActual,
@@ -1153,6 +1154,7 @@ let _autoInvSnapshot = '';
 let _autoGlobalTimer = null;
 let _cuadreDebounceT = null;
 let _autoObsTimer = null;
+let _visCatchupTimer = null;
 let _autoObsSnapshot = '';
 let _obsTextoMapPrev = new Map();
 let historialCambiosObs = [];
@@ -8593,6 +8595,14 @@ aplicarVistaDesdeQueryString();
 cargarDatos();
 iniciarAutoRefreshGlobal();
 iniciarWatchObservaciones();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  clearTimeout(_visCatchupTimer);
+  _visCatchupTimer = setTimeout(() => {
+    void refrescarGlobal();
+    void refrescarSiCambioObservacion();
+  }, 350);
+});
 window.addEventListener('resize', () => {
   if (window.innerWidth > 900) cerrarMenuMovil();
 });

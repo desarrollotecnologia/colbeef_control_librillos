@@ -1,4 +1,5 @@
 import { pool } from '../config/db.js';
+import { SQL_WHERE_PARTE_DIA_BOGOTA_P1 } from '../config/parte-dia-bogota-sql.js';
 import { ID_TIPO_PARTE_COLBEEF } from '../config/tipo-parte.js';
 import { obtenerLibrillosPorFecha } from './librillos.service.js';
 import { obtenerSalidas } from './salidas.service.js';
@@ -43,7 +44,7 @@ export async function obtenerDashboardResumen(fechaISO) {
       SELECT DISTINCT id_producto::text AS id_producto
       FROM trazabilidad_proceso.parte_producto
       WHERE id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
-        AND DATE(fecha_registro) = $1::date
+        AND ${SQL_WHERE_PARTE_DIA_BOGOTA_P1}
       `,
       [fechaISO]
     ),
@@ -91,6 +92,8 @@ export async function obtenerDashboardResumen(fechaISO) {
     .map((r) => String(r.id_producto))
     .filter((id) => !idsClasificados.has(id));
 
+  const validosPorId = new Map(validos.map((x) => [String(x.id_producto), x]));
+
   const pendientes_en_cava = librillos
     .filter((x) => !idsDespachados.has(String(x.id_producto)))
     .sort((a, b) =>
@@ -109,7 +112,7 @@ export async function obtenerDashboardResumen(fechaISO) {
     .sort((a, b) => new Date(b.fecha_salida) - new Date(a.fecha_salida))
     .slice(0, 50)
     .map((s) => {
-      const row = validos.find((x) => String(x.id_producto) === String(s.id_producto));
+      const row = validosPorId.get(String(s.id_producto));
       const ac = row ? String(row.agrupacion_codigo || '') : '';
       const esCruda = /\bCRUDAS?\b/i.test(String(row?.observaciones ?? row?.observacion ?? ''));
       const tipo =

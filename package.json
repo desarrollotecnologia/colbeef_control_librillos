@@ -16,6 +16,7 @@
     "migrate:auditoria": "node scripts/migrate-auditoria-json-to-pg.mjs"
   },
   "dependencies": {
+    "compression": "^1.7.5",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
