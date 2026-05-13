@@ -1156,10 +1156,33 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   const pendientes = rowsAll.filter((d) => Boolean(d?.pendiente_registro_parte)).length;
   const countCod = new Map();
   const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
-  const esCruda = (d) => /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''));
+  const textoObs = (d) =>
+    String(d?.observaciones ?? d?.observacion ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const esCruda = (d) => /\bCRUDAS?\b/i.test(textoObs(d));
+  /** Crudas con marca «Estilo Bogotá» en observación: van aparte, no en chunchullas_crudas. */
+  const esCrudaEstiloBogota = (d) => {
+    if (!esCruda(d)) return false;
+    const u = textoObs(d).toUpperCase();
+    return u.includes('ESTILO BOGOTA');
+  };
+  const esSucursalOlimpica = (d) => {
+    const s = String(d?.sucursal ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase();
+    return s.includes('OLIMPICA');
+  };
   let chunchullasCrudas = 0;
+  let estiloBogota = 0;
+  let olimpica = 0;
   rows.forEach((d) => {
-    if (esCruda(d)) chunchullasCrudas += 1;
+    if (esCruda(d)) {
+      if (esCrudaEstiloBogota(d)) estiloBogota += 1;
+      else chunchullasCrudas += 1;
+    }
+    if (esSucursalOlimpica(d)) olimpica += 1;
     const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
     const recod =
       RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS &&
@@ -1177,6 +1200,8 @@ export async function obtenerResumenMacroPorFecha(fecha) {
 
   const categorias = {
     chunchullas_crudas: chunchullasCrudas,
+    estilo_bogota: estiloBogota,
+    olimpica,
     asurcarnes_glo: Number(countCod.get('asurcarnes_glo') || 0),
     asurcarnescol: Number(countCod.get('asurcarnescol') || 0),
     global_hides: Number(countCod.get('global_hides') || 0),

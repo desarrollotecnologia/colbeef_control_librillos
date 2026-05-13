@@ -7,7 +7,9 @@
  * Resumen del día (`obtenerResumenMacroPorFecha`):
  * - Por defecto se cuentan todos los registros del universo del día (incl. pendientes de parte).
  * - Opcionalmente puede usarse solo cierre real del día (solo registros con parte).
- * - `chunchullas_crudas`: filas cuya observación contiene la marca CRUDAS (adicional).
+ * - `chunchullas_crudas`: observación con CRUDAS y sin texto «ESTILO BOGOTA».
+ * - `estilo_bogota`: crudas cuya observación incluye «ESTILO BOGOTA» (no suman en chunchullas_crudas).
+ * - `olimpica`: filas cuya sucursal contiene «OLIMPICA».
  * - Por categoría: se incrementa según `agrupacion_codigo` de cada fila.
  *
  * Excepción opcional (solo resumen, no cambia `agrupacion` del ítem en `/api/librillos`):

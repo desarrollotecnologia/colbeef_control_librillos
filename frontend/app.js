@@ -2025,11 +2025,32 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     sumarAgr(codigosBase.has(codAjustado) ? codAjustado : codRaw, 1);
   });
   const mapAgr = conteoAgr;
-  const totalCrudas = (rm && !usarSoloLibrillos)
+  const textoObsResumenLch = (d) =>
+    String(d?.observaciones ?? d?.observacion ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const esCrudaLch = (d) => /\bCRUDAS?\b/i.test(textoObsResumenLch(d));
+  const esCrudaEstiloBogotaLch = (d) =>
+    esCrudaLch(d) && textoObsResumenLch(d).toUpperCase().includes('ESTILO BOGOTA');
+  const esSucursalOlimpicaLch = (d) =>
+    String(d?.sucursal ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase()
+      .includes('OLIMPICA');
+
+  const totalCrudas = rm && !usarSoloLibrillos
     ? Number(rm?.categorias?.chunchullas_crudas || 0)
-    : (baseLista || []).filter((d) =>
-        /\bCRUDAS?\b/i.test(String(d?.observaciones ?? d?.observacion ?? ''))
-      ).length;
+    : (baseLista || []).filter((d) => esCrudaLch(d) && !esCrudaEstiloBogotaLch(d)).length;
+
+  const vOlimpica =
+    rm && !usarSoloLibrillos
+      ? Number(rm?.categorias?.olimpica ?? 0)
+      : (baseLista || []).filter(esSucursalOlimpicaLch).length;
+  const vEstiloBogota =
+    rm && !usarSoloLibrillos
+      ? Number(rm?.categorias?.estilo_bogota ?? 0)
+      : (baseLista || []).filter(esCrudaEstiloBogotaLch).length;
 
   const vAsurGlo = rm ? Number(rm?.categorias?.asurcarnes_glo || 0) : (mapAgr.get('asurcarnes_glo') || 0);
   const vAsurCol = rm ? Number(rm?.categorias?.asurcarnescol || 0) : (mapAgr.get('asurcarnescol') || 0);
@@ -2146,11 +2167,25 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
       <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
-      <div class="tw rep-table-wrap">
+      <div class="resumen-dia-dos-tablas">
+        <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
           <thead><tr><th>Categoría</th><th>Total</th></tr></thead>
           <tbody>${tbody}</tbody>
         </table>
+        </div>
+        <div class="tw rep-table-wrap resumen-dia-tabla-extras">
+          <table class="dt resumen-dia-table" style="max-width:280px">
+            <thead><tr><th>Indicador</th><th>Total</th></tr></thead>
+            <tbody>
+              <tr><td>OLIMPICA</td><td>${vOlimpica}</td></tr>
+              <tr><td>ESTILO BOGOTA</td><td>${vEstiloBogota}</td></tr>
+            </tbody>
+          </table>
+          <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:280px">
+            OLIMPICA: sucursal contiene «OLIMPICA». ESTILO BOGOTA: crudas con ese texto en observación (no entran en CHUNCHULLAS CRUDAS).
+          </p>
+        </div>
       </div>
       <div class="tw rep-table-wrap" style="margin-top:14px">
         <p class="rep-bloque-resumen-meta" style="margin:0 0 8px;font-size:12px;color:var(--tx3)">
@@ -7496,6 +7531,8 @@ function cssExportVistaTotales() {
 .rep-bloque-resumen-lch{margin:12px 0;padding:14px 16px;background:#fafbfa;border:1px solid #c4cfc6;border-radius:12px}
 .rep-bloque-resumen-h{font-size:16px;font-weight:800;margin:0 0 8px;color:#1a1a1a}
 .rep-bloque-resumen-meta{font-size:12px;color:#555;margin:0 0 10px}
+.resumen-dia-dos-tablas{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.resumen-dia-tabla-extras{flex:0 1 auto;min-width:220px}
 .resumen-dia-table{width:100%;max-width:520px;border-collapse:collapse;font-size:11px}
 .resumen-dia-table th,.resumen-dia-table td{border:1px solid #bbb;padding:8px 10px}
 .resumen-dia-head td{background:#fff34f;font-weight:800}
