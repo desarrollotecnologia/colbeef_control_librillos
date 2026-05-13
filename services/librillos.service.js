@@ -9,6 +9,7 @@ import {
 } from '../config/plan-faena-obs.js';
 import { agrupacionDesdeObservacionCompleta } from './agrupaciones.service.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
+import { persistirSucursalesCrudasDesdeSnapshot } from './crudas-sucursal.store.js';
 import {
   RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
   RESUMEN_SOLO_PARTE_DIA,
@@ -310,7 +311,7 @@ const HORA_CORTE_TURNO_BOGOTA = (() => {
   return Number.isFinite(n) && n >= 0 && n <= 23 ? n : 6;
 })();
 
-function fechaTurnoOperativoBogotaISO() {
+export function fechaTurnoOperativoBogotaISO() {
   const now = new Date();
   const fechaCal = now.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -377,6 +378,7 @@ function snapshotPlanillajeDesdeRows(rows) {
     const observacion = String(r?.observacion || r?.observaciones || '').trim();
     const empresaDestino = String(r?.empresa_destino || '').trim();
     const usernameBd = String(r?.usuario_planillaje || '').trim();
+    const sucursal = String(r?.sucursal || '').trim() || null;
     m.set(id, {
       id_producto: id,
       id_animal: identificacion || null,
@@ -384,6 +386,7 @@ function snapshotPlanillajeDesdeRows(rows) {
       cliente_destino: clienteDestino || null,
       observacion: observacion || null,
       empresa_destino: empresaDestino || null,
+      sucursal,
       username_bd: usernameBd || null,
       fecha_turno: String(r?.fecha || '').trim() || null,
     });
@@ -1087,6 +1090,11 @@ const actualizarCache = async () => {
     cache.datos = datos;
     cache.ultimaActualizacion = new Date();
     guardarCacheFecha(turnoFecha, datos);
+    try {
+      await persistirSucursalesCrudasDesdeSnapshot(turnoFecha, nextSnap);
+    } catch (e) {
+      console.warn(`⚠️ No se pudo guardar crudas-sucursal.json: ${e.message}`);
+    }
     if (COLBEEF_DEBUG) console.log(`✅ Cache actualizado — ${datos.length} registros (día completo)`);
   } catch (error) {
     console.error('Error cache:', error.message);

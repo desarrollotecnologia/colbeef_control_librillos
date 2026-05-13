@@ -1325,19 +1325,18 @@ function actualizarColumnasRol() {
   });
 }
 
-/** KPI del turno: tamaño del listado y, si el API envía flags, registro Colbeef del día vs pendiente. */
+/** KPI del turno: totales alineados con el listado del API (universo, con parte Colbeef hoy, pendiente parte). */
 function actualizarKpiTurno() {
   const elPlan = document.getElementById('kpi-plan-total');
   const elCon = document.getElementById('kpi-con-parte');
   const elPend = document.getElementById('kpi-pend-parte');
   const wrap = document.getElementById('kpi-turno');
   if (!elPlan || !elCon || !elPend || !wrap) return;
-  const libs = (datosLibrillos || []).filter(esVistaHistorialLibrillos);
-  const crudas = (datosCrudasHist || []).filter(esVistaHistorialCrudasSolo);
-  const nLib = libs.length;
-  const nCrud = crudas.length;
-  const nTot = nLib + nCrud;
-  if (!nTot) {
+  const datos = Array.isArray(datosGlobal) ? datosGlobal : [];
+  const nUniverso = datos.length;
+  const nConParte = datos.filter((d) => d?.pendiente_registro_parte !== true).length;
+  const nPendienteParte = datos.filter((d) => d?.pendiente_registro_parte === true).length;
+  if (!nUniverso) {
     elPlan.textContent = '0';
     elCon.textContent = '0';
     elPend.textContent = '0';
@@ -1345,9 +1344,9 @@ function actualizarKpiTurno() {
     return;
   }
   wrap.classList.remove('kpi-turno--empty');
-  elPlan.textContent = String(nLib);
-  elCon.textContent = String(nCrud);
-  elPend.textContent = String(nTot);
+  elPlan.textContent = String(nUniverso);
+  elCon.textContent = String(nConParte);
+  elPend.textContent = String(nPendienteParte);
 }
 
 // ── FECHAS ────────────────────────────────────────────────────────────────────
@@ -1708,10 +1707,16 @@ function cambiarSubtabInventario(tab) {
 // ── FETCH ─────────────────────────────────────────────────────────────────────
 async function fetchPorFecha(fecha, opts = {}) {
   const signal = opts && opts.signal;
-  const url = fecha ? `${API_URL}?fecha=${fecha}` : API_URL;
+  const f = String(fecha || '').trim() || hoyISO();
+  const url = `${API_URL}?fecha=${encodeURIComponent(f)}`;
   const res = await fetch(url, signal ? { signal } : {});
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    console.error('fetchPorFecha: respuesta no es un arreglo', typeof data);
+    throw new Error('Respuesta API inválida');
+  }
+  return data;
 }
 
 async function fetchSalidas() {
@@ -4242,6 +4247,11 @@ function textoObsHistorico(payload) {
   return String(payload.observacion ?? payload.observaciones ?? '').trim();
 }
 
+function textoSucursalHistorico(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  return String(payload.sucursal ?? '').trim();
+}
+
 function idProductoHistorico(item) {
   const desdeCambios = String(
     item?.despues?.id_producto ??
@@ -4274,11 +4284,17 @@ function normalizarCambioHistorico(item) {
   const despues = textoObsHistorico(item?.despues);
   const antesNorm = normalizarObsHistorico(antes);
   const despuesNorm = normalizarObsHistorico(despues);
+  const sucursalAntes = textoSucursalHistorico(item?.antes);
+  const sucursalDespues = textoSucursalHistorico(item?.despues);
+  const sucAntesNorm = normalizarObsHistorico(sucursalAntes);
+  const sucDespuesNorm = normalizarObsHistorico(sucursalDespues);
   const tipo = tipoResultadoHistorico(antes, despues);
   const idProducto = idProductoHistorico(item);
   const usuario = String(item?.usuario || item?.despues?.username_bd || item?.antes?.username_bd || '(sin usuario)').trim();
   const fechaIso = String(item?.fecha || '').trim();
   const momento = fechaIso ? formatFecha(fechaIso) : '—';
+  const obsCambio = antesNorm !== despuesNorm;
+  const sucCambio = sucAntesNorm !== sucDespuesNorm;
   return {
     id: String(item?.id || ''),
     fecha: fechaIso,
@@ -4287,7 +4303,9 @@ function normalizarCambioHistorico(item) {
     idProducto,
     antes,
     despues,
-    esCambioRealObservacion: antesNorm !== despuesNorm,
+    sucursalAntes,
+    sucursalDespues,
+    esCambioRealObservacion: obsCambio || sucCambio,
     tipo,
     tipoLabel: tipo === 'cruda' ? 'CRUDAS' : (tipo === 'vacia' ? 'VACIA' : 'OTRO'),
     searchText: [
@@ -4295,6 +4313,8 @@ function normalizarCambioHistorico(item) {
       usuario,
       antes,
       despues,
+      sucursalAntes,
+      sucursalDespues,
       tipo,
       fechaIso,
       momento,
@@ -4308,18 +4328,22 @@ function pintarTablaHistoricoCambios() {
   if (!tbody) return;
   if (count) count.textContent = `${historicoCambiosFiltrados.length} cambios`;
   if (!historicoCambiosFiltrados.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin cambios en el rango seleccionado</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin cambios en el rango seleccionado</td></tr>';
     return;
   }
   tbody.innerHTML = historicoCambiosFiltrados.map((r) => {
     const cls = r.tipo === 'cruda' ? 'row-hist-cruda' : (r.tipo === 'vacia' ? 'row-hist-vacia' : 'row-hist-otro');
     const badgeCls = r.tipo === 'cruda' ? 'hist-badge-cruda' : (r.tipo === 'vacia' ? 'hist-badge-vacia' : 'hist-badge-otro');
+    const sAnt = r.sucursalAntes || '—';
+    const sDes = r.sucursalDespues || '—';
     return `<tr class="${cls}">
       <td>${escapeHtml(r.momento)}</td>
       <td>${escapeHtml(r.usuario)}</td>
       <td>${escapeHtml(r.idProducto || '—')}</td>
       <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 120))}</td>
       <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 120))}</td>
+      <td title="${escapeHtml(sAnt)}">${escapeHtml((sAnt || '—').slice(0, 80))}</td>
+      <td title="${escapeHtml(sDes)}">${escapeHtml((sDes || '—').slice(0, 80))}</td>
       <td><span class="hist-badge ${badgeCls}">${escapeHtml(r.tipoLabel)}</span></td>
     </tr>`;
   }).join('');
@@ -4339,7 +4363,7 @@ function pintarTablaHistoricoCrudas() {
     historicoCrudasSeleccionadas.clear();
     if (chkAll) chkAll.checked = false;
     actualizarContadorHistoricoCrudas();
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin cambios a crudas en el rango</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin cambios a crudas en el rango</td></tr>';
     return;
   }
   rows.forEach((r) => {
@@ -4352,6 +4376,8 @@ function pintarTablaHistoricoCrudas() {
   actualizarContadorHistoricoCrudas();
   tbody.innerHTML = rows.map((r) => {
     const checked = historicoCrudasSeleccionadas.has(r.idProducto) ? 'checked' : '';
+    const sAnt = r.sucursalAntes || '—';
+    const sDes = r.sucursalDespues || '—';
     return `<tr class="row-hist-cruda">
       <td><input type="checkbox" ${checked} onchange="toggleSeleccionHistoricoCruda('${escapeHtml(r.idProducto)}', this)"></td>
       <td>${escapeHtml(r.momento)}</td>
@@ -4359,6 +4385,8 @@ function pintarTablaHistoricoCrudas() {
       <td>${escapeHtml(r.idProducto)}</td>
       <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 100))}</td>
       <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 100))}</td>
+      <td title="${escapeHtml(sAnt)}">${escapeHtml((sAnt || '—').slice(0, 72))}</td>
+      <td title="${escapeHtml(sDes)}">${escapeHtml((sDes || '—').slice(0, 72))}</td>
     </tr>`;
   }).join('');
 }
@@ -4593,8 +4621,9 @@ async function copiarIdsHistorialLib() {
 
 // ── SEPARAR DATOS ─────────────────────────────────────────────────────────────
 function separarDatos(datos) {
-  datosLibrillos = datos.filter(esVistaHistorialLibrillos);
-  datosCrudasHist = datos.filter(esVistaHistorialCrudasSolo);
+  const lista = Array.isArray(datos) ? datos : [];
+  datosLibrillos = lista.filter(esVistaHistorialLibrillos);
+  datosCrudasHist = lista.filter(esVistaHistorialCrudasSolo);
   poblarFiltroAgrupaciones();
 }
 
@@ -4602,7 +4631,7 @@ function separarDatos(datos) {
 async function cambiarFecha() {
   return runWithAppLoader('Actualizando datos por fecha...', async () => {
     abortarLibAuto();
-    const fecha = document.getElementById('fecha-global').value;
+    const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
     document.getElementById('pg-sub').textContent = labelFecha(fecha);
     if (document.getElementById('vista-totales')?.classList.contains('active')) {
       void actualizarVistaTotales();
@@ -4629,7 +4658,11 @@ async function cambiarFecha() {
       actualizarPanelCuadre();
       poblarSelectReporteCliente(datosGlobal);
       _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
-    } catch(e) { actualizarEstado(false); }
+    } catch (e) {
+      console.error(e);
+      actualizarEstado(false);
+      mostrarToast(`No se pudieron cargar los datos: ${e?.message || e}`, 'err');
+    }
   });
 }
 
@@ -4638,7 +4671,7 @@ async function cargarDatos() {
   return runWithAppLoader('Cargando inventario del turno...', async () => {
     try {
       abortarLibAuto();
-      const fecha = document.getElementById('fecha-global').value;
+      const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
       const [datos, salidas] = await Promise.all([
         fetchPorFecha(fecha),
         fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
@@ -4663,9 +4696,10 @@ async function cargarDatos() {
       if (document.getElementById('vista-rep-librillos')?.classList.contains('active')) {
         void cargarReporteLibrillosVista();
       }
-    } catch(e) {
+    } catch (e) {
       console.error('Error:', e);
       actualizarEstado(false);
+      mostrarToast(`No se pudieron cargar los datos: ${e?.message || e}`, 'err');
     }
   });
 }

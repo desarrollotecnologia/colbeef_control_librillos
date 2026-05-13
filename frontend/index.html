@@ -650,7 +650,7 @@
     <!-- ═══ HISTÓRICO CAMBIOS ═══ -->
     <section class="vista" id="vista-historico">
       <div class="topbar-vista">
-        <input class="srch srch-busca-todo" id="srch-historico" type="search" placeholder="Buscar por ID, usuario, antes, ahora, fecha o tipo..." autocomplete="off" oninput="filtrarHistoricoCambios()">
+        <input class="srch srch-busca-todo" id="srch-historico" type="search" placeholder="Buscar por ID, usuario, observación, sucursal, fecha o tipo..." autocomplete="off" oninput="filtrarHistoricoCambios()">
         <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
           <div>
             <label class="fl">Desde</label>
@@ -667,17 +667,17 @@
 
       <div class="panel">
         <div class="ph">
-          <span class="pt">Cambios de observación (antes / ahora)</span>
+          <span class="pt">Cambios de observación y sucursal (antes / después)</span>
           <span id="historico-rango-label" style="font-size:12px;color:var(--tx2)">Rango: —</span>
         </div>
         <div class="tw">
           <table class="dt">
             <thead>
               <tr>
-                <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Antes</th><th>Ahora</th><th>Resultado</th>
+                <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Obs. antes</th><th>Obs. ahora</th><th>Sucursal antes</th><th>Sucursal después</th><th>Resultado</th>
               </tr>
             </thead>
-            <tbody id="tbody-historico"><tr><td colspan="6" class="empty">Cargando...</td></tr></tbody>
+            <tbody id="tbody-historico"><tr><td colspan="8" class="empty">Cargando...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -695,10 +695,10 @@
             <thead>
               <tr>
                 <th style="width:36px"><input type="checkbox" id="chk-historico-crudas" onchange="toggleTodasHistoricoCrudas(this)"></th>
-                <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Antes</th><th>Ahora</th>
+                <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Obs. antes</th><th>Obs. ahora</th><th>Sucursal antes</th><th>Sucursal después</th>
               </tr>
             </thead>
-            <tbody id="tbody-historico-crudas"><tr><td colspan="6" class="empty">Sin cambios a crudas en el rango</td></tr></tbody>
+            <tbody id="tbody-historico-crudas"><tr><td colspan="8" class="empty">Sin cambios a crudas en el rango</td></tr></tbody>
           </table>
         </div>
       </div>

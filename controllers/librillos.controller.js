@@ -6,7 +6,9 @@ import {
   obtenerObservacionesPorFecha,
   obtenerStatsUltimos7Dias,
   obtenerCrudasCambioSucursalCruceDiaAnterior,
+  fechaTurnoOperativoBogotaISO,
 } from '../services/librillos.service.js';
+import { leerSucursalesCrudas } from '../services/crudas-sucursal.store.js';
 import {
   obtenerValidacionMovimientos,
   obtenerDiagnosticoMovimientos,
@@ -45,9 +47,13 @@ export const getLibrillos = async (req, res) => {
       return res.json(datos);
     }
 
-    // Sin parámetro → cache de hoy
+    // Sin parámetro → cache en memoria del turno; si aún vacío (arranque en frío), consultar BD.
     const resultado = obtenerLibrillos();
-    return res.json(resultado.datos);
+    let datos = Array.isArray(resultado.datos) ? resultado.datos : [];
+    if (!datos.length) {
+      datos = await obtenerLibrillosPorFecha(fechaTurnoOperativoBogotaISO());
+    }
+    return res.json(datos);
 
   } catch (error) {
     console.error(error);
@@ -155,6 +161,17 @@ export const getCrudasCambioSucursal = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: 'Error al obtener cambios de sucursal en crudas' });
+  }
+};
+
+// GET /api/librillos/crudas-sucursal-guardadas — sucursal persistida solo para IDs con marca CRUDAS (turno actual)
+export const getCrudasSucursalGuardadas = async (req, res) => {
+  try {
+    const data = await leerSucursalesCrudas();
+    return res.json(data);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Error al leer sucursales de crudas guardadas' });
   }
 };
 
