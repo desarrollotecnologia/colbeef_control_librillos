@@ -1198,7 +1198,8 @@ export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
   const hit = leerCacheRango(desde, hasta);
   if (hit) return hit;
   const fechas = listaFechasDesdeHasta(desde, hasta);
-  const MAX_DIAS = 95;
+  /** Reporte de librillos y cierres anuales requieren hasta ~366 días. */
+  const MAX_DIAS = 400;
   if (fechas.length > MAX_DIAS) {
     throw new Error(`Rango máximo ${MAX_DIAS} días`);
   }

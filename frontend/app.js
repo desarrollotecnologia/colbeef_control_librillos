@@ -11,6 +11,28 @@ const AUTO_REFRESH_DATOS_MS = 15000;
 const AUTO_REFRESH_OBS_MS = 10000;
 /** Heartbeat de uso para estimar tiempo activo en la app. */
 const ANALYTICS_HEARTBEAT_MS = 60000;
+/** html2canvas: scale 2 bloquea el hilo principal mucho tiempo; 1.35 suele verse bien en PDF. */
+const PDF_HTML2CANVAS_SCALE = 1.35;
+
+/** Cancela peticiones automáticas (polling) en curso; evita que un tick viejo pise datos nuevos. */
+let _libAutoAbort = null;
+function nuevaSenalLibAuto() {
+  try {
+    _libAutoAbort?.abort();
+  } catch (_) {
+    /* ignore */
+  }
+  _libAutoAbort = new AbortController();
+  return _libAutoAbort.signal;
+}
+function abortarLibAuto() {
+  try {
+    _libAutoAbort?.abort();
+  } catch (_) {
+    /* ignore */
+  }
+  _libAutoAbort = null;
+}
 
 const LS_ANALYTICS_SESSION = 'colbeef_analytics_session_v1';
 const LS_ANALYTICS_ADMIN_KEY = 'colbeef_analytics_admin_key_v1';
@@ -256,6 +278,8 @@ function labelEventoAnalitica(e) {
     export_html: 'Descarga HTML',
     print_report: 'Impresión reporte',
     print_labels_crudas: 'Impresión etiquetas crudas',
+    historico_auditoria_cargar: 'Histórico de cambios (consulta)',
+    reporte_librillos_cargar: 'Reporte de librillos (consulta)',
   };
   return map[e] || e || 'Sin evento';
 }
@@ -1122,9 +1146,12 @@ const cacheRangoFront = new Map();
 let cacheSalidasFront = { ts: 0, data: null };
 const cacheResumenMacroFront = new Map();
 const CACHE_FRONT_MS = 60000;
+/** Caché más larga para rangos (reporte de librillos): evita repetir consultas pesadas al cambiar de vista. */
+const CACHE_RANGO_DATOS_MS = 5 * 60 * 1000;
 let inventarioSubtab = 'lib'; // 'lib' | 'crud'
 let _autoInvSnapshot = '';
 let _autoGlobalTimer = null;
+let _cuadreDebounceT = null;
 let _autoObsTimer = null;
 let _autoObsSnapshot = '';
 let _obsTextoMapPrev = new Map();
@@ -1606,6 +1633,11 @@ function irVista(nombre, btn) {
   if (fg) fg.style.display = '';
   if (ba) ba.style.display = '';
   if (nombre === 'inventario') renderInventario();
+  if (nombre === 'historial') {
+    filtrarHistorialLib();
+    filtrarHistorialCrud();
+  }
+  if (nombre === 'clientes') filtrarCli();
   if (nombre === 'totales') void actualizarVistaTotales();
   if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
@@ -1614,7 +1646,7 @@ function irVista(nombre, btn) {
     const fh = document.getElementById('fecha-historico-hasta');
     if (fd && !fd.value) fd.value = fechaBase;
     if (fh && !fh.value) fh.value = fechaBase;
-    if (!historicoCambios.length) void cargarHistoricoCambios();
+    void cargarHistoricoCambios();
   }
   trackVista(nombre);
   if (window.innerWidth <= 900) cerrarMenuMovil();
@@ -1672,9 +1704,10 @@ function cambiarSubtabInventario(tab) {
 }
 
 // ── FETCH ─────────────────────────────────────────────────────────────────────
-async function fetchPorFecha(fecha) {
+async function fetchPorFecha(fecha, opts = {}) {
+  const signal = opts && opts.signal;
   const url = fecha ? `${API_URL}?fecha=${fecha}` : API_URL;
-  const res = await fetch(url);
+  const res = await fetch(url, signal ? { signal } : {});
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -1723,12 +1756,14 @@ function normalizarListaSalidas(lista) {
     .filter(s => s.id_producto);
 }
 
-async function fetchObservacionesPorFecha(fecha) {
+async function fetchObservacionesPorFecha(fecha, opts = {}) {
+  const signal = opts && opts.signal;
   try {
-    const res = await fetch(`${API_URL}/observaciones?fecha=${encodeURIComponent(fecha)}`);
+    const res = await fetch(`${API_URL}/observaciones?fecha=${encodeURIComponent(fecha)}`, signal ? { signal } : {});
     if (!res.ok) return [];
     return res.json();
-  } catch {
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw e;
     return [];
   }
 }
@@ -1764,14 +1799,18 @@ function snapshotPendientes(datos, salidas) {
 
 async function refrescarGlobal() {
   if (document.hidden) return;
+  if (_loaderDepth > 0) return;
+  const signal = nuevaSenalLibAuto();
   const fecha = document.getElementById('fecha-global')?.value || hoyISO();
   try {
     const [datos, salidas] = await Promise.all([
-      fetchPorFecha(fecha),
+      fetchPorFecha(fecha, { signal }),
       fetchSalidas(),
     ]);
-    const snapNuevo = snapshotPendientes(datos, salidas);
     const invActiva = document.getElementById('vista-inventario')?.classList.contains('active');
+    const histActiva = document.getElementById('vista-historial')?.classList.contains('active');
+    const cliActiva = document.getElementById('vista-clientes')?.classList.contains('active');
+    const snapNuevo = snapshotPendientes(datos, salidas);
     const huboCambioInv =
       invActiva && _autoInvSnapshot && snapNuevo !== _autoInvSnapshot;
 
@@ -1780,20 +1819,23 @@ async function refrescarGlobal() {
     salidasRegistradas = salidas;
     separarDatos(datos);
     actualizarEstado(true);
-    renderHistorialLib(datosLibrillos);
     actualizarKpiTurno();
-    renderHistorialCrudas(datosCrudasHist);
-    filtrarCli();
+    if (histActiva) {
+      renderHistorialLib(datosLibrillos);
+      renderHistorialCrudas(datosCrudasHist);
+    }
+    if (cliActiva) filtrarCli();
     if (huboCambioInv) {
       seleccionados.clear();
       seleccionadosCrud.clear();
       mostrarToast('Inventario actualizado por cambios recientes en observación/salida.', 'ok');
     }
-    renderInventario();
+    if (invActiva) renderInventario();
     actualizarPanelCuadre();
     poblarSelectReporteCliente(datos);
     _autoInvSnapshot = snapNuevo;
-  } catch {
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
     // silencioso: conservar último estado visible
   }
 }
@@ -1842,7 +1884,7 @@ function rangoFechasISO(desde, hasta) {
 async function fetchDatosRango(desde, hasta) {
   const key = `${String(desde || '').trim()}|${String(hasta || '').trim()}`;
   const hit = cacheRangoFront.get(key);
-  if (hit && (Date.now() - Number(hit.ts || 0)) <= CACHE_FRONT_MS && Array.isArray(hit.data)) {
+  if (hit && (Date.now() - Number(hit.ts || 0)) <= CACHE_RANGO_DATOS_MS && Array.isArray(hit.data)) {
     return hit.data;
   }
   try {
@@ -1856,10 +1898,17 @@ async function fetchDatosRango(desde, hasta) {
     /* sin endpoint / red */
   }
   const fechas = rangoFechasISO(desde, hasta);
-  const chunks = await Promise.all(fechas.map(f => fetchPorFecha(f).catch(() => [])));
-  const all = chunks.flat();
+  const BATCH = 14;
+  const all = [];
+  for (let i = 0; i < fechas.length; i += BATCH) {
+    const tramo = fechas.slice(i, i + BATCH);
+    const partes = await Promise.all(tramo.map((f) => fetchPorFecha(f).catch(() => [])));
+    partes.forEach((arr) => {
+      if (Array.isArray(arr)) all.push(...arr);
+    });
+  }
   const m = new Map();
-  all.forEach(d => {
+  all.forEach((d) => {
     const k = `${String(d.id_producto || '')}|${String(d.fecha || '')}`;
     if (!m.has(k)) m.set(k, d);
   });
@@ -2747,53 +2796,55 @@ async function obtenerDataGuiaConFallback(fecha, categoria, conToast = false) {
 }
 
 async function generarVistaPreviaGuiaDespacho() {
-  const fecha = sincronizarFechaGuiaConFechaGlobal();
-  const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
-  if (!fecha) {
-    mostrarToast('Selecciona la fecha de salida', 'err');
-    return;
-  }
-  if (!categoria) {
-    mostrarToast('Selecciona la categoria', 'err');
-    return;
-  }
-  let data = null;
-  try {
-    data = await obtenerDataGuiaConFallback(fecha, categoria, true);
-  } catch (e) {
-    mostrarToast(`No se pudo cargar la guía: ${e.message || e}`, 'err');
-    return;
-  }
-  const manual = leerManualGuiaDesdeFormulario();
-  pintarPendientesHoyAutomatico(data);
-  actualizarResumenControlGuia(data, manual);
-  const check = validarGuiaAntesDeGenerar(data, manual);
-  enviarEventoAnalytics({
-    eventName: 'guia_preview_control',
-    viewName: _analyticsViewActual,
-    meta: {
-      fecha,
+  return runWithAppLoader('Preparando vista previa de guia...', async () => {
+    const fecha = sincronizarFechaGuiaConFechaGlobal();
+    const categoria = String(document.getElementById('sel-guia-categoria')?.value || '').trim();
+    if (!fecha) {
+      mostrarToast('Selecciona la fecha de salida', 'err');
+      return;
+    }
+    if (!categoria) {
+      mostrarToast('Selecciona la categoria', 'err');
+      return;
+    }
+    let data = null;
+    try {
+      data = await obtenerDataGuiaConFallback(fecha, categoria, true);
+    } catch (e) {
+      mostrarToast(`No se pudo cargar la guía: ${e.message || e}`, 'err');
+      return;
+    }
+    const manual = leerManualGuiaDesdeFormulario();
+    pintarPendientesHoyAutomatico(data);
+    actualizarResumenControlGuia(data, manual);
+    const check = validarGuiaAntesDeGenerar(data, manual);
+    enviarEventoAnalytics({
+      eventName: 'guia_preview_control',
+      viewName: _analyticsViewActual,
+      meta: {
+        fecha,
+        categoria,
+        ok: check.ok,
+        base: check.calc.base,
+        ajuste: check.calc.ajusteValor,
+        decomiso: check.calc.decomiso,
+        final: check.calc.final,
+      },
+    });
+    const firmaGuia = await resolverFirmaGuiaParaHtml();
+    const html = construirHtmlGuiaDespachoPdf(data, {
+      logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
       categoria,
-      ok: check.ok,
-      base: check.calc.base,
-      ajuste: check.calc.ajusteValor,
-      decomiso: check.calc.decomiso,
-      final: check.calc.final,
-    },
+      manual,
+      firmaGuia,
+    });
+    const panel = document.getElementById('guia-preview-panel');
+    const body = document.getElementById('guia-preview-body');
+    if (panel && body) {
+      body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="margin:0 auto;width:760px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12);box-sizing:border-box">${html}</div></div>`;
+      panel.style.display = '';
+    }
   });
-  const firmaGuia = await resolverFirmaGuiaParaHtml();
-  const html = construirHtmlGuiaDespachoPdf(data, {
-    logoDataUrl: (typeof window !== 'undefined' ? window.COLBEEF_LOGO_DATA_URL : null),
-    categoria,
-    manual,
-    firmaGuia,
-  });
-  const panel = document.getElementById('guia-preview-panel');
-  const body = document.getElementById('guia-preview-body');
-  if (panel && body) {
-    body.innerHTML = `<div style="background:#f6f6f6;padding:12px;overflow:auto"><div style="margin:0 auto;width:760px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12);box-sizing:border-box">${html}</div></div>`;
-    panel.style.display = '';
-  }
 }
 
 async function autocompletarAjusteGuiaDesdeDiaAnterior() {
@@ -3191,7 +3242,7 @@ async function descargarPdfGuiaDespacho() {
           filename: `Guia_Despacho_${categoria}_${fecha}.pdf`,
           image: { type: 'png', quality: 1 },
           html2canvas: {
-            scale: 2,
+            scale: PDF_HTML2CANVAS_SCALE,
             useCORS: true,
             logging: false,
             backgroundColor: '#ffffff',
@@ -4345,6 +4396,7 @@ function seleccionarTodosHistoricoCrudas() {
 
 async function cargarHistoricoCambios() {
   return runWithAppLoader('Cargando historico de cambios...', async () => {
+    const t0 = Date.now();
     const desde = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
     const hasta = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
     if (!desde || !hasta) {
@@ -4381,6 +4433,18 @@ async function cargarHistoricoCambios() {
     const lbl = document.getElementById('historico-rango-label');
     if (lbl) lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios`;
     filtrarHistoricoCambios();
+    const ms = Math.max(0, Date.now() - t0);
+    enviarEventoAnalytics({
+      eventName: 'historico_auditoria_cargar',
+      viewName: 'historico',
+      durationMs: ms,
+      meta: {
+        desde,
+        hasta,
+        total: historicoCambios.length,
+        totalApi: Number(payload?.total || historicoCambios.length),
+      },
+    });
   });
 }
 
@@ -4409,12 +4473,17 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
 
 async function refrescarSiCambioObservacion() {
   if (document.hidden) return;
+  if (_loaderDepth > 0) return;
+  const signal = nuevaSenalLibAuto();
   const fecha = document.getElementById('fecha-global')?.value || hoyISO();
   try {
     const [datosFresh, obsDia] = await Promise.all([
-      fetchPorFecha(fecha),
-      fetchObservacionesPorFecha(fecha),
+      fetchPorFecha(fecha, { signal }),
+      fetchObservacionesPorFecha(fecha, { signal }),
     ]);
+    const invActiva = document.getElementById('vista-inventario')?.classList.contains('active');
+    const histActiva = document.getElementById('vista-historial')?.classList.contains('active');
+    const cliActiva = document.getElementById('vista-clientes')?.classList.contains('active');
     const obsMapNow = new Map((obsDia || []).map(x => [String(x.id_producto), String(x.observacion_actual || '').trim()]));
     const momentoPorId = new Map(
       (obsDia || [])
@@ -4430,11 +4499,13 @@ async function refrescarSiCambioObservacion() {
       salidasRegistradas = salidasFresh;
       separarDatos(datosFresh);
       _autoInvSnapshot = snapshotPendientes(datosFresh, salidasFresh);
-      renderHistorialLib(datosLibrillos);
       actualizarKpiTurno();
-      renderHistorialCrudas(datosCrudasHist);
-      filtrarCli();
-      renderInventario();
+      if (histActiva) {
+        renderHistorialLib(datosLibrillos);
+        renderHistorialCrudas(datosCrudasHist);
+      }
+      if (cliActiva) filtrarCli();
+      if (invActiva) renderInventario();
       actualizarPanelCuadre();
       beepNotif();
       const cambiosRegistrados = registrarCambiosObservacion(cambios, momentoPorId) || [];
@@ -4445,7 +4516,8 @@ async function refrescarSiCambioObservacion() {
     }
     _autoObsSnapshot = snapNuevo;
     _obsTextoMapPrev = obsMapNow;
-  } catch {
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
     // silencioso
   }
 }
@@ -4527,6 +4599,7 @@ function separarDatos(datos) {
 // ── CAMBIAR FECHA ─────────────────────────────────────────────────────────────
 async function cambiarFecha() {
   return runWithAppLoader('Actualizando datos por fecha...', async () => {
+    abortarLibAuto();
     const fecha = document.getElementById('fecha-global').value;
     document.getElementById('pg-sub').textContent = labelFecha(fecha);
     if (document.getElementById('vista-totales')?.classList.contains('active')) {
@@ -4562,6 +4635,7 @@ async function cambiarFecha() {
 async function cargarDatos() {
   return runWithAppLoader('Cargando inventario del turno...', async () => {
     try {
+      abortarLibAuto();
       const fecha = document.getElementById('fecha-global').value;
       const [datos, salidas] = await Promise.all([
         fetchPorFecha(fecha),
@@ -4601,7 +4675,7 @@ function actualizarEstado(ok) {
 }
 
 /** Cuadre del día: API validación (trazabilidad + pendientes de despacho). */
-async function actualizarPanelCuadre() {
+async function actualizarPanelCuadreInterno() {
   const strip = document.getElementById('cuadre-strip');
   const txt = document.getElementById('cuadre-strip-txt');
   if (!strip || !txt) return;
@@ -4636,6 +4710,14 @@ async function actualizarPanelCuadre() {
   } catch {
     txt.textContent = 'Cuadre no disponible';
   }
+}
+
+function actualizarPanelCuadre() {
+  clearTimeout(_cuadreDebounceT);
+  _cuadreDebounceT = setTimeout(() => {
+    _cuadreDebounceT = null;
+    void actualizarPanelCuadreInterno();
+  }, 350);
 }
 
 function topConteoPor(items, keyFn, limit = 8) {
@@ -7509,7 +7591,7 @@ async function descargarPDFReporte() {
       margin: 7,
       filename: `Colbeef_${title}.pdf`,
       image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: true, logging: false },
+      html2canvas: { scale: PDF_HTML2CANVAS_SCALE, useCORS: true, logging: false },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] },
     };
@@ -8373,7 +8455,7 @@ function descargarReporteLibrillosPDF() {
     margin: [8, 8, 8, 8],
     filename: repLibNombreArchivo('pdf'),
     image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+    html2canvas: { scale: PDF_HTML2CANVAS_SCALE, useCORS: true, backgroundColor: '#ffffff' },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
   };
   html2pdf()
@@ -8416,10 +8498,12 @@ async function cargarReporteLibrillosVista(forzar = false) {
     const cacheKeyFiltro = `${cacheKeyAnio}|${mes}`;
     repLibrillosState.cacheAnio.delete(cacheKeyAnio);
     repLibrillosState.cacheFiltro.delete(cacheKeyFiltro);
+    cacheRangoFront.clear();
   }
   const anio = String(selAnio.value || '').trim();
   if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte...</td></tr>';
   setLoading(true);
+  const t0 = Date.now();
   try {
     const lista = await repLibDatosPorFiltro(anio, mes);
     if (reqId !== repLibrillosState.reqSeq) return;
@@ -8463,7 +8547,25 @@ async function cargarReporteLibrillosVista(forzar = false) {
       facturacion: fact,
     };
     repLibPintarTabla(filas, totales);
+    if (reqId !== repLibrillosState.reqSeq) return;
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+    if (reqId !== repLibrillosState.reqSeq) return;
     repLibPintarChart(filas);
+    const ms = Math.max(0, Date.now() - t0);
+    enviarEventoAnalytics({
+      eventName: 'reporte_librillos_cargar',
+      viewName: 'rep-librillos',
+      durationMs: ms,
+      meta: {
+        anio,
+        mes: mes || null,
+        forzar: !!forzar,
+        filasDia: filas.length,
+        registros: lista.length,
+      },
+    });
   } finally {
     if (reqId === repLibrillosState.reqSeq) setLoading(false);
   }
