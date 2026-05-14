@@ -6673,8 +6673,10 @@ function clientePivotMacro(d, nombreGrupo = '') {
     const esEtiquetaOperativa = (txt) =>
       /\bPLAZA\b|\bCAVA\b|\bRETIRAR?\s+LIBRIL+OS?\b|\bDERIVADOS?\b|\bCARNICOS?\b/.test(String(txt || '').toUpperCase());
 
-    // CARVISCOL → agrupación DERIVADOS; en el pivote el «cliente» es el propietario del animal (no la marca CARVISCOL).
+    // CARVISCOL → DERIVADOS: si el backend fijó cliente_destino (p. ej. Uriel Vargas), el reporte
+    // agrupa por ese cliente comercial; si no, se mantiene propietario / respaldo (comportamiento anterior).
     if (src.includes('CARVISCOL')) {
+      if (cliDest && !esEtiquetaOperativa(cliDest)) return cliDest;
       return prop || elegirNombreMasCompleto(cand, (s) => /carviscol/i.test(s)) || 'CARVISCOL';
     }
     // Canoniza todas las variantes de "CACUA" hacia la misma etiqueta comercial (como en VBA: RUT/CACUA/CARMEN/LARROTA => RUTH CACUA).
