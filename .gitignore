@@ -26,6 +26,7 @@ Desktop.ini
 # Datos locales de desarrollo (salidas en archivo JSON)
 data/salidas.json
 data/crudas-sucursal.json
+data/cierre-proceso.json
 # Volcados de macros VBA generados por scripts (regenerables)
 data/*.vba.txt
 

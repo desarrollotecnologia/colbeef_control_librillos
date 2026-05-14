@@ -1,4 +1,5 @@
 const API_URL      = '/api/librillos';
+const API_CIERRE_PROCESO = '/api/cierre-proceso';
 const SALIDAS_URL  = '/api/salidas';
 const GUIAS_URL = '/api/guias';
 const ANALYTICS_URL = '/api/analytics/event';
@@ -1655,6 +1656,7 @@ function irVista(nombre, btn) {
   if (nombre === 'historial') {
     filtrarHistorialLib();
     filtrarHistorialCrud();
+    void refrescarToolbarCierreProceso();
   }
   if (nombre === 'clientes') filtrarCli();
   if (nombre === 'totales') void actualizarVistaTotales();
@@ -4040,7 +4042,7 @@ function aplicarTheadModalCambiosObs(modo) {
   const btnCopiar = document.getElementById('btn-copiar-cambios-obs');
   const btnLista = document.getElementById('btn-imprimir-lista-cambios-obs');
   if (btnCopiar) btnCopiar.style.display = modo === 'logistica' ? 'none' : '';
-  if (btnLista) btnLista.style.display = modo === 'logistica' ? 'none' : '';
+  if (btnLista) btnLista.style.display = '';
   if (btnEtq) btnEtq.style.display = modo === 'logistica' ? '' : 'none';
   if (!table) return;
   const thead = table.querySelector('thead');
@@ -4051,10 +4053,12 @@ function aplicarTheadModalCambiosObs(modo) {
         <input type="checkbox" onclick="toggleTodosReimpSucursal(this)" aria-label="Seleccionar todas" />
       </th>
       <th>ID</th>
-      <th>Tipo</th>
-      <th>Hora del cambio</th>
-      <th>Sucursal antes</th>
-      <th>Sucursal nueva</th>
+      <th>Identificación</th>
+      <th>Cliente destino</th>
+      <th>Agrupación</th>
+      <th>Suc. anterior</th>
+      <th>Suc. actual</th>
+      <th>Observación</th>
     </tr>`;
   } else {
     thead.innerHTML = `<tr>
@@ -4063,26 +4067,46 @@ function aplicarTheadModalCambiosObs(modo) {
   }
 }
 
+function truncTextUi(s, max = 64) {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '—';
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1)}…`;
+}
+
 function renderFilasModalCambiosObsLogistica(tbody, lista) {
   _seleccionReimpSucursalCrudas.clear();
   const solo = (lista || []).filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
   tbody.innerHTML = solo.map((c) => {
     const momentoMostrar = c.momento_bd || c.detectado_en;
-    const hora = momentoMostrar ? formatFecha(momentoMostrar) : '—';
     const titleMomento = c.momento_bd
-      ? 'Fecha/hora del registro en trazabilidad (tabla a_parte_producto)'
-      : 'Hora en que la app detectó el cambio (sin momento de BD en este evento)';
+      ? 'Momento trazabilidad (a_parte_producto)'
+      : momentoMostrar
+        ? `Detectado: ${formatFecha(momentoMostrar)}`
+        : '';
     const idRaw = String(c.id || '');
     const chk = `<input type="checkbox" class="js-chk-reimp-suc" data-reimp-id="${idRaw.replace(/"/g, '&quot;')}" onchange="toggleReimpSucursalDesdeModal(this)" />`;
     const sa = escapeHtml(String(c.sucursal_antes ?? c.antes ?? '—'));
     const sn = escapeHtml(String(c.sucursal_despues ?? c.despues ?? '—'));
+    const idTitle = titleMomento ? escapeHtml(titleMomento) : '';
+    const idCell = idTitle
+      ? `<span title="${idTitle}">${escapeHtml(idRaw || '—')}</span>`
+      : escapeHtml(idRaw || '—');
+    const ident = escapeHtml(truncTextUi(c.identificacion, 20));
+    const cli = escapeHtml(truncTextUi(c.cliente_destino, 28));
+    const ag = escapeHtml(truncTextUi(c.agrupacion, 22));
+    const obsRaw = String(c.observacion_texto || '').trim();
+    const obs = escapeHtml(truncTextUi(obsRaw, 56));
+    const obsTitle = obsRaw ? escapeHtml(obsRaw.slice(0, 500)) : '';
     return `<tr>
       <td class="no-print" style="text-align:center">${chk}</td>
-      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(idRaw || '—')}</td>
-      <td style="font-size:12px;font-weight:600">Crudas</td>
-      <td style="font-size:12px" title="${escapeHtml(titleMomento)}">${escapeHtml(hora)}</td>
-      <td style="font-size:12px">${sa}</td>
-      <td style="font-size:12px">${sn}</td>
+      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo);font-size:13px">${idCell}</td>
+      <td style="font-size:11px" title="${escapeHtml(String(c.identificacion || '').trim())}">${ident}</td>
+      <td style="font-size:11px" title="${escapeHtml(String(c.cliente_destino || '').trim())}">${cli}</td>
+      <td style="font-size:11px" title="${escapeHtml(String(c.agrupacion || '').trim())}">${ag}</td>
+      <td style="font-size:11px">${sa}</td>
+      <td style="font-size:11px">${sn}</td>
+      <td style="font-size:11px;max-width:220px" title="${obsTitle}">${obs}</td>
     </tr>`;
   }).join('');
 }
@@ -4156,16 +4180,26 @@ function listaCambiosObsActual(cambiosExplicitos = null, modo = 'normal') {
 }
 
 /** Historial: solo navegador (localStorage) + sesión actual; opcional lista recién detectada. */
-async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
+async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal', opts = {}) {
+  const omitFetchCruceSucursal = !!opts.omitFetchCruceSucursal;
+  const subtituloLogistica =
+    typeof opts.subtituloLogistica === 'string' && opts.subtituloLogistica.trim()
+      ? opts.subtituloLogistica.trim()
+      : null;
+  const tituloLogistica =
+    typeof opts.tituloLogistica === 'string' && opts.tituloLogistica.trim()
+      ? opts.tituloLogistica.trim()
+      : null;
   const modal = document.getElementById('modal-cambios-obs');
   const tbody = document.getElementById('tbody-cambios-obs');
   const ttl = document.getElementById('modal-cambios-obs-title');
   if (!modal || !tbody) return;
   _modoCambiosObsActual = modo;
   if (ttl) {
-    ttl.textContent = modo === 'logistica'
-      ? 'Reimpresiones logística — crudas (cambio de sucursal)'
-      : 'Cambios de observación (antes / ahora)';
+    ttl.textContent =
+      modo === 'logistica'
+        ? tituloLogistica || 'Reimpresiones logística — crudas (cambio de sucursal)'
+        : 'Cambios de observación (antes / ahora)';
   }
   const sub = document.getElementById('modal-cambios-obs-sub');
   if (sub) {
@@ -4173,7 +4207,9 @@ async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
       const fg = document.getElementById('fecha-global')?.value || hoyISO();
       const fSig = sumarDiasISO(fg, 1) || fg;
       sub.style.display = 'block';
-      sub.textContent = `Lista principal desde la base de datos: crudas con sucursal distinta respecto al día anterior (${fg}). Las etiquetas se imprimen con los datos del día siguiente al turno (${fSig}), fecha de despacho prevista. Se combinan con avisos guardados en este navegador si los hay.`;
+      sub.textContent =
+        subtituloLogistica ||
+        `Lista desde la base de datos: crudas con sucursal distinta respecto al día anterior (${fg}). Las etiquetas usan el día siguiente al turno (${fSig}), fecha de despacho prevista. Se combinan con avisos de este navegador si los hay.`;
     } else {
       sub.style.display = 'none';
       sub.textContent = '';
@@ -4184,14 +4220,16 @@ async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal') {
   let lista = listaCambiosObsActual(cambiosExplicitos, modo);
   if (modo === 'logistica') {
     const fg = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
-    const desdeBd = await fetchCrudasCambioSucursalDesdeBd(fg);
-    lista = mergeHistorialCambios(desdeBd, lista);
+    if (!omitFetchCruceSucursal) {
+      const desdeBd = await fetchCrudasCambioSucursalDesdeBd(fg);
+      lista = mergeHistorialCambios(desdeBd, lista);
+    }
     lista = lista.filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
     lista = ordenarHistorialPorMomento(lista);
   }
   if (!lista.length) {
     tbody.innerHTML = modo === 'logistica'
-      ? '<tr><td colspan="6" class="empty">Sin cambios de sucursal en crudas para reimpresión</td></tr>'
+      ? '<tr><td colspan="9" class="empty">Sin cambios de sucursal en crudas para reimpresión</td></tr>'
       : '<tr><td colspan="5" class="empty">Sin cambios detectados</td></tr>';
     return;
   }
@@ -4243,7 +4281,10 @@ function imprimirListadoCambiosObs() {
       <td>${escapeHtml(c.momento_bd || c.detectado_en ? formatFecha(c.momento_bd || c.detectado_en) : '—')}</td>
       <td>${escapeHtml(String(c.id || '—'))}</td>
       <td>${escapeHtml(esSuc ? 'Cruda · sucursal' : String(c.tipo || 'REGISTRO'))}</td>
+      <td>${escapeHtml(String(c.identificacion || '—'))}</td>
       <td>${escapeHtml(String(c.propietario || '—'))}</td>
+      <td>${escapeHtml(String(c.cliente_destino || '—'))}</td>
+      <td>${escapeHtml(String(c.agrupacion || '—'))}</td>
       <td>${sa}</td>
       <td>${sn}</td>
       <td>${obsDet}</td>
@@ -4252,7 +4293,8 @@ function imprimirListadoCambiosObs() {
   }).join('');
   const fecha = document.getElementById('fecha-global')?.value || hoyISO();
   const headNorm = '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Antes</th><th>Ahora</th></tr>';
-  const headLog = '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Propietario</th><th>Sucursal (antes)</th><th>Sucursal (nueva)</th><th>Observación / detalle</th><th>Empresa destino</th></tr>';
+  const headLog =
+    '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Identificación</th><th>Propietario</th><th>Cliente destino</th><th>Agrupación</th><th>Sucursal (antes)</th><th>Sucursal (nueva)</th><th>Observación / detalle</th><th>Empresa destino</th></tr>';
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Reimpresiones logística</title>
     <style>body{font-family:Arial,sans-serif;margin:20px}h2{margin:0 0 10px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:6px;text-align:left}th{background:#f0f0f0}.meta{margin:0 0 10px;color:#666}</style>
   </head><body>
@@ -4781,6 +4823,122 @@ function separarDatos(datos) {
   poblarFiltroAgrupaciones();
 }
 
+// ── CIERRE DE PROCESO (snapshot crudas → comparar sucursal en BD) ─────────────
+async function refrescarToolbarCierreProceso() {
+  const lbl = document.getElementById('lbl-estado-cierre');
+  const btnR = document.getElementById('btn-cierre-revisar');
+  const btnT = document.getElementById('btn-cierre-terminar');
+  if (!lbl || !btnR || !btnT) return;
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  try {
+    const r = await fetch(`${API_CIERRE_PROCESO}/${encodeURIComponent(fecha)}`);
+    if (!r.ok) throw new Error('HTTP');
+    const j = await r.json();
+    if (j.cerrado) {
+      lbl.textContent = `Cerrado ${j.cerrado_en ? formatFecha(j.cerrado_en) : '—'} · ${j.total_items ?? 0} crudas en snapshot.`;
+      btnR.disabled = false;
+      btnT.textContent = 'Volver a cerrar (sobrescribe snapshot)';
+    } else {
+      lbl.textContent = 'Sin cierre registrado para esta fecha.';
+      btnR.disabled = true;
+      btnT.textContent = 'Terminar proceso';
+    }
+  } catch {
+    lbl.textContent = 'No se pudo consultar el estado de cierre.';
+    btnR.disabled = true;
+  }
+}
+
+async function terminarProcesoCierre() {
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  if (
+    !confirm(
+      `¿Confirma TERMINAR PROCESO para la fecha ${fecha}?\n\nSe guardará la sucursal actual de cada cruda (texto con CRUDA/CRUDAS) para comparar después con la base de datos.`
+    )
+  ) {
+    return;
+  }
+  try {
+    const r = await fetch(`${API_CIERRE_PROCESO}/${encodeURIComponent(fecha)}/registrar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    mostrarToast(`Proceso cerrado: ${j.total_items ?? 0} crudas en snapshot.`, 'ok');
+    await refrescarToolbarCierreProceso();
+  } catch (e) {
+    mostrarToast(String(e.message || e), 'err');
+  }
+}
+
+async function revisarPostCierreSucursal() {
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  try {
+    const r = await fetch(`${API_CIERRE_PROCESO}/${encodeURIComponent(fecha)}/revisar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 404) {
+      mostrarToast(j.error || 'No hay cierre para esta fecha.', 'err');
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    const sinFila = Array.isArray(j.sin_fila_hoy) ? j.sin_fila_hoy : [];
+    if (sinFila.length) {
+      const muestra = sinFila
+        .slice(0, 6)
+        .map((x) => String(x?.id_producto || '').trim())
+        .filter(Boolean)
+        .join(', ');
+      const suf = sinFila.length > 6 ? '…' : '';
+      mostrarToast(
+        `Atención: ${sinFila.length} código(s) del cierre no aparecen hoy en el día (${muestra}${suf}). Revisar planilla o trazabilidad.`,
+        'err',
+        { durationMs: 9000 }
+      );
+    }
+    const lista = (j.cambios_sucursal || []).map((c) => ({
+      id: c.id_producto,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: c.sucursal_cierre || '—',
+      despues: c.sucursal_actual || '—',
+      sucursal_antes: c.sucursal_cierre || '—',
+      sucursal_despues: c.sucursal_actual || '—',
+      propietario: c.propietario || null,
+      identificacion: c.identificacion || null,
+      cliente_destino: c.cliente_destino || null,
+      agrupacion: c.agrupacion || null,
+      plaza: c.plaza || null,
+      empresa_destino: c.empresa_destino || null,
+      destino: c.destino || null,
+      observacion_texto:
+        String(c.observacion_texto || '').trim() || 'Conciliación vs cierre de proceso (sucursal)',
+      fuente: 'post_cierre',
+    }));
+    if (!lista.length) {
+      if (!sinFila.length) {
+        mostrarToast('Sin diferencias de sucursal respecto al cierre.', 'ok');
+      }
+      return;
+    }
+    registrarCambiosObservacion(lista);
+    let msg = `${lista.length} cambio(s) de sucursal vs cierre. Abriendo lista para despacho…`;
+    if (sinFila.length) msg += ` (${sinFila.length} sin fila hoy: ver aviso anterior).`;
+    mostrarToast(msg, 'ok', { durationMs: 5200 });
+    await abrirModalCambiosObs(lista, 'logistica', {
+      omitFetchCruceSucursal: true,
+      tituloLogistica: 'Despacho / logística — sucursal vs cierre de proceso',
+      subtituloLogistica: `Fecha ${fecha}: sucursal guardada al cerrar vs sucursal y cliente actuales en sistema (una sola lectura BD; sin cruce día anterior). Etiquetas: día siguiente al turno (${sumarDiasISO(fecha, 1) || fecha}).`,
+    });
+  } catch (e) {
+    mostrarToast(String(e.message || e), 'err');
+  }
+}
+
 // ── CAMBIAR FECHA ─────────────────────────────────────────────────────────────
 async function cambiarFecha() {
   return runWithAppLoader('Actualizando datos por fecha...', async () => {
@@ -4813,6 +4971,7 @@ async function cambiarFecha() {
       poblarSelectReporteCliente(datosGlobal);
       _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
       sincronizarFechasSecundariasConFechaGlobal();
+      void refrescarToolbarCierreProceso();
     } catch (e) {
       console.error(e);
       actualizarEstado(false);
@@ -4852,6 +5011,7 @@ async function cargarDatos() {
       if (document.getElementById('vista-rep-librillos')?.classList.contains('active')) {
         void cargarReporteLibrillosVista();
       }
+      void refrescarToolbarCierreProceso();
     } catch (e) {
       console.error('Error:', e);
       actualizarEstado(false);

@@ -265,7 +265,11 @@ export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
       sucursal_despues: sNue,
       observacion_texto: nObsRaw.replace(/\s+/g, ' ').trim(),
       propietario: String(n.propietario || p.propietario || '').trim(),
+      cliente_destino: String(n.cliente_destino || p.cliente_destino || '').trim(),
+      agrupacion: String(n.agrupacion || p.agrupacion || '').trim(),
+      plaza: String(n.plaza || p.plaza || '').trim(),
       empresa_destino: String(n.empresa_destino || p.empresa_destino || '').trim(),
+      destino: String(n.destino || p.destino || '').trim(),
       identificacion: String(n.identificacion || p.identificacion || '').trim(),
       detectado_en: generado,
       momento_bd: null,
@@ -1110,6 +1114,16 @@ async function consultarLibrillosConCache(fechaISO) {
   const data = await consultarLibrillos(f);
   guardarCacheFecha(f, data);
   return data;
+}
+
+/** Lectura BD sin caché por fecha (cierre proceso, conciliaciones). */
+export async function obtenerLibrillosConsultaBdDirecta(fechaISO) {
+  return consultarLibrillos(String(fechaISO || '').trim());
+}
+
+export function invalidarCacheLibrillosFecha(fechaISO) {
+  const k = claveCacheFecha(String(fechaISO || '').trim());
+  if (k) cachePorFecha.delete(k);
 }
 
 // ── CACHE ─────────────────────────────────────────────────────────────────────

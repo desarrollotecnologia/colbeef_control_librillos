@@ -151,6 +151,16 @@
           <strong class="kpi-val" id="kpi-pend-parte">—</strong>
         </div>
       </div>
+      <div class="panel" style="margin:0 0 12px 0;padding:10px 14px;border:1px solid var(--brd2);background:#fafbf9;border-radius:8px" id="panel-cierre-proceso">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <span class="pt" style="margin:0">Cierre de proceso (crudas)</span>
+          <span id="lbl-estado-cierre" style="font-size:13px;color:var(--tx2)">—</span>
+          <div style="flex:1"></div>
+          <button type="button" class="btn-gen btn-gen-sec" id="btn-cierre-revisar" onclick="revisarPostCierreSucursal()">Revisar sucursal vs cierre</button>
+          <button type="button" class="btn-gen" id="btn-cierre-terminar" onclick="terminarProcesoCierre()">Terminar proceso</button>
+        </div>
+        <p style="margin:8px 0 0;font-size:11px;color:var(--tx2);max-width:960px;line-height:1.35">Al terminar se guarda la sucursal de cada cruda de esta fecha. Cuando quiera, use «Revisar» para comparar con la base: los cambios se suman al historial (reimpresión logística) junto con los del cruce día a día.</p>
+      </div>
       <!-- Historial Librillos -->
       <div id="subtab-librillos">
         <div class="panel">
