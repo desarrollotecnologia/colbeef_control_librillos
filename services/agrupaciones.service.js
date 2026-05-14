@@ -34,6 +34,32 @@ export function normalizarClienteDestino(texto) {
     .trim();
 }
 
+/** Propietario en BD (normalizado) para reglas que priorizan texto de observación. */
+const PROP_NORM_GUTIERREZ_SUAREZ_CAMILO = 'gutierrez suarez camilo andres';
+
+/**
+ * Si el propietario del animal es GUTIERREZ SUAREZ CAMILO ANDRES y la observación
+ * indica retiro de librillos hacia CARVISCOL, el cliente comercial es Uriel Vargas
+ * (derivados) aunque el propietario sea otro — se guía por la observación.
+ * @returns {{ cliente_destino: string, codigo: string, etiqueta: string } | null}
+ */
+export function reglaOverrideGutierrezCarviscol(propietarioRaw, obsRaw) {
+  const prop = normalizarClienteDestino(propietarioRaw);
+  if (prop !== PROP_NORM_GUTIERREZ_SUAREZ_CAMILO) return null;
+  const obsNorm = normalizarObservacionMacro(obsRaw);
+  const t = normalizarClienteDestino(obsNorm || obsRaw);
+  const retLibr =
+    /\bretira(?:r)?\s+librill?os?\b/.test(t) ||
+    /\bretira(?:r)?\s+librilo\b/.test(t) ||
+    /\bretira(?:r)?\s+librill\b/.test(t);
+  if (!retLibr || !t.includes('carviscol')) return null;
+  return {
+    cliente_destino: 'Uriel Vargas',
+    codigo: 'derivados_carnicos',
+    etiqueta: 'Derivados cárnicos',
+  };
+}
+
 /**
  * Coincidencia por alias en un string ya normalizado (observación completa o solo cliente).
  * Prioriza alias más largos; los de ≤4 caracteres solo coinciden en igualdad exacta.

@@ -2,7 +2,8 @@
  * Reglas de negocio — Librillos (fuente de verdad en código, sin depender del Excel).
  *
  * Clasificación por ítem (`agrupacion_codigo`): ver `services/agrupaciones.service.js`
- * y `config/agrupaciones-librillos.json` (orden de reglas y aliases).
+ * y `config/agrupaciones-librillos.json` (orden de reglas y aliases). Excepción explícita:
+ * propietario GUTIERREZ SUAREZ CAMILO ANDRES + observación retiro CARVISCOL → cliente Uriel Vargas / derivados.
  *
  * Resumen del día (`obtenerResumenMacroPorFecha`):
  * - Por defecto se cuentan todos los registros del universo del día (incl. pendientes de parte).

@@ -3,6 +3,7 @@ import {
   agrupacionDesdeObservacionCompleta,
   clasificarAgrupacionConAuditoria,
   normalizarClienteDestino,
+  reglaOverrideGutierrezCarviscol,
 } from './agrupaciones.service.js';
 import { obtenerLibrillosPorFecha } from './librillos.service.js';
 import { obtenerSalidas } from './salidas.service.js';
@@ -40,7 +41,10 @@ function clasificarMovimiento(d) {
     /\bretirar\s+librillos\b/.test(t) ||
     /\bretirar\s+librilo\b/.test(t) ||
     /\bretirar\s+librill\b/.test(t);
-  const ag = agrupacionDesdeObservacionCompleta(obsRaw, clienteParsed);
+  const ovGut = reglaOverrideGutierrezCarviscol(d?.propietario, obsRaw);
+  const ag = ovGut
+    ? { codigo: ovGut.codigo, etiqueta: ovGut.etiqueta }
+    : agrupacionDesdeObservacionCompleta(obsRaw, clienteParsed);
 
   const tieneRetiro =
     retLibr || !!clienteParsed || CODIGOS_RETIRO_COMERCIAL.has(ag.codigo);

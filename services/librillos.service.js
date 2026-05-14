@@ -7,7 +7,10 @@ import {
   columnasTextoPlanFaenaProducto,
   fusionarObservacionClasificacion,
 } from '../config/plan-faena-obs.js';
-import { agrupacionDesdeObservacionCompleta } from './agrupaciones.service.js';
+import {
+  agrupacionDesdeObservacionCompleta,
+  reglaOverrideGutierrezCarviscol,
+} from './agrupaciones.service.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
 import { persistirSucursalesCrudasDesdeSnapshot } from './crudas-sucursal.store.js';
 import {
@@ -1040,12 +1043,17 @@ const consultarLibrillos = async (fecha = null) => {
           obsParte
         );
         const { observacion, cliente_destino, plaza } = parsearObservacion(obsFuente);
-        // Para clasificar, usar el mejor candidato de cliente:
-        // 1) cliente parseado desde "RETIRAR LIBRILLOS"
-        // 2) propietario de la vista cuando el parseo viene vacío.
-        // Esto evita inflar ASURCARNES por fallback en retiros sin cliente explícito.
-        const clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
-        const ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
+        const ovGutCarv = reglaOverrideGutierrezCarviscol(v.nombre_propietario, obsFuente);
+        let clienteClasificacion;
+        let ag;
+        if (ovGutCarv) {
+          clienteClasificacion = ovGutCarv.cliente_destino;
+          ag = { codigo: ovGutCarv.codigo, etiqueta: ovGutCarv.etiqueta };
+        } else {
+          // 1) cliente parseado desde "RETIRAR LIBRILLOS" 2) propietario si parseo vacío.
+          clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
+          ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
+        }
         const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion);
         /** Plaza operativa: primero la plaza parseada desde observación (p.ej. "01014 CAVA"), luego sucursal BD. */
         const plazaFinal = textoNoVacio(plaza, v.sucursal);
