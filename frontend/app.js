@@ -6659,6 +6659,17 @@ function elegirNombreMasCompleto(candidatos, test) {
   return [...hits].sort((a, b) => b.length - a.length)[0];
 }
 
+/** Misma normalización que el backend (`reglaOverrideGutierrezCarviscol`). */
+function propietarioNormEsGutierrezSuarezCamilo(propietarioRaw) {
+  const p = String(propietarioRaw || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  return p === 'gutierrez suarez camilo andres';
+}
+
 function clientePivotMacro(d, nombreGrupo = '') {
   const g = String(nombreGrupo || '').toUpperCase();
   const obsU = String(textoObservacionFuente(d) || '').toUpperCase();
@@ -6673,11 +6684,22 @@ function clientePivotMacro(d, nombreGrupo = '') {
     const esEtiquetaOperativa = (txt) =>
       /\bPLAZA\b|\bCAVA\b|\bRETIRAR?\s+LIBRIL+OS?\b|\bDERIVADOS?\b|\bCARNICOS?\b/.test(String(txt || '').toUpperCase());
 
-    // CARVISCOL → DERIVADOS: si el backend fijó cliente_destino (p. ej. Uriel Vargas), el reporte
-    // agrupa por ese cliente comercial; si no, se mantiene propietario / respaldo (comportamiento anterior).
+    // CARVISCOL → DERIVADOS: cliente comercial Uriel Vargas (no agrupar bajo la palabra «CARVISCOL»).
     if (src.includes('CARVISCOL')) {
       if (cliDest && !esEtiquetaOperativa(cliDest)) return cliDest;
-      return prop || elegirNombreMasCompleto(cand, (s) => /carviscol/i.test(s)) || 'CARVISCOL';
+      const retObs =
+        /\bRETIRAR?\s+LIBRIL+OS?\b/i.test(obsU) ||
+        /\bRETIRAR?\s+LIBRIL+O\b/i.test(obsU) ||
+        /\bRETIRA?\s+LIBRIL+OS?\b/i.test(obsU);
+      if (retObs && propietarioNormEsGutierrezSuarezCamilo(prop)) return 'Uriel Vargas';
+      const sub =
+        (prop && !esEtiquetaOperativa(prop) ? prop : null) ||
+        elegirNombreMasCompleto(cand, (s) => /carviscol/i.test(s));
+      if (sub && !esEtiquetaOperativa(sub) && String(sub).replace(/\s+/g, ' ').trim().toUpperCase() !== 'CARVISCOL') {
+        return sub;
+      }
+      if (retObs) return 'Uriel Vargas';
+      return 'CARVISCOL';
     }
     // Canoniza todas las variantes de "CACUA" hacia la misma etiqueta comercial (como en VBA: RUT/CACUA/CARMEN/LARROTA => RUTH CACUA).
     const hasCacua =
