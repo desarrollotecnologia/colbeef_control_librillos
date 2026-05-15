@@ -5,6 +5,8 @@
     "http://192.168.20.205:8501"
   ],
   "kpiStripTitle": "Plan de faena del día vs insensibilizados: el listado incluye plan∩insens más sacrificio de emergencia ese día (insens en puesto emergencia aunque el plan sea otro día).",
+  "autoRefreshDatosMs": 30000,
+  "autoRefreshObsMs": 20000,
   "kpiLabels": {
     "universo": "En plan de faena",
     "conParte": "Insensibilizados (en listado)",

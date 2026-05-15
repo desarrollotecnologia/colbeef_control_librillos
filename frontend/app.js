@@ -6,10 +6,10 @@ const ANALYTICS_URL = '/api/analytics/event';
 const ANALYTICS_RESUMEN_ADMIN_URL = '/api/analytics/resumen-admin';
 const AUDITORIA_CAMBIOS_URL = '/api/auditoria/cambios';
 
-/** Auto-actualización: listado general e inventario (segundos). Mínimo práctico ~15s. */
-const AUTO_REFRESH_DATOS_MS = 15000;
-/** Detección de cambios en observaciones (toast + datos). Un poco más frecuente. */
-const AUTO_REFRESH_OBS_MS = 10000;
+/** Auto-actualización (ms); se puede sobreescribir desde config-ui.json. */
+let AUTO_REFRESH_DATOS_MS = 30000;
+/** Detección de cambios en observaciones (ms). */
+let AUTO_REFRESH_OBS_MS = 20000;
 /** Heartbeat de uso para estimar tiempo activo en la app. */
 const ANALYTICS_HEARTBEAT_MS = 60000;
 /** html2canvas: scale 2 bloquea el hilo principal mucho tiempo; 1.35 suele verse bien en PDF. */
@@ -1541,6 +1541,9 @@ const DEFAULT_COLBEEF_UI = {
   /** Orígenes permitidos para window.postMessage con el usuario (app Inventarios). Vacío = solo se usa externalLinks. */
   inventariosPostMessageOrigins: [],
   externalLinks: [],
+  /** Menos peticiones a BD = interfaz más fluida (mín. 15000). */
+  autoRefreshDatosMs: 30000,
+  autoRefreshObsMs: 20000,
 };
 let colbeefUiConfig = { ...DEFAULT_COLBEEF_UI };
 
@@ -1561,6 +1564,51 @@ async function cargarConfigUi() {
     colbeefUiConfig = { ...DEFAULT_COLBEEF_UI };
   }
   aplicarConfigUi();
+  reiniciarIntervalosAutoRefresh();
+}
+
+function reiniciarIntervalosAutoRefresh() {
+  const d = Number(colbeefUiConfig.autoRefreshDatosMs);
+  const o = Number(colbeefUiConfig.autoRefreshObsMs);
+  if (Number.isFinite(d) && d >= 15000) AUTO_REFRESH_DATOS_MS = d;
+  if (Number.isFinite(o) && o >= 15000) AUTO_REFRESH_OBS_MS = o;
+  if (_autoGlobalTimer) {
+    clearInterval(_autoGlobalTimer);
+    _autoGlobalTimer = null;
+  }
+  if (_autoObsTimer) {
+    clearInterval(_autoObsTimer);
+    _autoObsTimer = null;
+  }
+  iniciarAutoRefreshGlobal();
+  iniciarWatchObservaciones();
+}
+
+function vistaActivaNombre() {
+  return document.querySelector('.nav-item.active')?.dataset?.vista || 'historial';
+}
+
+/** Tras cargar datos: solo repinta la vista visible (evita 4 tablas grandes en cada cambio de fecha). */
+function aplicarUiTrasCargarDatos(opts = {}) {
+  const v = opts.vista || vistaActivaNombre();
+  actualizarKpiTurno();
+  poblarSelectReporteCliente(datosGlobal);
+  if (v === 'historial') {
+    renderHistorialLib(datosLibrillos);
+    renderHistorialCrudas(datosCrudasHist);
+    void refrescarToolbarCierreProceso();
+    refrescarPanelPlanInsens();
+  } else if (v === 'inventario') {
+    renderInventario();
+  } else if (v === 'clientes') {
+    filtrarCli();
+  } else if (v === 'totales') {
+    void actualizarVistaTotales();
+  } else if (v === 'rep-librillos') {
+    void cargarReporteLibrillosVista();
+  } else if (v === 'historico') {
+    void cargarHistoricoCambios();
+  }
 }
 
 function aplicarConfigUi() {
@@ -1673,15 +1721,19 @@ function irVista(nombre, btn) {
   if (fg) fg.style.display = '';
   if (ba) ba.style.display = '';
   if (nombre === 'inventario') renderInventario();
-  if (nombre === 'historial') {
-    filtrarHistorialLib();
-    filtrarHistorialCrud();
+  else if (nombre === 'historial') {
+    if (datosGlobal?.length) {
+      renderHistorialLib(datosLibrillos);
+      renderHistorialCrudas(datosCrudasHist);
+    } else {
+      filtrarHistorialLib();
+      filtrarHistorialCrud();
+    }
     void refrescarToolbarCierreProceso();
-  }
-  if (nombre === 'clientes') filtrarCli();
-  if (nombre === 'historial' || nombre === 'totales') refrescarPanelPlanInsens();
-  if (nombre === 'totales') void actualizarVistaTotales();
-  if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
+    refrescarPanelPlanInsens();
+  } else if (nombre === 'clientes') filtrarCli();
+  else if (nombre === 'totales') void actualizarVistaTotales();
+  else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
     const fechaBase = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
     const fd = document.getElementById('fecha-historico-desde');
@@ -1917,24 +1969,17 @@ async function refrescarGlobal() {
       invActiva && _autoInvSnapshot && snapNuevo !== _autoInvSnapshot;
 
     datosGlobal = datos;
+    fechaDatosGlobal = fecha;
     datosClientes = datos;
     salidasRegistradas = salidas;
     separarDatos(datos);
     actualizarEstado(true);
-    actualizarKpiTurno();
-    if (histActiva) {
-      renderHistorialLib(datosLibrillos);
-      renderHistorialCrudas(datosCrudasHist);
-    }
-    if (cliActiva) filtrarCli();
     if (huboCambioInv) {
       seleccionados.clear();
       seleccionadosCrud.clear();
       mostrarToast('Inventario actualizado por cambios recientes en observación/salida.', 'ok');
     }
-    if (invActiva) renderInventario();
-    actualizarPanelCuadre();
-    poblarSelectReporteCliente(datos);
+    aplicarUiTrasCargarDatos();
     _autoInvSnapshot = snapNuevo;
   } catch (e) {
     if (e && e.name === 'AbortError') return;
@@ -5029,34 +5074,22 @@ async function cambiarFecha() {
     abortarLibAuto();
     const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
     document.getElementById('pg-sub').textContent = labelFecha(fecha);
-    if (document.getElementById('vista-totales')?.classList.contains('active')) {
-      void actualizarVistaTotales();
-    }
-    if (document.getElementById('vista-rep-librillos')?.classList.contains('active')) {
-      void cargarReporteLibrillosVista();
-    }
     try {
-      const [datos, salidas] = await Promise.all([
+      const [datos, salidas, meta] = await Promise.all([
         fetchPorFecha(fecha),
-        fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
+        fetch(SALIDAS_URL).then((r) => r.json()).catch(() => []),
+        fetchMetaUniverso(fecha),
       ]);
       datosGlobal = datos;
       fechaDatosGlobal = fecha;
       datosClientes = datos;
+      metaUniversoTurno = meta;
       salidasRegistradas = normalizarListaSalidas(salidas);
       separarDatos(datosGlobal);
       actualizarEstado(true);
-      renderHistorialLib(datosLibrillos);
-      actualizarKpiTurno();
-      renderHistorialCrudas(datosCrudasHist);
-      filtrarCli();
-      renderInventario();
-      actualizarPanelCuadre();
-      poblarSelectReporteCliente(datosGlobal);
       _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
       sincronizarFechasSecundariasConFechaGlobal();
-      void refrescarToolbarCierreProceso();
-      await refrescarMetaUniversoTurno();
+      aplicarUiTrasCargarDatos();
     } catch (e) {
       console.error(e);
       actualizarEstado(false);
@@ -5071,33 +5104,21 @@ async function cargarDatos() {
     try {
       abortarLibAuto();
       const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-      const [datos, salidas] = await Promise.all([
+      const [datos, salidas, meta] = await Promise.all([
         fetchPorFecha(fecha),
-        fetch(SALIDAS_URL).then(r => r.json()).catch(() => []),
+        fetch(SALIDAS_URL).then((r) => r.json()).catch(() => []),
+        fetchMetaUniverso(fecha),
       ]);
-      datosGlobal    = datos;
+      datosGlobal = datos;
       fechaDatosGlobal = fecha;
-      datosClientes  = datos;
+      datosClientes = datos;
+      metaUniversoTurno = meta;
       salidasRegistradas = normalizarListaSalidas(salidas);
       separarDatos(datos);
       actualizarEstado(true);
-      renderHistorialLib(datosLibrillos);
-      actualizarKpiTurno();
-      renderHistorialCrudas(datosCrudasHist);
-      filtrarCli();
-      renderInventario();
-      actualizarPanelCuadre();
-      poblarSelectReporteCliente(datos);
       _autoInvSnapshot = snapshotPendientes(datos, salidasRegistradas);
       sincronizarFechasSecundariasConFechaGlobal();
-      if (document.getElementById('vista-totales')?.classList.contains('active')) {
-        void actualizarVistaTotales();
-      }
-      if (document.getElementById('vista-rep-librillos')?.classList.contains('active')) {
-        void cargarReporteLibrillosVista();
-      }
-      void refrescarToolbarCierreProceso();
-      await refrescarMetaUniversoTurno();
+      aplicarUiTrasCargarDatos();
     } catch (e) {
       console.error('Error:', e);
       actualizarEstado(false);
