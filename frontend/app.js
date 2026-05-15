@@ -1158,6 +1158,8 @@ let _autoObsTimer = null;
 let _visCatchupTimer = null;
 let _autoObsSnapshot = '';
 let _obsTextoMapPrev = new Map();
+/** Plan faena vs insensibilización (GET /api/librillos/universo-meta). */
+let metaUniversoTurno = null;
 let historialCambiosObs = [];
 /** IDs (crudas) seleccionados en modal logística para reimprimir etiquetas tras cambio de sucursal. */
 let _seleccionReimpSucursalCrudas = new Set();
@@ -1332,13 +1334,31 @@ function actualizarColumnasRol() {
   });
 }
 
-/** KPI del turno: totales alineados con el listado del API (universo, con parte Colbeef hoy, pendiente parte). */
+/** KPI del turno: plan faena vs insensibilizados (meta API) o fallback al listado. */
 function actualizarKpiTurno() {
   const elPlan = document.getElementById('kpi-plan-total');
   const elCon = document.getElementById('kpi-con-parte');
   const elPend = document.getElementById('kpi-pend-parte');
   const wrap = document.getElementById('kpi-turno');
   if (!elPlan || !elCon || !elPend || !wrap) return;
+  const meta = metaUniversoTurno;
+  if (meta?.filtro_insensibilizacion_activo) {
+    const nPlan = Number(meta.total_plan_faena) || 0;
+    const nList = Number(meta.total_en_listado) || 0;
+    const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
+    if (!nPlan && !nList) {
+      elPlan.textContent = '0';
+      elCon.textContent = '0';
+      elPend.textContent = '0';
+      wrap.classList.add('kpi-turno--empty');
+      return;
+    }
+    wrap.classList.remove('kpi-turno--empty');
+    elPlan.textContent = String(nPlan);
+    elCon.textContent = String(nList);
+    elPend.textContent = String(nSinInsens);
+    return;
+  }
   const datos = Array.isArray(datosGlobal) ? datosGlobal : [];
   const nUniverso = datos.length;
   const nConParte = datos.filter((d) => d?.pendiente_registro_parte !== true).length;
@@ -1510,13 +1530,13 @@ function sincronizarFechaGuiaConFechaGlobal() {
 }
 
 const DEFAULT_COLBEEF_UI = {
-  navHistorialHint: 'Plan faena · parte Colbeef',
+  navHistorialHint: 'Plan faena · insensibilizados',
   kpiStripTitle:
-    'Cifras según la fecha de la barra superior y el listado del API (unión plan de faena + movimiento Colbeef del mismo día cuando aplica).',
+    'Plan de faena del día vs insensibilizados: el listado solo incluye códigos en plan que sí fueron insensibilizados esa fecha.',
   kpiLabels: {
-    universo: 'Animales en listado del día',
-    conParte: 'Con registro Colbeef (hoy)',
-    pendiente: 'Pendiente registro (hoy)',
+    universo: 'En plan de faena',
+    conParte: 'Insensibilizados (en listado)',
+    pendiente: 'En plan sin insensibilizar',
   },
   /** Orígenes permitidos para window.postMessage con el usuario (app Inventarios). Vacío = solo se usa externalLinks. */
   inventariosPostMessageOrigins: [],
@@ -1659,7 +1679,13 @@ function irVista(nombre, btn) {
     void refrescarToolbarCierreProceso();
   }
   if (nombre === 'clientes') filtrarCli();
-  if (nombre === 'totales') void actualizarVistaTotales();
+  if (nombre === 'totales') {
+    refrescarPanelPlanInsens();
+    void actualizarVistaTotales();
+  } else {
+    const pIns = document.getElementById('panel-plan-insens');
+    if (pIns) pIns.style.display = 'none';
+  }
   if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
     const fechaBase = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
@@ -1737,6 +1763,74 @@ async function fetchPorFecha(fecha, opts = {}) {
     throw new Error('Respuesta API inválida');
   }
   return data;
+}
+
+async function fetchMetaUniverso(fecha) {
+  const f = String(fecha || '').trim() || hoyISO();
+  try {
+    const res = await fetch(`${API_URL}/universo-meta?fecha=${encodeURIComponent(f)}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function refrescarMetaUniversoTurno() {
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  metaUniversoTurno = await fetchMetaUniverso(fecha);
+  actualizarKpiTurno();
+  refrescarPanelPlanInsens();
+}
+
+function htmlCuadroPlanVsInsens(meta, fechaLabel = '') {
+  if (!meta?.filtro_insensibilizacion_activo) return '';
+  const nPlan = Number(meta.total_plan_faena) || 0;
+  const nInsens = Number(meta.total_insensibilizados) || 0;
+  const nList = Number(meta.total_en_listado) || 0;
+  const nSin = Number(meta.plan_sin_insensibilizar) || 0;
+  const nExtra = Number(meta.insens_sin_plan) || 0;
+  const pct =
+    nPlan > 0 ? `${Math.round((nList / nPlan) * 1000) / 10}%` : '—';
+  const fechaTxt = fechaLabel ? escapeHtml(fechaLabel) : escapeHtml(String(meta.fecha || ''));
+  return `
+    <div class="plan-insens-cuadro">
+      <p class="plan-insens-lead">
+        Comparación en tiempo real para <strong>${fechaTxt}</strong>.
+        El listado, resumen y tablas solo incluyen animales <strong>en plan de faena</strong> que figuran en
+        <code>trazabilidad_proceso.insensibilizacion</code> ese día (sacrificados / insensibilizados).
+      </p>
+      <div class="tw rep-table-wrap">
+        <table class="dt plan-insens-table" style="max-width:640px">
+          <thead><tr><th>Indicador</th><th>Cantidad</th></tr></thead>
+          <tbody>
+            <tr><td>En plan de faena (fecha plan)</td><td><strong>${nPlan}</strong></td></tr>
+            <tr><td>Insensibilizados (tabla insensibilización)</td><td><strong>${nInsens}</strong></td></tr>
+            <tr class="plan-insens-ok"><td>En listado (plan ∩ insensibilizado)</td><td><strong>${nList}</strong> <span class="plan-insens-pct">(${pct} del plan)</span></td></tr>
+            <tr class="plan-insens-warn"><td>En plan sin insensibilizar (no salen en tablas)</td><td><strong>${nSin}</strong></td></tr>
+            ${nExtra ? `<tr><td>Insensibilizados sin plan ese día</td><td><strong>${nExtra}</strong></td></tr>` : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function refrescarPanelPlanInsens() {
+  const panel = document.getElementById('panel-plan-insens');
+  const body = document.getElementById('panel-plan-insens-body');
+  const lblFecha = document.getElementById('panel-plan-insens-fecha');
+  if (!panel || !body) return;
+  const meta = metaUniversoTurno;
+  const vistaTotales = document.getElementById('vista-totales')?.classList.contains('active');
+  if (!meta?.filtro_insensibilizacion_activo || !vistaTotales) {
+    panel.style.display = 'none';
+    body.innerHTML = '';
+    return;
+  }
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  if (lblFecha) lblFecha.textContent = labelFecha(fecha);
+  body.innerHTML = htmlCuadroPlanVsInsens(meta, labelFecha(fecha));
+  panel.style.display = 'block';
 }
 
 async function fetchSalidas() {
@@ -2176,10 +2270,22 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
     <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
   `;
+  const metaUi =
+    opts.metaUniverso ||
+    opts.resumenMacro?.meta_universo ||
+    (metaUniversoTurno?.fecha === String(opts.fechaReporte || opts.fechaISO || '').trim()
+      ? metaUniversoTurno
+      : null);
+  const cuadroPlan = htmlCuadroPlanVsInsens(metaUi, labelFecha(String(opts.fechaReporte || fechaSel || '')));
+  const metaTotal = metaUi?.filtro_insensibilizacion_activo
+    ? `Animales en resumen (plan ∩ insensibilizado): <strong>${metaUi.total_en_listado ?? totalGeneral}</strong> · En plan: <strong>${metaUi.total_plan_faena ?? '—'}</strong> · Sin insensibilizar: <strong>${metaUi.plan_sin_insensibilizar ?? '—'}</strong>`
+    : `Total consolidado: <strong>${totalGeneral}</strong>`;
+
   return `
+    ${cuadroPlan}
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
-      <p class="rep-bloque-resumen-meta">Total consolidado: <strong>${totalGeneral}</strong></p>
+      <p class="rep-bloque-resumen-meta">${metaTotal}</p>
       <div class="resumen-dia-dos-tablas">
         <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
@@ -2297,13 +2403,19 @@ async function actualizarVistaTotales() {
         if (usarCacheDia) {
           [salidas, resumenMacro] = await Promise.all([fetchSalidas(), fetchResumenMacro(fecha)]);
           datos = datosGlobal;
+          metaUniversoTurno =
+            resumenMacro?.meta_universo || (await fetchMetaUniverso(fecha));
         } else {
           [datos, salidas, resumenMacro] = await Promise.all([
             fetchPorFecha(fecha),
             fetchSalidas(),
             fetchResumenMacro(fecha),
           ]);
+          metaUniversoTurno =
+            resumenMacro?.meta_universo || (await fetchMetaUniverso(fecha));
         }
+        actualizarKpiTurno();
+        refrescarPanelPlanInsens();
         if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
           throw new Error('Resumen macro no disponible');
         }
@@ -2349,6 +2461,7 @@ async function actualizarVistaTotales() {
       ocultarKpis: true,
       modoTotalesSimple: true,
       resumenMacro,
+      metaUniverso: metaUniversoTurno,
     });
     return true;
   });
@@ -4972,6 +5085,7 @@ async function cambiarFecha() {
       _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
       sincronizarFechasSecundariasConFechaGlobal();
       void refrescarToolbarCierreProceso();
+      await refrescarMetaUniversoTurno();
     } catch (e) {
       console.error(e);
       actualizarEstado(false);
@@ -5012,6 +5126,7 @@ async function cargarDatos() {
         void cargarReporteLibrillosVista();
       }
       void refrescarToolbarCierreProceso();
+      await refrescarMetaUniversoTurno();
     } catch (e) {
       console.error('Error:', e);
       actualizarEstado(false);

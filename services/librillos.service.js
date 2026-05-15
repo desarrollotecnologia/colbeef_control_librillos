@@ -29,7 +29,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 2;
+const CACHE_FECHA_ROW_SCHEMA = 3;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -37,6 +37,9 @@ const USE_PLAN_FAENA_UNIVERSE =
 /** Plan ∪ parte Colbeef del mismo día (recomendado): evita quedarse cortos vs. macro/DATOS. */
 const USE_UNION_PARTE_PLAN_DIA =
   process.env.USE_UNION_PARTE_PLAN_DIA === '0' ? false : true;
+/** Plan del día ∩ insensibilizacion.fecha_registro (solo animales sacrificados ese día). */
+const REQUIERE_INSENSIBILIZACION_PLAN_FAENA =
+  process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '0' ? false : true;
 const PLAN_FAENA_FALLBACK_ON_EMPTY =
   process.env.PLAN_FAENA_FALLBACK_ON_EMPTY === '0' ? false : true;
 /** Activar solo si hay archivos en data/ y scripts Python (extract_*.py). Por defecto: solo BD. */
@@ -645,7 +648,33 @@ async function idsPlanFaenaPorFecha(fechaISO) {
     `,
     [fechaISO]
   );
-  return new Set((res.rows || []).map((r) => String(r.id_producto)));
+  return new Set((res.rows || []).map((r) => String(r.id_producto).trim()).filter(Boolean));
+}
+
+/** Animales insensibilizados (sacrificados) según fecha calendario en trazabilidad_proceso.insensibilizacion. */
+async function idsInsensibilizacionPorFecha(fechaISO) {
+  try {
+    const res = await pool.query(
+      `
+      SELECT DISTINCT id_producto::text AS id_producto
+      FROM trazabilidad_proceso.insensibilizacion
+      WHERE fecha_registro = $1::date
+      `,
+      [fechaISO]
+    );
+    return new Set((res.rows || []).map((r) => String(r.id_producto).trim()).filter(Boolean));
+  } catch (err) {
+    console.warn(`⚠️ insensibilizacion (${fechaISO}): ${err.message}`);
+    return new Set();
+  }
+}
+
+function interseccionIdsSets(plan, insens) {
+  const out = [];
+  for (const id of plan) {
+    if (insens.has(id)) out.push(id);
+  }
+  return out.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
 }
 
 /** IDs con movimiento tipo Colbeef ese día (calendario fecha_registro). */
@@ -663,10 +692,18 @@ async function idsParteProductoColbeefDia(fechaISO) {
 }
 
 /**
- * Universo del reporte: plan del día ∪ (opcional) todos los id con parte Colbeef ese día.
- * Orden estable para salida y depuración.
+ * Universo del reporte:
+ * - Con plan + REQUIERE_INSENSIBILIZACION: plan del día ∩ insensibilizados ese día (no entran plan sin sacrificio).
+ * - Si no: plan ∪ (opcional) parte Colbeef ese día.
  */
 async function idsUniversoReporteDia(fechaISO) {
+  if (USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA) {
+    const [plan, insens] = await Promise.all([
+      idsPlanFaenaPorFecha(fechaISO),
+      idsInsensibilizacionPorFecha(fechaISO),
+    ]);
+    return interseccionIdsSets(plan, insens);
+  }
   const merged = new Set();
   if (USE_UNION_PARTE_PLAN_DIA) {
     const [plan, parte] = await Promise.all([
@@ -681,6 +718,40 @@ async function idsUniversoReporteDia(fechaISO) {
   return [...merged].sort((a, b) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
+}
+
+/** Metadatos plan vs insensibilización (KPI / diagnóstico). */
+export async function obtenerMetaUniversoPorFecha(fechaISO) {
+  const fecha = String(fechaISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw new Error('fecha debe ser YYYY-MM-DD');
+  }
+  const [plan, insens, idsListado] = await Promise.all([
+    idsPlanFaenaPorFecha(fecha),
+    idsInsensibilizacionPorFecha(fecha),
+    idsUniversoReporteDia(fecha),
+  ]);
+  let planSinInsens = 0;
+  let planConInsens = 0;
+  plan.forEach((id) => {
+    if (insens.has(id)) planConInsens += 1;
+    else planSinInsens += 1;
+  });
+  let insensSinPlan = 0;
+  insens.forEach((id) => {
+    if (!plan.has(id)) insensSinPlan += 1;
+  });
+  return {
+    fecha,
+    filtro_insensibilizacion_activo:
+      USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
+    total_plan_faena: plan.size,
+    total_insensibilizados: insens.size,
+    total_en_listado: idsListado.length,
+    plan_con_insensibilizacion: planConInsens,
+    plan_sin_insensibilizar: planSinInsens,
+    insens_sin_plan: insensSinPlan,
+  };
 }
 
 /** Última fila del día (tipo Colbeef) por id; solo esos IDs. */
@@ -930,8 +1001,12 @@ const consultarLibrillos = async (fecha = null) => {
             };
           });
           if (COLBEEF_DEBUG) {
+            const modoUniverso =
+              USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA
+                ? 'plan∩insensibilizacion'
+                : `plan${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}`;
             console.log(
-              `🧭 Universo ${fechaISO}: ${idsOrdenados.length} IDs (plan${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}) · con parte tipo ${ID_TIPO_PARTE_COLBEEF} mismo día: ${idsConParte.size}`
+              `🧭 Universo ${fechaISO}: ${idsOrdenados.length} IDs (${modoUniverso}) · con parte tipo ${ID_TIPO_PARTE_COLBEEF} mismo día: ${idsConParte.size}`
             );
           }
         } else if (!PLAN_FAENA_FALLBACK_ON_EMPTY) {
@@ -1268,6 +1343,13 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   };
   resumenLibros.total = resumenLibros.crudos + resumenLibros.cocidos + resumenLibros.derivados;
 
+  let meta_universo = null;
+  try {
+    meta_universo = await obtenerMetaUniversoPorFecha(fecha);
+  } catch {
+    meta_universo = null;
+  }
+
   return {
     fecha,
     total_registros: rows.length,
@@ -1275,9 +1357,11 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     total_pendientes_registro_parte: pendientes,
     categorias,
     resumen_libros: resumenLibros,
+    meta_universo,
     opciones_resumen: {
       solo_parte_dia: RESUMEN_SOLO_PARTE_DIA,
       recodificar_asur_pendiente_a_cocidos: RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
+      requiere_insensibilizacion_plan_faena: REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
     },
   };
 }

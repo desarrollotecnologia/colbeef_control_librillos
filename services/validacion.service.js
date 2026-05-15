@@ -315,6 +315,8 @@ export function obtenerConfigOperacion() {
       process.env.PLAN_FAENA_FALLBACK_ON_EMPTY === '0' ? false : true,
     union_parte_plan_dia:
       process.env.USE_UNION_PARTE_PLAN_DIA === '0' ? false : true,
+    requiere_insensibilizacion_plan_faena:
+      process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '0' ? false : true,
     plan_faena_pfp_text_columns: cols,
     plan_faena_obs_prioridad: String(
       process.env.PLAN_FAENA_OBS_PRIORIDAD || 'plan_first'

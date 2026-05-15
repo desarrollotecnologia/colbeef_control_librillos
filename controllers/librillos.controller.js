@@ -7,6 +7,7 @@ import {
   obtenerStatsUltimos7Dias,
   obtenerCrudasCambioSucursalCruceDiaAnterior,
   fechaTurnoOperativoBogotaISO,
+  obtenerMetaUniversoPorFecha,
 } from '../services/librillos.service.js';
 import { leerSucursalesCrudas } from '../services/crudas-sucursal.store.js';
 import {
@@ -58,6 +59,21 @@ export const getLibrillos = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error al obtener librillos' });
+  }
+};
+
+// GET /api/librillos/universo-meta?fecha=YYYY-MM-DD — plan faena vs insensibilización del día
+export const getUniversoMeta = async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ error: 'Parámetro fecha requerido (YYYY-MM-DD)' });
+    }
+    const data = await obtenerMetaUniversoPorFecha(fecha);
+    return res.json(data);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: error.message || 'Error al obtener meta del universo' });
   }
 };
 

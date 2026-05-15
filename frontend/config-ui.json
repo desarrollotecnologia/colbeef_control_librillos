@@ -1,14 +1,14 @@
 {
-  "navHistorialHint": "Plan faena · parte Colbeef",
+  "navHistorialHint": "Plan faena · insensibilizados",
   "linkColbeefDesdeInventario": "http://192.168.20.137:8080/",
   "inventariosPostMessageOrigins": [
     "http://192.168.20.205:8501"
   ],
-  "kpiStripTitle": "Cifras según la fecha de la barra superior y el listado del API (unión plan de faena + movimiento Colbeef del mismo día cuando aplica).",
+  "kpiStripTitle": "Plan de faena del día vs insensibilizados: el listado solo incluye códigos en plan que sí fueron insensibilizados esa fecha (trazabilidad_proceso.insensibilizacion).",
   "kpiLabels": {
-    "universo": "Animales en listado del día",
-    "conParte": "Con registro Colbeef (hoy)",
-    "pendiente": "Pendiente registro (hoy)"
+    "universo": "En plan de faena",
+    "conParte": "Insensibilizados (en listado)",
+    "pendiente": "En plan sin insensibilizar"
   },
   "externalLinks": [
     {
