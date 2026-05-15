@@ -151,6 +151,13 @@
           <strong class="kpi-val" id="kpi-pend-parte">—</strong>
         </div>
       </div>
+      <div class="panel panel-plan-insens" id="panel-plan-insens" style="display:none;margin:0 0 12px 0;padding:12px 14px;border:1px solid var(--brd2);background:#f8fbf9;border-radius:8px">
+        <div class="ph" style="margin-bottom:8px">
+          <span class="pt" style="margin:0">Plan de faena vs insensibilizados</span>
+          <span id="panel-plan-insens-fecha" style="font-size:12px;color:var(--tx2);margin-left:8px"></span>
+        </div>
+        <div id="panel-plan-insens-body"></div>
+      </div>
       <div class="panel" style="margin:0 0 12px 0;padding:10px 14px;border:1px solid var(--brd2);background:#fafbf9;border-radius:8px" id="panel-cierre-proceso">
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
           <span class="pt" style="margin:0">Cierre de proceso (crudas)</span>
@@ -159,7 +166,7 @@
           <button type="button" class="btn-gen btn-gen-sec" id="btn-cierre-revisar" onclick="revisarPostCierreSucursal()">Revisar sucursal vs cierre</button>
           <button type="button" class="btn-gen" id="btn-cierre-terminar" onclick="terminarProcesoCierre()">Terminar proceso</button>
         </div>
-        <p style="margin:8px 0 0;font-size:11px;color:var(--tx2);max-width:960px;line-height:1.35">El listado del turno solo incluye animales del plan de faena que figuran insensibilizados ese día (<code>trazabilidad_proceso.insensibilizacion</code>). Al terminar proceso se guarda sucursal de crudas; «Revisar» compara con la base actual.</p>
+        <p style="margin:8px 0 0;font-size:11px;color:var(--tx2);max-width:960px;line-height:1.35">El listado incluye plan de faena ∩ insensibilizados ese día, más reses con <strong>sacrificio de emergencia</strong> ese día (<code>insensibilizacion</code> + puesto emergencia) aunque el plan sea de otro día. Al terminar proceso se guarda sucursal de crudas; «Revisar» compara con la base actual.</p>
       </div>
       <!-- Historial Librillos -->
       <div id="subtab-librillos">
@@ -412,13 +419,6 @@
 
     <!-- ═══ TOTALES (consolidado del día; fecha = barra superior) ═══ -->
     <section class="vista" id="vista-totales">
-      <div class="panel panel-plan-insens" id="panel-plan-insens" style="display:none;margin-bottom:12px;padding:12px 14px;border:1px solid var(--brd2);background:#f8fbf9;border-radius:8px">
-        <div class="ph" style="margin-bottom:8px">
-          <span class="pt" style="margin:0">Plan de faena vs insensibilizados</span>
-          <span id="panel-plan-insens-fecha" style="font-size:12px;color:var(--tx2);margin-left:8px"></span>
-        </div>
-        <div id="panel-plan-insens-body"></div>
-      </div>
       <div class="panel" id="rep-preview" style="display:none">
         <div class="ph">
           <span class="pt" id="rep-prev-title">Vista Previa</span>

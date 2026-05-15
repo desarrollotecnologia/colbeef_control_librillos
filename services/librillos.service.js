@@ -21,6 +21,12 @@ import {
   SQL_EXPR_FECHA_PARTE_BOGOTA,
   SQL_WHERE_PARTE_DIA_BOGOTA_P1,
 } from '../config/parte-dia-bogota-sql.js';
+import {
+  INCLUIR_SACRIFICIO_EMERGENCIA,
+  SACRIFICIO_EMERGENCIA_PUESTO_ILIKE,
+  SACRIFICIO_EMERGENCIA_PUESTO_TABLA,
+  columnasNombrePuestoTrabajo,
+} from '../config/sacrificio-emergencia.js';
 
 let cache = { datos: [], ultimaActualizacion: null };
 let cacheTurnoFecha = null;
@@ -29,7 +35,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 3;
+const CACHE_FECHA_ROW_SCHEMA = 4;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -677,6 +683,78 @@ function interseccionIdsSets(plan, insens) {
   return out.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
 }
 
+function unionPlanInsensMasEmergencia(plan, insens, emerg) {
+  const merged = new Set(interseccionIdsSets(plan, insens));
+  if (emerg && emerg.size) {
+    for (const id of emerg) {
+      if (insens.has(id)) merged.add(String(id).trim());
+    }
+  }
+  return [...merged].sort((a, b) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  );
+}
+
+let sqlSacrificioEmergenciaCache = null;
+let sacrificioEmergenciaTablaOk = undefined;
+
+function parseTablaPgCalificada(cualificada) {
+  const s = String(cualificada || '').trim();
+  const m = s.match(/^([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)$/i);
+  if (!m) return null;
+  return { schema: m[1].toLowerCase(), table: m[2].toLowerCase() };
+}
+
+function buildSqlSacrificioEmergencia() {
+  if (sqlSacrificioEmergenciaCache) return sqlSacrificioEmergenciaCache;
+  const tbl = parseTablaPgCalificada(SACRIFICIO_EMERGENCIA_PUESTO_TABLA);
+  if (!tbl) {
+    sqlSacrificioEmergenciaCache = null;
+    return null;
+  }
+  const cols = columnasNombrePuestoTrabajo();
+  if (!cols.length) {
+    sqlSacrificioEmergenciaCache = null;
+    return null;
+  }
+  const condPuesto = cols
+    .map((c) => `COALESCE(pt.${c}, '') ILIKE $2`)
+    .join(' OR ');
+  sqlSacrificioEmergenciaCache = `
+    SELECT DISTINCT i.id_producto::text AS id_producto
+    FROM trazabilidad_proceso.insensibilizacion i
+    INNER JOIN ${tbl.schema}.${tbl.table} pt ON pt.id = i.id_puesto_trabajo
+    WHERE i.fecha_registro = $1::date
+      AND (${condPuesto})
+  `;
+  return sqlSacrificioEmergenciaCache;
+}
+
+/**
+ * Insensibilizados ese día en puesto «sacrificio de emergencia» (plan puede ser otro día).
+ * Usa trazabilidad_proceso.insensibilizacion.id_puesto_trabajo + catálogo de puestos.
+ */
+async function idsSacrificioEmergenciaPorFecha(fechaISO) {
+  if (!INCLUIR_SACRIFICIO_EMERGENCIA) return new Set();
+  const sql = buildSqlSacrificioEmergencia();
+  if (!sql) {
+    console.warn('⚠️ Sacrificio emergencia: tabla/columnas de puesto no configuradas.');
+    return new Set();
+  }
+  try {
+    const res = await pool.query(sql, [fechaISO, SACRIFICIO_EMERGENCIA_PUESTO_ILIKE]);
+    return new Set((res.rows || []).map((r) => String(r.id_producto).trim()).filter(Boolean));
+  } catch (err) {
+    if (sacrificioEmergenciaTablaOk !== false) {
+      sacrificioEmergenciaTablaOk = false;
+      console.warn(
+        `⚠️ Sacrificio emergencia (${fechaISO}): ${err.message} — revise SACRIFICIO_EMERGENCIA_PUESTO_TABLA en .env`
+      );
+    }
+    return new Set();
+  }
+}
+
 /** IDs con movimiento tipo Colbeef ese día (calendario fecha_registro). */
 async function idsParteProductoColbeefDia(fechaISO) {
   const res = await pool.query(
@@ -693,16 +771,17 @@ async function idsParteProductoColbeefDia(fechaISO) {
 
 /**
  * Universo del reporte:
- * - Con plan + REQUIERE_INSENSIBILIZACION: plan del día ∩ insensibilizados ese día (no entran plan sin sacrificio).
+ * - Con plan + REQUIERE_INSENSIBILIZACION: (plan ∩ insens) ∪ emergencia insens ese día.
  * - Si no: plan ∪ (opcional) parte Colbeef ese día.
  */
 async function idsUniversoReporteDia(fechaISO) {
   if (USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA) {
-    const [plan, insens] = await Promise.all([
+    const [plan, insens, emerg] = await Promise.all([
       idsPlanFaenaPorFecha(fechaISO),
       idsInsensibilizacionPorFecha(fechaISO),
+      idsSacrificioEmergenciaPorFecha(fechaISO),
     ]);
-    return interseccionIdsSets(plan, insens);
+    return unionPlanInsensMasEmergencia(plan, insens, emerg);
   }
   const merged = new Set();
   if (USE_UNION_PARTE_PLAN_DIA) {
@@ -726,9 +805,10 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
     throw new Error('fecha debe ser YYYY-MM-DD');
   }
-  const [plan, insens, idsListado] = await Promise.all([
+  const [plan, insens, emerg, idsListado] = await Promise.all([
     idsPlanFaenaPorFecha(fecha),
     idsInsensibilizacionPorFecha(fecha),
+    idsSacrificioEmergenciaPorFecha(fecha),
     idsUniversoReporteDia(fecha),
   ]);
   let planSinInsens = 0;
@@ -738,19 +818,31 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
     else planSinInsens += 1;
   });
   let insensSinPlan = 0;
+  let emergenciaFueraPlan = 0;
   insens.forEach((id) => {
-    if (!plan.has(id)) insensSinPlan += 1;
+    if (!plan.has(id)) {
+      insensSinPlan += 1;
+      if (emerg.has(id)) emergenciaFueraPlan += 1;
+    }
+  });
+  let insensSinPlanSinEmergencia = 0;
+  insens.forEach((id) => {
+    if (!plan.has(id) && !emerg.has(id)) insensSinPlanSinEmergencia += 1;
   });
   return {
     fecha,
     filtro_insensibilizacion_activo:
       USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
+    incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
     total_plan_faena: plan.size,
     total_insensibilizados: insens.size,
+    total_sacrificio_emergencia: emerg.size,
     total_en_listado: idsListado.length,
     plan_con_insensibilizacion: planConInsens,
     plan_sin_insensibilizar: planSinInsens,
     insens_sin_plan: insensSinPlan,
+    emergencia_fuera_plan: emergenciaFueraPlan,
+    insens_sin_plan_sin_emergencia: insensSinPlanSinEmergencia,
   };
 }
 
@@ -954,6 +1046,12 @@ const consultarLibrillos = async (fecha = null) => {
     // Día calendario completo (Bogotá).
     // Si no llega ?fecha, usamos la fecha actual de Bogotá (no la del servidor).
     const fechaISO = fecha || hoyBogotaISO();
+    const emergIdsDia =
+      USE_PLAN_FAENA_UNIVERSE &&
+      REQUIERE_INSENSIBILIZACION_PLAN_FAENA &&
+      INCLUIR_SACRIFICIO_EMERGENCIA
+        ? await idsSacrificioEmergenciaPorFecha(fechaISO)
+        : new Set();
 
     // PASO 1: Universo de filas — con plan activo = ids del plan ∪ (opcional) parte Colbeef del día;
     //          se une la fila parte del mismo día cuando existe (si no, respaldo última obs. o pendiente).
@@ -1003,7 +1101,7 @@ const consultarLibrillos = async (fecha = null) => {
           if (COLBEEF_DEBUG) {
             const modoUniverso =
               USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA
-                ? 'plan∩insensibilizacion'
+                ? `plan∩insens${INCLUIR_SACRIFICIO_EMERGENCIA ? '+emergencia' : ''}`
                 : `plan${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}`;
             console.log(
               `🧭 Universo ${fechaISO}: ${idsOrdenados.length} IDs (${modoUniverso}) · con parte tipo ${ID_TIPO_PARTE_COLBEEF} mismo día: ${idsConParte.size}`
@@ -1165,6 +1263,7 @@ const consultarLibrillos = async (fecha = null) => {
           fecha_ingreso_cava: v.fecha_ingreso_cava || null,
           fecha_salida_cava: v.fecha_salida_cava || null,
           enriquecido: v.enriquecido,
+          sacrificio_emergencia: emergIdsDia.has(String(l.id_producto).trim()),
         };
       })
       .filter((row) =>
@@ -1362,6 +1461,7 @@ export async function obtenerResumenMacroPorFecha(fecha) {
       solo_parte_dia: RESUMEN_SOLO_PARTE_DIA,
       recodificar_asur_pendiente_a_cocidos: RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
       requiere_insensibilizacion_plan_faena: REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
+      incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
     },
   };
 }

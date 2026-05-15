@@ -1679,13 +1679,8 @@ function irVista(nombre, btn) {
     void refrescarToolbarCierreProceso();
   }
   if (nombre === 'clientes') filtrarCli();
-  if (nombre === 'totales') {
-    refrescarPanelPlanInsens();
-    void actualizarVistaTotales();
-  } else {
-    const pIns = document.getElementById('panel-plan-insens');
-    if (pIns) pIns.style.display = 'none';
-  }
+  if (nombre === 'historial' || nombre === 'totales') refrescarPanelPlanInsens();
+  if (nombre === 'totales') void actualizarVistaTotales();
   if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
     const fechaBase = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
@@ -1783,32 +1778,18 @@ async function refrescarMetaUniversoTurno() {
   refrescarPanelPlanInsens();
 }
 
-function htmlCuadroPlanVsInsens(meta, fechaLabel = '') {
+function htmlCuadroPlanVsInsens(meta) {
   if (!meta?.filtro_insensibilizacion_activo) return '';
   const nPlan = Number(meta.total_plan_faena) || 0;
   const nInsens = Number(meta.total_insensibilizados) || 0;
-  const nList = Number(meta.total_en_listado) || 0;
-  const nSin = Number(meta.plan_sin_insensibilizar) || 0;
-  const nExtra = Number(meta.insens_sin_plan) || 0;
-  const pct =
-    nPlan > 0 ? `${Math.round((nList / nPlan) * 1000) / 10}%` : '—';
-  const fechaTxt = fechaLabel ? escapeHtml(fechaLabel) : escapeHtml(String(meta.fecha || ''));
   return `
     <div class="plan-insens-cuadro">
-      <p class="plan-insens-lead">
-        Comparación en tiempo real para <strong>${fechaTxt}</strong>.
-        El listado, resumen y tablas solo incluyen animales <strong>en plan de faena</strong> que figuran en
-        <code>trazabilidad_proceso.insensibilizacion</code> ese día (sacrificados / insensibilizados).
-      </p>
       <div class="tw rep-table-wrap">
-        <table class="dt plan-insens-table" style="max-width:640px">
+        <table class="dt plan-insens-table" style="max-width:520px">
           <thead><tr><th>Indicador</th><th>Cantidad</th></tr></thead>
           <tbody>
             <tr><td>En plan de faena (fecha plan)</td><td><strong>${nPlan}</strong></td></tr>
             <tr><td>Insensibilizados (tabla insensibilización)</td><td><strong>${nInsens}</strong></td></tr>
-            <tr class="plan-insens-ok"><td>En listado (plan ∩ insensibilizado)</td><td><strong>${nList}</strong> <span class="plan-insens-pct">(${pct} del plan)</span></td></tr>
-            <tr class="plan-insens-warn"><td>En plan sin insensibilizar (no salen en tablas)</td><td><strong>${nSin}</strong></td></tr>
-            ${nExtra ? `<tr><td>Insensibilizados sin plan ese día</td><td><strong>${nExtra}</strong></td></tr>` : ''}
           </tbody>
         </table>
       </div>
@@ -1821,15 +1802,15 @@ function refrescarPanelPlanInsens() {
   const lblFecha = document.getElementById('panel-plan-insens-fecha');
   if (!panel || !body) return;
   const meta = metaUniversoTurno;
-  const vistaTotales = document.getElementById('vista-totales')?.classList.contains('active');
-  if (!meta?.filtro_insensibilizacion_activo || !vistaTotales) {
+  const vistaHistorial = document.getElementById('vista-historial')?.classList.contains('active');
+  if (!meta?.filtro_insensibilizacion_activo || !vistaHistorial) {
     panel.style.display = 'none';
     body.innerHTML = '';
     return;
   }
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
   if (lblFecha) lblFecha.textContent = labelFecha(fecha);
-  body.innerHTML = htmlCuadroPlanVsInsens(meta, labelFecha(fecha));
+  body.innerHTML = htmlCuadroPlanVsInsens(meta);
   panel.style.display = 'block';
 }
 
@@ -2270,19 +2251,9 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
     <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
   `;
-  const metaUi =
-    opts.metaUniverso ||
-    opts.resumenMacro?.meta_universo ||
-    (metaUniversoTurno?.fecha === String(opts.fechaReporte || opts.fechaISO || '').trim()
-      ? metaUniversoTurno
-      : null);
-  const cuadroPlan = htmlCuadroPlanVsInsens(metaUi, labelFecha(String(opts.fechaReporte || fechaSel || '')));
-  const metaTotal = metaUi?.filtro_insensibilizacion_activo
-    ? `Animales en resumen (plan ∩ insensibilizado): <strong>${metaUi.total_en_listado ?? totalGeneral}</strong> · En plan: <strong>${metaUi.total_plan_faena ?? '—'}</strong> · Sin insensibilizar: <strong>${metaUi.plan_sin_insensibilizar ?? '—'}</strong>`
-    : `Total consolidado: <strong>${totalGeneral}</strong>`;
+  const metaTotal = `Total consolidado: <strong>${totalGeneral}</strong>`;
 
   return `
-    ${cuadroPlan}
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
       <p class="rep-bloque-resumen-meta">${metaTotal}</p>
