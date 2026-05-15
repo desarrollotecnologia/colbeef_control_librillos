@@ -1342,20 +1342,13 @@ function actualizarKpiTurno() {
   const wrap = document.getElementById('kpi-turno');
   if (!elPlan || !elCon || !elPend || !wrap) return;
   const meta = metaUniversoTurno;
-  if (meta?.filtro_insensibilizacion_activo) {
+  if (meta && Number(meta.total_plan_faena) > 0) {
     const nPlan = Number(meta.total_plan_faena) || 0;
-    const nList = Number(meta.total_en_listado) || 0;
+    const nInsens = Number(meta.plan_con_insensibilizacion) || 0;
     const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
-    if (!nPlan && !nList) {
-      elPlan.textContent = '0';
-      elCon.textContent = '0';
-      elPend.textContent = '0';
-      wrap.classList.add('kpi-turno--empty');
-      return;
-    }
     wrap.classList.remove('kpi-turno--empty');
     elPlan.textContent = String(nPlan);
-    elCon.textContent = String(nList);
+    elCon.textContent = String(nInsens);
     elPend.textContent = String(nSinInsens);
     return;
   }
@@ -1831,9 +1824,11 @@ async function refrescarMetaUniversoTurno() {
 }
 
 function htmlCuadroPlanVsInsens(meta) {
-  if (!meta?.filtro_insensibilizacion_activo) return '';
+  if (!meta || !Number(meta.total_plan_faena)) return '';
   const nPlan = Number(meta.total_plan_faena) || 0;
-  const nInsens = Number(meta.total_insensibilizados) || 0;
+  const nInsens = Number(meta.plan_con_insensibilizacion) || 0;
+  const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
+  const nListado = Number(meta.total_en_listado) || 0;
   return `
     <div class="plan-insens-cuadro">
       <div class="tw rep-table-wrap">
@@ -1841,7 +1836,9 @@ function htmlCuadroPlanVsInsens(meta) {
           <thead><tr><th>Indicador</th><th>Cantidad</th></tr></thead>
           <tbody>
             <tr><td>En plan de faena (fecha plan)</td><td><strong>${nPlan}</strong></td></tr>
-            <tr><td>Insensibilizados (tabla insensibilización)</td><td><strong>${nInsens}</strong></td></tr>
+            <tr><td>Ya insensibilizados (en plan)</td><td><strong>${nInsens}</strong></td></tr>
+            <tr><td>En plan sin insensibilizar</td><td><strong>${nSinInsens}</strong></td></tr>
+            <tr><td>En listado / resumen (clasificados)</td><td><strong>${nListado}</strong></td></tr>
           </tbody>
         </table>
       </div>
@@ -1855,7 +1852,7 @@ function refrescarPanelPlanInsens() {
   if (!panel || !body) return;
   const meta = metaUniversoTurno;
   const vistaHistorial = document.getElementById('vista-historial')?.classList.contains('active');
-  if (!meta?.filtro_insensibilizacion_activo || !vistaHistorial) {
+  if (!meta || !Number(meta.total_plan_faena) || !vistaHistorial) {
     panel.style.display = 'none';
     body.innerHTML = '';
     return;
@@ -2181,30 +2178,19 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       ? Number(rm?.categorias?.estilo_bogota ?? 0)
       : (baseLista || []).filter(esCrudaEstiloBogotaLch).length;
 
-  /** Conteo por registro (agrupacion_codigo del API) = lo que ves en inventario/clientes. */
-  const usarConteoPorRegistro = (baseLista || []).length > 0;
-  const vAsurGlo = usarConteoPorRegistro
-    ? (mapAgr.get('asurcarnes_glo') || 0)
-    : Number(rm?.categorias?.asurcarnes_glo || 0);
-  const vAsurCol = usarConteoPorRegistro
-    ? (mapAgr.get('asurcarnescol') || 0)
-    : Number(rm?.categorias?.asurcarnescol || 0);
-  const vGlobal = usarConteoPorRegistro
-    ? (mapAgr.get('global_hides') || 0)
-    : Number(rm?.categorias?.global_hides || 0);
-  const vAsur = usarConteoPorRegistro ? (mapAgr.get('asurcarnes') || 0) : Number(rm?.categorias?.asurcarnes || 0);
-  const vCat = usarConteoPorRegistro ? (mapAgr.get('cat') || 0) : Number(rm?.categorias?.cat || 0);
-  const vDeriv = usarConteoPorRegistro
-    ? (mapAgr.get('derivados_carnicos') || 0)
-    : Number(rm?.categorias?.derivados || 0);
-  const totalCocidos = usarConteoPorRegistro ? (mapAgr.get('cocidos') || 0) : Number(rm?.categorias?.cocidos || 0);
+  /** Conteo por agrupacion_codigo del plan completo (misma fuente que listado / API). */
+  const vAsurGlo = mapAgr.get('asurcarnes_glo') || 0;
+  const vAsurCol = mapAgr.get('asurcarnescol') || 0;
+  const vGlobal = mapAgr.get('global_hides') || 0;
+  const vAsur = mapAgr.get('asurcarnes') || 0;
+  const vCat = mapAgr.get('cat') || 0;
+  const vDeriv = mapAgr.get('derivados_carnicos') || 0;
+  const totalCocidos = mapAgr.get('cocidos') || 0;
   const vOtros = mapAgr.get('otros') || 0;
   const vSinDestino = mapAgr.get('sin_destino') || 0;
 
-  const totalLibros = (rm && !usarSoloLibrillos)
-    ? Number(rm?.categorias?.total || 0)
-    : (baseLista || []).length;
-  const totalGeneral = totalLibros;
+  const nPlanFaena = Number(opts?.metaUniverso?.total_plan_faena || rm?.categorias?.total_plan_faena || 0);
+  const totalGeneral = (baseLista || []).length || nPlanFaena || Number(rm?.categorias?.total || 0);
   const fechaSel =
     String(opts.fechaReporte || opts.fechaISO || '').trim() ||
     document.getElementById('fecha-global')?.value ||
@@ -2308,10 +2294,13 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       ? `Total consolidado: <strong>${totalGeneral}</strong> · plan faena: <strong>${nPlan}</strong>`
       : `Total consolidado: <strong>${totalGeneral}</strong>`;
 
+  const cuadroPlan = opts?.metaUniverso ? htmlCuadroPlanVsInsens(opts.metaUniverso) : '';
+
   return `
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
       <p class="rep-bloque-resumen-meta">${metaTotal}</p>
+      ${cuadroPlan}
       <div class="resumen-dia-dos-tablas">
         <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">

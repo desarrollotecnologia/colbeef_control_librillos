@@ -37,7 +37,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 6;
+const CACHE_FECHA_ROW_SCHEMA = 7;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -46,8 +46,8 @@ const USE_PLAN_FAENA_UNIVERSE =
 const USE_UNION_PARTE_PLAN_DIA =
   process.env.USE_UNION_PARTE_PLAN_DIA === '0' ? false : true;
 /**
- * Plan del día ∩ insensibilizacion (solo sacrificados). Por defecto OFF: entra todo el plan del día
- * y se clasifica al cargar (comportamiento operativo / cuadro Totales).
+ * Si =1, el KPI puede mostrar además el subconjunto plan∩insens (solo informativo).
+ * El listado y el resumen del día usan SIEMPRE todo el plan de faena del día.
  */
 const REQUIERE_INSENSIBILIZACION_PLAN_FAENA =
   process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '1';
@@ -833,33 +833,36 @@ async function idsParteProductoColbeefDia(fechaISO) {
 }
 
 /**
- * Universo del reporte:
- * - Con plan + REQUIERE_INSENSIBILIZACION: (plan ∩ insens) ∪ emergencia insens ese día.
- * - Si no: plan ∪ (opcional) parte Colbeef ese día.
+ * Universo operativo del día: todo el plan de faena (+ parte del día opcional + emergencia fuera de plan).
+ * No se limita a insensibilizados: el resumen por agrupación debe reflejar el plan planteado.
  */
 async function idsUniversoReporteDia(fechaISO) {
-  if (USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA) {
-    const [plan, insens, emerg] = await Promise.all([
-      idsPlanFaenaPorFecha(fechaISO),
-      idsInsensibilizacionPorFecha(fechaISO),
-      idsSacrificioEmergenciaPorFecha(fechaISO),
-    ]);
-    return unionPlanInsensMasEmergencia(plan, insens, emerg);
-  }
   const merged = new Set();
+  const plan = await idsPlanFaenaPorFecha(fechaISO);
+  plan.forEach((id) => merged.add(id));
   if (USE_UNION_PARTE_PLAN_DIA) {
-    const [plan, parte] = await Promise.all([
-      idsPlanFaenaPorFecha(fechaISO),
-      idsParteProductoColbeefDia(fechaISO),
-    ]);
-    plan.forEach((id) => merged.add(id));
+    const parte = await idsParteProductoColbeefDia(fechaISO);
     parte.forEach((id) => merged.add(id));
-  } else {
-    (await idsPlanFaenaPorFecha(fechaISO)).forEach((id) => merged.add(id));
+  }
+  if (INCLUIR_SACRIFICIO_EMERGENCIA) {
+    const emerg = await idsSacrificioEmergenciaPorFecha(fechaISO);
+    for (const id of emerg) {
+      if (!plan.has(id)) merged.add(String(id).trim());
+    }
   }
   return [...merged].sort((a, b) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
+}
+
+/** Subconjunto informativo plan ∩ insens (+ emergencia), solo para KPI / diagnóstico. */
+async function idsUniversoPlanInsensListado(fechaISO) {
+  const [plan, insens, emerg] = await Promise.all([
+    idsPlanFaenaPorFecha(fechaISO),
+    idsInsensibilizacionPorFecha(fechaISO),
+    idsSacrificioEmergenciaPorFecha(fechaISO),
+  ]);
+  return unionPlanInsensMasEmergencia(plan, insens, emerg);
 }
 
 /** Metadatos plan vs insensibilización (KPI / diagnóstico). */
@@ -868,11 +871,12 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
     throw new Error('fecha debe ser YYYY-MM-DD');
   }
-  const [plan, insens, emerg, idsListado] = await Promise.all([
+  const [plan, insens, emerg, idsListado, idsPlanInsens] = await Promise.all([
     idsPlanFaenaPorFecha(fecha),
     idsInsensibilizacionPorFecha(fecha),
     idsSacrificioEmergenciaPorFecha(fecha),
     idsUniversoReporteDia(fecha),
+    idsUniversoPlanInsensListado(fecha),
   ]);
   let planSinInsens = 0;
   let planConInsens = 0;
@@ -894,13 +898,14 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
   });
   return {
     fecha,
-    filtro_insensibilizacion_activo:
-      USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
+    filtro_insensibilizacion_activo: false,
+    universo_plan_completo: true,
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
     total_plan_faena: plan.size,
     total_insensibilizados: insens.size,
     total_sacrificio_emergencia: emerg.size,
     total_en_listado: idsListado.length,
+    total_plan_interseccion_insens: idsPlanInsens.length,
     plan_con_insensibilizacion: planConInsens,
     plan_sin_insensibilizar: planSinInsens,
     insens_sin_plan: insensSinPlan,
@@ -1110,9 +1115,7 @@ const consultarLibrillos = async (fecha = null) => {
     // Si no llega ?fecha, usamos la fecha actual de Bogotá (no la del servidor).
     const fechaISO = fecha || hoyBogotaISO();
     const emergIdsDia =
-      USE_PLAN_FAENA_UNIVERSE &&
-      REQUIERE_INSENSIBILIZACION_PLAN_FAENA &&
-      INCLUIR_SACRIFICIO_EMERGENCIA
+      USE_PLAN_FAENA_UNIVERSE && INCLUIR_SACRIFICIO_EMERGENCIA
         ? await idsSacrificioEmergenciaPorFecha(fechaISO)
         : new Set();
 
@@ -1162,10 +1165,7 @@ const consultarLibrillos = async (fecha = null) => {
             };
           });
           if (COLBEEF_DEBUG) {
-            const modoUniverso =
-              USE_PLAN_FAENA_UNIVERSE && REQUIERE_INSENSIBILIZACION_PLAN_FAENA
-                ? `plan∩insens${INCLUIR_SACRIFICIO_EMERGENCIA ? '+emergencia' : ''}`
-                : `plan${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}`;
+            const modoUniverso = `plan completo${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}${INCLUIR_SACRIFICIO_EMERGENCIA ? '+emerg fuera plan' : ''}`;
             console.log(
               `🧭 Universo ${fechaISO}: ${idsOrdenados.length} IDs (${modoUniverso}) · con parte tipo ${ID_TIPO_PARTE_COLBEEF} mismo día: ${idsConParte.size}`
             );
@@ -1439,6 +1439,13 @@ function sinMarcasDiacriticos(s) {
 }
 
 export async function obtenerResumenMacroPorFecha(fecha) {
+  /** Mismo universo que el listado: plan faena completo del día (clasificación por agrupacion_codigo). */
+  let meta_universo = null;
+  try {
+    meta_universo = await obtenerMetaUniversoPorFecha(fecha);
+  } catch {
+    meta_universo = null;
+  }
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
   /**
@@ -1503,6 +1510,7 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     derivados: Number(countCod.get('derivados_carnicos') || 0),
     cocidos: Number(countCod.get('cocidos') || 0),
     total: rows.length,
+    total_plan_faena: Number(meta_universo?.total_plan_faena) || rows.length,
   };
 
   const resumenLibros = {
@@ -1511,13 +1519,6 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     derivados: categorias.derivados + categorias.asurcarnes + categorias.global_hides,
   };
   resumenLibros.total = resumenLibros.crudos + resumenLibros.cocidos + resumenLibros.derivados;
-
-  let meta_universo = null;
-  try {
-    meta_universo = await obtenerMetaUniversoPorFecha(fecha);
-  } catch {
-    meta_universo = null;
-  }
 
   return {
     fecha,
