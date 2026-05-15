@@ -35,7 +35,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 4;
+const CACHE_FECHA_ROW_SCHEMA = 5;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -221,9 +221,76 @@ function sucursalNormLibrilloRow(d) {
     .trim();
 }
 
+function listarCambiosSucursalEntreFilas(
+  arrReferencia,
+  arrRevision,
+  fechaReferencia,
+  fechaRevision,
+  { soloCrudas = true, idsPermitidos = null } = {}
+) {
+  const mapRef = new Map();
+  for (const d of arrReferencia || []) {
+    if (!d) continue;
+    const id = String(d.id_producto ?? '').trim();
+    if (!id) continue;
+    if (idsPermitidos && !idsPermitidos.has(id)) continue;
+    if (soloCrudas && !esCrudaHistorialLibrillosRow(d)) continue;
+    mapRef.set(id, d);
+  }
+  const generado = new Date().toISOString();
+  const cambios = [];
+  for (const n of arrRevision || []) {
+    if (!n) continue;
+    const id = String(n.id_producto ?? '').trim();
+    if (!id) continue;
+    if (idsPermitidos && !idsPermitidos.has(id)) continue;
+    if (soloCrudas && !esCrudaHistorialLibrillosRow(n)) continue;
+    const p = mapRef.get(id);
+    if (!p) continue;
+    const sAnt = sucursalNormLibrilloRow(p);
+    const sNue = sucursalNormLibrilloRow(n);
+    if (sAnt === sNue) continue;
+    const obsAnt = String(p.observaciones ?? p.observacion ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const obsNue = String(n.observaciones ?? n.observacion ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    cambios.push({
+      id,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: sAnt || '—',
+      despues: sNue || '—',
+      sucursal_antes: sAnt,
+      sucursal_despues: sNue,
+      observacion_antes: obsAnt,
+      observacion_despues: obsNue,
+      observacion_texto: obsNue,
+      propietario: String(n.propietario || p.propietario || '').trim(),
+      cliente_destino: String(n.cliente_destino || p.cliente_destino || '').trim(),
+      agrupacion: String(n.agrupacion || p.agrupacion || '').trim(),
+      plaza: String(n.plaza || p.plaza || '').trim(),
+      empresa_destino: String(n.empresa_destino || p.empresa_destino || '').trim(),
+      destino: String(n.destino || p.destino || '').trim(),
+      identificacion: String(n.identificacion || p.identificacion || '').trim(),
+      detectado_en: generado,
+      momento_bd: null,
+      fuente: 'bd_servidor',
+      fecha_referencia: fechaReferencia,
+      fecha_revision: fechaRevision,
+    });
+  }
+  return cambios;
+}
+
+function listarCambiosSucursalCrudasEntreFilas(arrReferencia, arrRevision, fechaReferencia, fechaRevision) {
+  return listarCambiosSucursalEntreFilas(arrReferencia, arrRevision, fechaReferencia, fechaRevision, {
+    soloCrudas: true,
+  });
+}
+
 /**
  * Crudas con cambio de sucursal respecto al día anterior (mismo criterio que el modal logística).
- * Consulta `consultarLibrillos` dos veces **sin** pasar por el caché HTTP del servidor, para reflejar la BD al instante.
  */
 export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
   const fecha = String(fechaISO || '').trim();
@@ -244,54 +311,45 @@ export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
     consultarLibrillos(fecha),
     consultarLibrillos(ayer),
   ]);
-  const arrHoy = Array.isArray(datosHoy) ? datosHoy : [];
-  const arrAyer = Array.isArray(datosAyer) ? datosAyer : [];
-  const mapAyer = new Map();
-  for (const d of arrAyer) {
-    if (!d || !esCrudaHistorialLibrillosRow(d)) continue;
-    const id = String(d.id_producto ?? '').trim();
-    if (id) mapAyer.set(id, d);
-  }
-
-  const generado = new Date().toISOString();
-  const cambios = [];
-  for (const n of arrHoy) {
-    if (!n || !esCrudaHistorialLibrillosRow(n)) continue;
-    const id = String(n.id_producto ?? '').trim();
-    if (!id) continue;
-    const p = mapAyer.get(id);
-    if (!p) continue;
-    const sAnt = sucursalNormLibrilloRow(p);
-    const sNue = sucursalNormLibrilloRow(n);
-    if (sAnt === sNue) continue;
-    const nObsRaw = String(n.observaciones ?? n.observacion ?? '');
-    cambios.push({
-      id,
-      tipo: 'CRUDA_SUCURSAL',
-      antes: sAnt || '—',
-      despues: sNue || '—',
-      sucursal_antes: sAnt,
-      sucursal_despues: sNue,
-      observacion_texto: nObsRaw.replace(/\s+/g, ' ').trim(),
-      propietario: String(n.propietario || p.propietario || '').trim(),
-      cliente_destino: String(n.cliente_destino || p.cliente_destino || '').trim(),
-      agrupacion: String(n.agrupacion || p.agrupacion || '').trim(),
-      plaza: String(n.plaza || p.plaza || '').trim(),
-      empresa_destino: String(n.empresa_destino || p.empresa_destino || '').trim(),
-      destino: String(n.destino || p.destino || '').trim(),
-      identificacion: String(n.identificacion || p.identificacion || '').trim(),
-      detectado_en: generado,
-      momento_bd: null,
-      fuente: 'bd_servidor',
-      cruce_dia_anterior: ayer,
-    });
-  }
+  const cambios = listarCambiosSucursalCrudasEntreFilas(
+    datosAyer,
+    datosHoy,
+    ayer,
+    fecha
+  );
 
   return {
     fecha,
     fecha_referencia_anterior: ayer,
     cambios,
-    generado_en: generado,
+    generado_en: new Date().toISOString(),
+  };
+}
+
+/**
+ * Revisión logística: códigos del plan de faena de un día vs sucursal en BD en fecha de revisión (p. ej. plan 13-may, revisión 14-may).
+ */
+export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fechaRevisionISO) {
+  const fechaPlan = String(fechaPlanISO || '').trim();
+  const fechaRevision = String(fechaRevisionISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
+    throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
+  }
+  const planSet = await idsPlanFaenaPorFecha(fechaPlan);
+  const [arrPlan, arrRevision] = await Promise.all([
+    consultarLibrillosConCache(fechaPlan),
+    consultarLibrillosConCache(fechaRevision),
+  ]);
+  const cambios = listarCambiosSucursalEntreFilas(arrPlan, arrRevision, fechaPlan, fechaRevision, {
+    soloCrudas: false,
+    idsPermitidos: planSet,
+  });
+  return {
+    fecha_plan: fechaPlan,
+    fecha_revision: fechaRevision,
+    total_plan_faena: planSet.size,
+    cambios,
+    generado_en: new Date().toISOString(),
   };
 }
 
@@ -1214,10 +1272,10 @@ const consultarLibrillos = async (fecha = null) => {
         const obsParte = String(l.observaciones || '');
         const textoRetiro = retiroObsMap.get(String(l.id_producto)) || '';
         const textoPlan = planObsMap.get(String(l.id_producto)) || '';
-        const textoBase = textoRetiro || textoPlan;
         const { obsFuente, observacion_fuente } = fusionarObservacionClasificacion(
-          textoBase,
-          obsParte
+          textoPlan,
+          obsParte,
+          textoRetiro
         );
         const { observacion, cliente_destino, plaza } = parsearObservacion(obsFuente);
         const ovGutCarv = reglaOverrideGutierrezCarviscol(v.nombre_propietario, obsFuente);
@@ -1414,9 +1472,7 @@ export async function obtenerResumenMacroPorFecha(fecha) {
     let cod = recod ? 'cocidos' : codRaw;
     // Misma regla que `codigoAgrupacionMacro` / cuadro HTML: obs vacía + fallback asurcarnes
     // cuenta en cocidos para el resumen (alineación con macro Excel tipo INICIO).
-    const obsResumen = String(d?.observaciones ?? d?.observacion ?? '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const obsResumen = textoMarcasResumenLibrillo(d);
     if (cod === 'asurcarnes' && !obsResumen) cod = 'cocidos';
     inc(cod);
   });

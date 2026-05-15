@@ -1735,11 +1735,11 @@ function irVista(nombre, btn) {
   else if (nombre === 'totales') void actualizarVistaTotales();
   else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
-    const fechaBase = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+    const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
     const fd = document.getElementById('fecha-historico-desde');
     const fh = document.getElementById('fecha-historico-hasta');
-    if (fd) fd.value = fechaBase;
-    if (fh) fh.value = fechaBase;
+    if (fd) fd.value = diaAnteriorISO(fechaRevision);
+    if (fh) fh.value = fechaRevision;
     void cargarHistoricoCambios();
   }
   trackVista(nombre);
@@ -2140,11 +2140,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     conteoAgr.set(c, Number(conteoAgr.get(c) || 0) + Number(n || 0));
   };
   (baseLista || []).forEach((d) => {
-    const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
-    const obs = textoObservacionFuente(d);
-    const obsVacia = !obs;
-    const codAjustado = (codRaw === 'asurcarnes' && obsVacia) ? 'cocidos' : codRaw;
-    sumarAgr(codigosBase.has(codAjustado) ? codAjustado : codRaw, 1);
+    sumarAgr(codigoAgrupacionMacro(d), 1);
   });
   const mapAgr = conteoAgr;
   const textoObsResumenLch = (d) =>
@@ -2185,13 +2181,23 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       ? Number(rm?.categorias?.estilo_bogota ?? 0)
       : (baseLista || []).filter(esCrudaEstiloBogotaLch).length;
 
-  const vAsurGlo = rm ? Number(rm?.categorias?.asurcarnes_glo || 0) : (mapAgr.get('asurcarnes_glo') || 0);
-  const vAsurCol = rm ? Number(rm?.categorias?.asurcarnescol || 0) : (mapAgr.get('asurcarnescol') || 0);
-  const vGlobal = rm ? Number(rm?.categorias?.global_hides || 0) : (mapAgr.get('global_hides') || 0);
-  const vAsur = rm ? Number(rm?.categorias?.asurcarnes || 0) : (mapAgr.get('asurcarnes') || 0);
-  const vCat = rm ? Number(rm?.categorias?.cat || 0) : (mapAgr.get('cat') || 0);
-  const vDeriv = rm ? Number(rm?.categorias?.derivados || 0) : (mapAgr.get('derivados_carnicos') || 0);
-  const totalCocidos = rm ? Number(rm?.categorias?.cocidos || 0) : (mapAgr.get('cocidos') || 0);
+  /** Conteo por registro (agrupacion_codigo del API) = lo que ves en inventario/clientes. */
+  const usarConteoPorRegistro = (baseLista || []).length > 0;
+  const vAsurGlo = usarConteoPorRegistro
+    ? (mapAgr.get('asurcarnes_glo') || 0)
+    : Number(rm?.categorias?.asurcarnes_glo || 0);
+  const vAsurCol = usarConteoPorRegistro
+    ? (mapAgr.get('asurcarnescol') || 0)
+    : Number(rm?.categorias?.asurcarnescol || 0);
+  const vGlobal = usarConteoPorRegistro
+    ? (mapAgr.get('global_hides') || 0)
+    : Number(rm?.categorias?.global_hides || 0);
+  const vAsur = usarConteoPorRegistro ? (mapAgr.get('asurcarnes') || 0) : Number(rm?.categorias?.asurcarnes || 0);
+  const vCat = usarConteoPorRegistro ? (mapAgr.get('cat') || 0) : Number(rm?.categorias?.cat || 0);
+  const vDeriv = usarConteoPorRegistro
+    ? (mapAgr.get('derivados_carnicos') || 0)
+    : Number(rm?.categorias?.derivados || 0);
+  const totalCocidos = usarConteoPorRegistro ? (mapAgr.get('cocidos') || 0) : Number(rm?.categorias?.cocidos || 0);
   const vOtros = mapAgr.get('otros') || 0;
   const vSinDestino = mapAgr.get('sin_destino') || 0;
 
@@ -2389,7 +2395,7 @@ function sincronizarFechasSecundariasConFechaGlobal() {
   if (ha) ha.value = fg;
   const hd = document.getElementById('fecha-historico-desde');
   const hh = document.getElementById('fecha-historico-hasta');
-  if (hd) hd.value = fg;
+  if (hd) hd.value = diaAnteriorISO(fg);
   if (hh) hh.value = fg;
 }
 
@@ -4548,6 +4554,16 @@ function normalizarObsHistorico(txt) {
     .toUpperCase();
 }
 
+function esAltaTurnoSinCambioReal(item, antes, despues, sucursalAntes, sucursalDespues) {
+  const accion = String(item?.accion || '').trim();
+  if (accion !== 'crear_en_turno') return false;
+  const obsAntes = normalizarObsHistorico(antes);
+  const obsDespues = normalizarObsHistorico(despues);
+  const sucAntes = normalizarObsHistorico(sucursalAntes);
+  const sucDespues = normalizarObsHistorico(sucursalDespues);
+  return !obsAntes && !obsDespues && !sucAntes && !!sucDespues;
+}
+
 function normalizarCambioHistorico(item) {
   const antes = textoObsHistorico(item?.antes);
   const despues = textoObsHistorico(item?.despues);
@@ -4564,6 +4580,10 @@ function normalizarCambioHistorico(item) {
   const momento = fechaIso ? formatFecha(fechaIso) : '—';
   const obsCambio = antesNorm !== despuesNorm;
   const sucCambio = sucAntesNorm !== sucDespuesNorm;
+  const accion = String(item?.accion || '').trim();
+  const fuenteHistorico = 'auditoria';
+  const esCambioReal =
+    (obsCambio || sucCambio) && !esAltaTurnoSinCambioReal(item, antes, despues, sucursalAntes, sucursalDespues);
   return {
     id: String(item?.id || ''),
     fecha: fechaIso,
@@ -4574,9 +4594,13 @@ function normalizarCambioHistorico(item) {
     despues,
     sucursalAntes,
     sucursalDespues,
-    esCambioRealObservacion: obsCambio || sucCambio,
+    accion,
+    esCambioRealObservacion: esCambioReal,
+    esCambioSucursalRevision: false,
     tipo,
     tipoLabel: tipo === 'cruda' ? 'CRUDAS' : (tipo === 'vacia' ? 'VACIA' : 'OTRO'),
+    fuenteHistorico,
+    fuenteLabel: 'Auditoría',
     searchText: [
       idProducto,
       usuario,
@@ -4587,17 +4611,80 @@ function normalizarCambioHistorico(item) {
       tipo,
       fechaIso,
       momento,
+      accion,
+      fuenteHistorico,
     ].join(' ').toLowerCase(),
   };
+}
+
+function normalizarCambioHistoricoCruce(c, meta) {
+  const obsAntes = String(c?.observacion_antes || '').trim();
+  const obsDespues = String(c?.observacion_despues || c?.observacion_texto || '').trim();
+  const sAnt = String(c?.sucursal_antes || '').trim();
+  const sDes = String(c?.sucursal_despues || '').trim();
+  const tipo = tipoResultadoHistorico(obsAntes, obsDespues);
+  const fechaPlan = String(meta?.fecha_plan || '').trim();
+  const fechaRev = String(meta?.fecha_revision || '').trim();
+  const momento = fechaRev
+    ? `Revisión ${labelFecha(fechaRev)} (plan ${labelFecha(fechaPlan)})`
+    : 'Revisión BD';
+  return {
+    id: `cruce_${String(c?.id || '')}_${fechaPlan}_${fechaRev}`,
+    fecha: String(meta?.generado_en || '').trim(),
+    momento,
+    usuario: '(BD)',
+    idProducto: String(c?.id || '').trim(),
+    antes: obsAntes || '—',
+    despues: obsDespues || '—',
+    sucursalAntes: sAnt || '—',
+    sucursalDespues: sDes || '—',
+    accion: 'cruce_sucursal',
+    esCambioRealObservacion: true,
+    esCambioSucursalRevision: true,
+    tipo,
+    tipoLabel: tipo === 'cruda' ? 'CRUDAS' : (tipo === 'vacia' ? 'VACIA' : 'SUCURSAL'),
+    fuenteHistorico: 'cruce_plan_revision',
+    fuenteLabel: 'Cruce plan',
+    searchText: [
+      c?.id,
+      obsAntes,
+      obsDespues,
+      sAnt,
+      sDes,
+      tipo,
+      fechaPlan,
+      fechaRev,
+      'cruce',
+    ].join(' ').toLowerCase(),
+  };
+}
+
+function fusionarHistoricoCambios(filasAuditoria, filasCruce) {
+  const porClave = new Map();
+  const clave = (r) =>
+    `${String(r.idProducto || '').trim()}|${normalizarObsHistorico(r.sucursalAntes)}|${normalizarObsHistorico(r.sucursalDespues)}`;
+  for (const r of filasCruce || []) {
+    if (!r?.idProducto) continue;
+    porClave.set(clave(r), r);
+  }
+  for (const r of filasAuditoria || []) {
+    if (!r?.idProducto) continue;
+    const k = clave(r);
+    if (r.esCambioSucursalRevision && porClave.has(k)) continue;
+    if (!porClave.has(k) || r.fuenteHistorico === 'cruce_plan_revision') porClave.set(k, r);
+  }
+  return [...porClave.values()].sort((a, b) => Date.parse(b.fecha || 0) - Date.parse(a.fecha || 0));
 }
 
 function htmlFilaHistoricoCambio(r) {
   const cls = r.tipo === 'cruda' ? 'row-hist-cruda' : (r.tipo === 'vacia' ? 'row-hist-vacia' : 'row-hist-otro');
   const badgeCls = r.tipo === 'cruda' ? 'hist-badge-cruda' : (r.tipo === 'vacia' ? 'hist-badge-vacia' : 'hist-badge-otro');
+  const fuenteCls = r.fuenteHistorico === 'cruce_plan_revision' ? 'hist-badge-cruce' : 'hist-badge-aud';
   const sAnt = r.sucursalAntes || '—';
   const sDes = r.sucursalDespues || '—';
   return `<tr class="${cls}">
       <td>${escapeHtml(r.momento)}</td>
+      <td><span class="hist-badge ${fuenteCls}" title="${escapeHtml(r.fuenteHistorico || '')}">${escapeHtml(r.fuenteLabel || '—')}</span></td>
       <td>${escapeHtml(r.usuario)}</td>
       <td>${escapeHtml(r.idProducto || '—')}</td>
       <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 120))}</td>
@@ -4614,7 +4701,7 @@ function pintarTablaHistoricoCambios(gen) {
   if (!tbody) return;
   const rows = historicoCambiosFiltrados;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin cambios en el rango seleccionado</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Sin cambios en el rango seleccionado</td></tr>';
     return;
   }
   if (rows.length <= HIST_RENDER_SYNC_MAX) {
@@ -4662,12 +4749,14 @@ function pintarTablaHistoricoCrudas(gen) {
   const tbody = document.getElementById('tbody-historico-crudas');
   const chkAll = document.getElementById('chk-historico-crudas');
   if (!tbody) return;
-  const rows = historicoCambiosFiltrados.filter((x) => x.tipo === 'cruda' && x.idProducto);
+  const rows = historicoCambiosFiltrados.filter(
+    (x) => x.idProducto && (x.tipo === 'cruda' || x.esCambioSucursalRevision)
+  );
   if (!rows.length) {
     historicoCrudasSeleccionadas.clear();
     if (chkAll) chkAll.checked = false;
     actualizarContadorHistoricoCrudas();
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin cambios a crudas en el rango</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin crudas ni cambios de sucursal del plan en el rango</td></tr>';
     return;
   }
   rows.forEach((r) => {
@@ -4729,13 +4818,17 @@ function toggleSeleccionHistoricoCruda(id, chk) {
   if (chk?.checked) historicoCrudasSeleccionadas.add(k);
   else historicoCrudasSeleccionadas.delete(k);
   actualizarContadorHistoricoCrudas();
-  const rows = historicoCambiosFiltrados.filter((x) => x.tipo === 'cruda' && x.idProducto);
+  const rows = historicoCambiosFiltrados.filter(
+    (x) => x.idProducto && (x.tipo === 'cruda' || x.esCambioSucursalRevision)
+  );
   const chkAll = document.getElementById('chk-historico-crudas');
   if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
 }
 
 function toggleTodasHistoricoCrudas(chkAll) {
-  const rows = historicoCambiosFiltrados.filter((x) => x.tipo === 'cruda' && x.idProducto);
+  const rows = historicoCambiosFiltrados.filter(
+    (x) => x.idProducto && (x.tipo === 'cruda' || x.esCambioSucursalRevision)
+  );
   if (chkAll?.checked) rows.forEach((r) => historicoCrudasSeleccionadas.add(r.idProducto));
   else rows.forEach((r) => historicoCrudasSeleccionadas.delete(r.idProducto));
   pintarTablaHistoricoCrudas();
@@ -4750,19 +4843,28 @@ function seleccionarTodosHistoricoCrudas() {
 async function cargarHistoricoCambios() {
   return runWithAppLoader('Cargando historico de cambios...', async () => {
     const t0 = Date.now();
-    const desde = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
-    const hasta = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
-    if (!desde || !hasta) {
-      mostrarToast('Selecciona fecha desde y hasta para el historico', 'err');
+    const fechaPlan = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
+    const fechaRevision = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
+    if (!fechaPlan || !fechaRevision) {
+      mostrarToast('Selecciona día del plan (desde) y día de revisión (hasta)', 'err');
       return;
     }
-    if (desde > hasta) {
-      mostrarToast('La fecha desde no puede ser mayor que hasta', 'err');
+    if (fechaPlan > fechaRevision) {
+      mostrarToast('El día del plan no puede ser posterior al día de revisión', 'err');
       return;
     }
     clearTimeout(_histSearchDebounceT);
     _histSearchDebounceT = null;
-    const q = new URLSearchParams({ desde, hasta, modulo: 'planillaje', limit: '1000' });
+    const qAud = new URLSearchParams({
+      desde: fechaPlan,
+      hasta: fechaRevision,
+      modulo: 'planillaje',
+      limit: '400',
+    });
+    const qCruce = new URLSearchParams({
+      fecha_plan: fechaPlan,
+      fecha_revision: fechaRevision,
+    });
     const headers = { Accept: 'application/json' };
     try {
       const key = String(localStorage.getItem(LS_ANALYTICS_ADMIN_KEY) || '').trim();
@@ -4770,23 +4872,46 @@ async function cargarHistoricoCambios() {
     } catch {
       // ignore
     }
-    const res = await fetch(`${AUDITORIA_CAMBIOS_URL}?${q.toString()}`, { headers });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = payload?.error || `HTTP ${res.status}`;
-      if (res.status === 403) {
+    const [resAud, resCruce] = await Promise.all([
+      fetch(`${AUDITORIA_CAMBIOS_URL}?${qAud.toString()}`, { headers }),
+      fetch(`${API_URL}/cambios-sucursal-revision?${qCruce.toString()}`, { headers }),
+    ]);
+    const payloadAud = await resAud.json().catch(() => ({}));
+    const payloadCruce = await resCruce.json().catch(() => ({}));
+    if (!resAud.ok && !resCruce.ok) {
+      const msg = payloadAud?.error || payloadCruce?.error || `HTTP ${resAud.status}`;
+      if (resAud.status === 403) {
         mostrarToast('Sin permisos para ver historico de auditoria. Configurar acceso en servidor.', 'err');
       } else {
         mostrarToast(`No se pudo cargar el historico: ${msg}`, 'err');
       }
       return;
     }
-    historicoCambios = (Array.isArray(payload?.items) ? payload.items : [])
-      .map(normalizarCambioHistorico)
-      .filter((r) => r.esCambioRealObservacion)
-      .sort((a, b) => Date.parse(b.fecha || 0) - Date.parse(a.fecha || 0));
+    const filasAud = resAud.ok
+      ? (Array.isArray(payloadAud?.items) ? payloadAud.items : [])
+          .map(normalizarCambioHistorico)
+          .filter((r) => r.esCambioRealObservacion)
+      : [];
+    const filasCruce = resCruce.ok
+      ? (Array.isArray(payloadCruce?.cambios) ? payloadCruce.cambios : []).map((c) =>
+          normalizarCambioHistoricoCruce(c, payloadCruce)
+        )
+      : [];
+    if (!resAud.ok) {
+      mostrarToast('Auditoría no disponible; mostrando solo cruce plan → revisión', 'warn');
+    }
+    if (!resCruce.ok) {
+      mostrarToast('Cruce de sucursal no disponible; mostrando solo auditoría', 'warn');
+    }
+    historicoCambios = fusionarHistoricoCambios(filasAud, filasCruce);
     const lbl = document.getElementById('historico-rango-label');
-    if (lbl) lbl.textContent = `Rango: ${labelFecha(desde)} a ${labelFecha(hasta)} · ${historicoCambios.length} cambios`;
+    const nCruce = filasCruce.length;
+    const nAud = filasAud.length;
+    if (lbl) {
+      lbl.textContent =
+        `Plan ${labelFecha(fechaPlan)} → revisión ${labelFecha(fechaRevision)} · ` +
+        `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría)`;
+    }
     filtrarHistoricoCambios();
     const ms = Math.max(0, Date.now() - t0);
     enviarEventoAnalytics({
@@ -4794,10 +4919,12 @@ async function cargarHistoricoCambios() {
       viewName: 'historico',
       durationMs: ms,
       meta: {
-        desde,
-        hasta,
+        fecha_plan: fechaPlan,
+        fecha_revision: fechaRevision,
         total: historicoCambios.length,
-        totalApi: Number(payload?.total || historicoCambios.length),
+        totalCruce: nCruce,
+        totalAuditoria: nAud,
+        total_plan: Number(payloadCruce?.total_plan_faena || 0),
       },
     });
   });

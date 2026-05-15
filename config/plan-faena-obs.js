@@ -52,40 +52,64 @@ function textoIndicaRetiroLibrillos(s) {
 }
 
 /**
- * @param {string} textoPlan
- * @param {string} obsParte
- * @returns {{ obsFuente: string, observacion_fuente: 'plan_faena'|'a_parte_producto'|'plan_faena+parte' }}
+ * @param {string} textoPlan — texto del plan de faena (columnas PFP o Excel local)
+ * @param {string} obsParte — observaciones del parte Colbeef del día
+ * @param {string} [textoRetiro] — retiro desde archivo local (opcional); no debe reemplazar al plan
+ * @returns {{ obsFuente: string, observacion_fuente: string }}
  */
-export function fusionarObservacionClasificacion(textoPlan, obsParte) {
+export function fusionarObservacionClasificacion(textoPlan, obsParte, textoRetiro = '') {
   const tp = String(textoPlan || '')
     .replace(/\s+/g, ' ')
     .trim();
   const op = String(obsParte || '')
     .replace(/\s+/g, ' ')
     .trim();
+  const tr = String(textoRetiro || '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const mode = prioridadObsPlanVsParte();
+
+  let obsFuente = '';
+  let observacion_fuente = 'a_parte_producto';
 
   if (mode === 'merge') {
     const merged = [tp, op].filter(Boolean).join(' ');
-    let fuente = 'a_parte_producto';
-    if (tp && op) fuente = 'plan_faena+parte';
-    else if (tp) fuente = 'plan_faena';
-    return { obsFuente: merged, observacion_fuente: fuente };
+    obsFuente = merged;
+    observacion_fuente = 'a_parte_producto';
+    if (tp && op) observacion_fuente = 'plan_faena+parte';
+    else if (tp) observacion_fuente = 'plan_faena';
+  } else if (mode === 'parte_first') {
+    if (op) {
+      obsFuente = op;
+      observacion_fuente = 'a_parte_producto';
+    } else if (tp) {
+      obsFuente = tp;
+      observacion_fuente = 'plan_faena';
+    }
+  } else {
+    // plan_first: si el plan trae texto logístico sin retiro pero el parte sí lo tiene,
+    // clasificar con el parte (evita cocidos masivos cuando PLAN_FAENA_PFP_TEXT_COLUMNS rellena tp).
+    if (tp && !textoIndicaRetiroLibrillos(tp) && textoIndicaRetiroLibrillos(op)) {
+      obsFuente = op;
+      observacion_fuente = 'a_parte_producto';
+    } else if (tp) {
+      obsFuente = tp;
+      observacion_fuente = 'plan_faena';
+    } else if (op) {
+      obsFuente = op;
+      observacion_fuente = 'a_parte_producto';
+    }
   }
 
-  if (mode === 'parte_first') {
-    if (op) return { obsFuente: op, observacion_fuente: 'a_parte_producto' };
-    if (tp) return { obsFuente: tp, observacion_fuente: 'plan_faena' };
-    return { obsFuente: '', observacion_fuente: 'a_parte_producto' };
+  // Retiro local solo si plan+parte no trajeron instrucción RETIRAR LIBRILLOS
+  if (tr) {
+    if (textoIndicaRetiroLibrillos(obsFuente)) {
+      return { obsFuente, observacion_fuente };
+    }
+    if (textoIndicaRetiroLibrillos(tr) || !obsFuente.trim()) {
+      return { obsFuente: tr, observacion_fuente: 'retiro_archivo' };
+    }
   }
 
-  // plan_first: si el plan trae texto logístico sin retiro pero el parte sí lo tiene,
-  // clasificar con el parte (evita cocidos masivos cuando PLAN_FAENA_PFP_TEXT_COLUMNS rellena tp).
-  if (tp && !textoIndicaRetiroLibrillos(tp) && textoIndicaRetiroLibrillos(op)) {
-    return { obsFuente: op, observacion_fuente: 'a_parte_producto' };
-  }
-
-  if (tp) return { obsFuente: tp, observacion_fuente: 'plan_faena' };
-  if (op) return { obsFuente: op, observacion_fuente: 'a_parte_producto' };
-  return { obsFuente: '', observacion_fuente: 'a_parte_producto' };
+  return { obsFuente, observacion_fuente };
 }

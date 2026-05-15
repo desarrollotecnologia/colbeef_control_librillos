@@ -6,6 +6,7 @@ import {
   obtenerObservacionesPorFecha,
   obtenerStatsUltimos7Dias,
   obtenerCrudasCambioSucursalCruceDiaAnterior,
+  obtenerCambiosSucursalRevisionPlanFaena,
   fechaTurnoOperativoBogotaISO,
   obtenerMetaUniversoPorFecha,
 } from '../services/librillos.service.js';
@@ -163,6 +164,26 @@ export const getAuditoriaClasificacion = async (req, res) => {
 // GET /api/librillos/config — parámetros operativos del backend
 export const getConfigOperacion = (req, res) => {
   res.json(obtenerConfigOperacion());
+};
+
+// GET /api/librillos/cambios-sucursal-revision?fecha_plan=&fecha_revision= — crudas plan faena vs revisión
+export const getCambiosSucursalRevisionPlan = async (req, res) => {
+  try {
+    const fechaPlan = String(req.query?.fecha_plan || '').trim();
+    const fechaRevision = String(req.query?.fecha_revision || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
+      return res.status(400).json({
+        error: 'Parámetros fecha_plan y fecha_revision requeridos (YYYY-MM-DD)',
+      });
+    }
+    const datos = await obtenerCambiosSucursalRevisionPlanFaena(fechaPlan, fechaRevision);
+    return res.json(datos);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      error: error.message || 'Error al obtener cambios de sucursal (revisión plan faena)',
+    });
+  }
 };
 
 // GET /api/librillos/crudas-cambio-sucursal?fecha=YYYY-MM-DD — BD: crudas con sucursal distinta vs día anterior
