@@ -316,7 +316,7 @@ export function obtenerConfigOperacion() {
     union_parte_plan_dia:
       process.env.USE_UNION_PARTE_PLAN_DIA === '0' ? false : true,
     requiere_insensibilizacion_plan_faena:
-      process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '0' ? false : true,
+      process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '1',
     incluir_sacrificio_emergencia:
       process.env.INCLUIR_SACRIFICIO_EMERGENCIA === '0' ? false : true,
     plan_faena_pfp_text_columns: cols,

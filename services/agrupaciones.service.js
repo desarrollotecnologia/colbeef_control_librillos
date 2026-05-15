@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { textoIndicaRetiroLibrillos } from '../config/plan-faena-obs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, '../config/agrupaciones-librillos.json');
@@ -167,6 +168,23 @@ function fallbackComercial(cfg) {
 
 export function agrupacionDesdeObservacionCompleta(obsRaw, clienteDestinoFallback = '') {
   return clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback);
+}
+
+/**
+ * Clasificación al entrar al plan de faena (aún sin parte/insens): usa texto del plan
+ * sin exigir «RETIRAR LIBRILLOS» en BD; si falta, se antepone para aplicar reglas comerciales.
+ */
+export function agrupacionDesdeTextoPlanFaena(textoPlan, clienteDestinoFallback = '') {
+  const raw = String(textoPlan || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!raw) {
+    return { ...fallbackComercial(cargarConfig()), regla: 'plan_texto_vacio' };
+  }
+  const paraClasificar = textoIndicaRetiroLibrillos(raw)
+    ? raw
+    : `RETIRAR LIBRILLOS ${raw}`;
+  return clasificarAgrupacionConAuditoria(paraClasificar, clienteDestinoFallback);
 }
 
 /**

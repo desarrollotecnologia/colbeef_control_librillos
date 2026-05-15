@@ -6,9 +6,11 @@ import path from 'node:path';
 import {
   columnasTextoPlanFaenaProducto,
   fusionarObservacionClasificacion,
+  textoIndicaRetiroLibrillos,
 } from '../config/plan-faena-obs.js';
 import {
   agrupacionDesdeObservacionCompleta,
+  agrupacionDesdeTextoPlanFaena,
   reglaOverrideGutierrezCarviscol,
 } from './agrupaciones.service.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
@@ -35,7 +37,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 5;
+const CACHE_FECHA_ROW_SCHEMA = 6;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -43,9 +45,12 @@ const USE_PLAN_FAENA_UNIVERSE =
 /** Plan ∪ parte Colbeef del mismo día (recomendado): evita quedarse cortos vs. macro/DATOS. */
 const USE_UNION_PARTE_PLAN_DIA =
   process.env.USE_UNION_PARTE_PLAN_DIA === '0' ? false : true;
-/** Plan del día ∩ insensibilizacion.fecha_registro (solo animales sacrificados ese día). */
+/**
+ * Plan del día ∩ insensibilizacion (solo sacrificados). Por defecto OFF: entra todo el plan del día
+ * y se clasifica al cargar (comportamiento operativo / cuadro Totales).
+ */
 const REQUIERE_INSENSIBILIZACION_PLAN_FAENA =
-  process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '0' ? false : true;
+  process.env.REQUIERE_INSENSIBILIZACION_PLAN_FAENA === '1';
 const PLAN_FAENA_FALLBACK_ON_EMPTY =
   process.env.PLAN_FAENA_FALLBACK_ON_EMPTY === '0' ? false : true;
 /** Activar solo si hay archivos en data/ y scripts Python (extract_*.py). Por defecto: solo BD. */
@@ -1287,7 +1292,16 @@ const consultarLibrillos = async (fecha = null) => {
         } else {
           // 1) cliente parseado desde "RETIRAR LIBRILLOS" 2) propietario si parseo vacío.
           clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
-          ag = agrupacionDesdeObservacionCompleta(obsFuente, clienteClasificacion);
+          const planTxt = textoPlan.trim();
+          const parteConRetiro = textoIndicaRetiroLibrillos(obsFuente);
+          if (planTxt && !parteConRetiro) {
+            ag = agrupacionDesdeTextoPlanFaena(planTxt, clienteClasificacion);
+          } else {
+            ag = agrupacionDesdeObservacionCompleta(
+              obsFuente || planTxt,
+              clienteClasificacion
+            );
+          }
         }
         const destinoFinal = textoNoVacio(v.destino, v.empresa_destino, clienteClasificacion);
         /** Plaza operativa: primero la plaza parseada desde observación (p.ej. "01014 CAVA"), luego sucursal BD. */

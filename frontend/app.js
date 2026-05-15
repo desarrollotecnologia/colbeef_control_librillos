@@ -2302,7 +2302,11 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     <tr class="resumen-dia-coc"><td>COCIDOS</td><td>${totalCocidos}</td></tr>
     <tr class="resumen-dia-total"><td>TOTAL</td><td>${totalGeneral}</td></tr>
   `;
-  const metaTotal = `Total consolidado: <strong>${totalGeneral}</strong>`;
+  const nPlan = Number(opts?.metaUniverso?.total_plan_faena || 0);
+  const metaTotal =
+    nPlan > 0 && nPlan !== totalGeneral
+      ? `Total consolidado: <strong>${totalGeneral}</strong> · plan faena: <strong>${nPlan}</strong>`
+      : `Total consolidado: <strong>${totalGeneral}</strong>`;
 
   return `
     <div class="rep-bloque-resumen-lch">
@@ -8053,10 +8057,11 @@ function mostrarPreview(titulo, fechaLabel, fechaISO, datos, salidas, opts = {})
   if (titleEl) titleEl.textContent = titulo;
   prev.style.display = 'block';
   const kpis = opts.ocultarKpis ? '' : kpisGeneral(datos, { desde: opts.desde, hasta: opts.hasta });
-  const bloqueLch = opts.incluirResumenLibrosChunchullas
+  const bloqueLch = opts.incluirResumenLibrosChunchullasCrudas
     ? htmlResumenLibrosChunchullasCrudas(datos, {
         fechaReporte: fechaISO,
         resumenMacro: opts.resumenMacro,
+        metaUniverso: opts.metaUniverso,
         soloLibrillos: opts?.destino === 'reportes',
       })
     : '';

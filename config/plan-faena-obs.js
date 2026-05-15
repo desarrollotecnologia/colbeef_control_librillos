@@ -33,7 +33,7 @@ export function prioridadObsPlanVsParte() {
 }
 
 /** Misma familia que `retLibr` en agrupaciones: detecta instrucción de retiro en texto libre. */
-function textoIndicaRetiroLibrillos(s) {
+export function textoIndicaRetiroLibrillos(s) {
   const t = String(s || '')
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
