@@ -2431,8 +2431,12 @@ async function actualizarVistaTotales() {
         }
         actualizarKpiTurno();
         refrescarPanelPlanInsens();
-        if (!resumenMacro || !resumenMacro.categorias || !resumenMacro.resumen_libros) {
-          throw new Error('Resumen macro no disponible');
+        if (!resumenMacro?.categorias) {
+          resumenMacro = {
+            categorias: { total: datos.length },
+            resumen_libros: {},
+            meta_universo: metaUniversoTurno,
+          };
         }
       } else {
         const dias = rangoFechasISO(desde, hasta).length;
@@ -2474,7 +2478,8 @@ async function actualizarVistaTotales() {
       vistaReporte: 'resumen',
       incluirResumenLibrosChunchullas: true,
       ocultarKpis: true,
-      modoTotalesSimple: true,
+      omitTablaProcesados: true,
+      universoPlanCompleto: true,
       resumenMacro,
       metaUniverso: metaUniversoTurno,
     });
@@ -6713,8 +6718,21 @@ function kpisGeneral(datos, opts = {}) {
 }
 
 /** Mismas tablas tipo pivote «LISTA LIBRILLOS ASURCARNESGLO» (CLIENTE/PLAZA × CANTIDAD) que el Excel. */
+function filasListasAgrupacionComercial(datos, opts = {}) {
+  if (opts.universoPlanCompleto) {
+    return (datos || []).filter((d) => {
+      const c = String(d?.agrupacion_codigo || '').trim();
+      return Boolean(c) && c !== 'otros';
+    });
+  }
+  return (datos || []).filter(esLibrilloParaReporteAgrupacion);
+}
+
 function debeIncluirListasPorAgrupacion(opts, datos) {
   if (opts.incluirListasPorAgrupacion === false) return false;
+  if (opts.universoPlanCompleto) {
+    return filasListasAgrupacionComercial(datos, opts).length > 0;
+  }
   if (!(datos || []).some((d) => esLibrilloParaReporteAgrupacion(d))) return false;
   const desde = opts?.desde;
   const hasta = opts?.hasta;
@@ -6738,7 +6756,10 @@ function cuerpoReporteGeneral(datos, fechaISO, salidas, opts = {}) {
   const t = tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts);
   let listasAgrup = '';
   if (debeIncluirListasPorAgrupacion(opts, datos)) {
-    listasAgrup = htmlReporteAgrupaciones(datos, fechaISO, salidas, { soloResumen: true });
+    listasAgrup = htmlReporteAgrupaciones(datos, fechaISO, salidas, {
+      soloResumen: true,
+      universoPlanCompleto: opts.universoPlanCompleto === true,
+    });
   }
   if (!t && !listasAgrup) return '<p style="color:var(--tx3);padding:12px">Sin datos</p>';
   const sep =
@@ -6767,7 +6788,10 @@ function cuerpoReporteGeneralExport(datos, fechaISO, salidas, opts = {}) {
   if (debeIncluirListasPorAgrupacion(opts, datos)) {
     listasAgrup =
       `<div style="margin:28px 0 10px;padding-bottom:8px;border-bottom:2px solid #ccc"><strong style="font-size:15px;color:#8b0000">Listas por agrupación</strong> <span style="font-size:12px;color:#666">(CLIENTE / PLAZA × CANTIDAD, tipo Excel)</span></div>` +
-      htmlReporteAgrupacionesExport(datos, fechaISO, salidas, { soloResumen: true });
+      htmlReporteAgrupacionesExport(datos, fechaISO, salidas, {
+        soloResumen: true,
+        universoPlanCompleto: opts.universoPlanCompleto === true,
+      });
   }
   if (!inner && !listasAgrup) return '<p>Sin datos</p>';
   const librIng = filtrarPorIngresoRango(datos.filter(esVistaHistorialLibrillos), desde, hasta);
@@ -7497,6 +7521,7 @@ function htmlPivotPropietarioPlaza(rows, colorTotal, opts = {}) {
 }
 
 function tablaMovimientoResumenDiaHTML(datos, fechaISO, salidas, opts = {}) {
+  if (opts.omitTablaProcesados) return '';
   const desde = opts?.desde || fechaISO;
   const hasta = opts?.hasta || fechaISO;
   const modoTotalesSimple = !!opts?.modoTotalesSimple;
@@ -7720,7 +7745,7 @@ function htmlReporteAgrupaciones(datos, fechaISO, salidas, opts = {}) {
   const soloResumen = opts.soloResumen === true;
   const omitTotalesAside = opts.omitTotalesAside === true;
   const soloEtiqueta = opts.soloEtiqueta ? String(opts.soloEtiqueta) : null;
-  let libs = [...datos.filter(esLibrilloParaReporteAgrupacion)].sort((a, b) =>
+  let libs = [...filasListasAgrupacionComercial(datos, opts)].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
   if (soloEtiqueta) {
     const t = String(soloEtiqueta);
@@ -7788,7 +7813,7 @@ function htmlReporteAgrupacionesExport(datos, fechaISO, salidas, opts = {}) {
   const soloResumen = opts.soloResumen === true;
   const omitTotalesAside = opts.omitTotalesAside === true;
   const soloEtiqueta = opts.soloEtiqueta ? String(opts.soloEtiqueta) : null;
-  let libs = [...datos.filter(esLibrilloParaReporteAgrupacion)].sort((a, b) =>
+  let libs = [...filasListasAgrupacionComercial(datos, opts)].sort((a, b) =>
     String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true }));
   if (soloEtiqueta) {
     const t = String(soloEtiqueta);
@@ -8046,7 +8071,10 @@ function mostrarPreview(titulo, fechaLabel, fechaISO, datos, salidas, opts = {})
   if (titleEl) titleEl.textContent = titulo;
   prev.style.display = 'block';
   const kpis = opts.ocultarKpis ? '' : kpisGeneral(datos, { desde: opts.desde, hasta: opts.hasta });
-  const bloqueLch = opts.incluirResumenLibrosChunchullasCrudas
+  const incluirCuadrosResumen =
+    opts.incluirResumenLibrosChunchullas === true ||
+    opts.incluirResumenLibrosChunchullasCrudas === true;
+  const bloqueLch = incluirCuadrosResumen
     ? htmlResumenLibrosChunchullasCrudas(datos, {
         fechaReporte: fechaISO,
         resumenMacro: opts.resumenMacro,

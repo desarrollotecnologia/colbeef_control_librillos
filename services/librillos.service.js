@@ -37,7 +37,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 7;
+const CACHE_FECHA_ROW_SCHEMA = 8;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -1290,7 +1290,6 @@ const consultarLibrillos = async (fecha = null) => {
           clienteClasificacion = ovGutCarv.cliente_destino;
           ag = { codigo: ovGutCarv.codigo, etiqueta: ovGutCarv.etiqueta };
         } else {
-          // 1) cliente parseado desde "RETIRAR LIBRILLOS" 2) propietario si parseo vacío.
           clienteClasificacion = textoNoVacio(cliente_destino, v.nombre_propietario);
           const planTxt = textoPlan.trim();
           const parteConRetiro = textoIndicaRetiroLibrillos(obsFuente);
