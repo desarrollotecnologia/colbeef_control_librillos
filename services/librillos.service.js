@@ -37,7 +37,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 8;
+const CACHE_FECHA_ROW_SCHEMA = 9;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -1462,9 +1462,8 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
   const textoObs = (d) => textoMarcasResumenLibrillo(d);
   const esCruda = (d) => /\bCRUDAS?\b/i.test(textoObs(d));
-  /** Crudas con «Estilo Bogotá» en observación/plan (sin tildes para BOGOTÁ). */
-  const esCrudaEstiloBogota = (d) => {
-    if (!esCruda(d)) return false;
+  /** Texto unido contiene «ESTILO BOGOTA» / «ESTILO BOGOTÁ» (sin tildes). */
+  const tieneEstiloBogota = (d) => {
     const u = sinMarcasDiacriticos(textoObs(d)).toUpperCase();
     return u.includes('ESTILO BOGOTA');
   };
@@ -1479,9 +1478,10 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   let estiloBogota = 0;
   let olimpica = 0;
   rows.forEach((d) => {
-    if (esCruda(d)) {
-      if (esCrudaEstiloBogota(d)) estiloBogota += 1;
-      else chunchullasCrudas += 1;
+    if (tieneEstiloBogota(d)) {
+      estiloBogota += 1;
+    } else if (esCruda(d)) {
+      chunchullasCrudas += 1;
     }
     if (esSucursalOlimpica(d)) olimpica += 1;
     const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';

@@ -2152,10 +2152,8 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       .normalize('NFD')
       .replace(/\p{M}/gu, '');
   const esCrudaLch = (d) => /\bCRUDAS?\b/i.test(textoObsResumenLch(d));
-  const esCrudaEstiloBogotaLch = (d) => {
-    if (!esCrudaLch(d)) return false;
-    return sinTildesLch(textoObsResumenLch(d)).toUpperCase().includes('ESTILO BOGOTA');
-  };
+  const tieneEstiloBogotaLch = (d) =>
+    sinTildesLch(textoObsResumenLch(d)).toUpperCase().includes('ESTILO BOGOTA');
   const esSucursalOlimpicaLch = (d) => {
     const u = (s) =>
       String(s || '')
@@ -2167,7 +2165,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
 
   const totalCrudas = rm && !usarSoloLibrillos
     ? Number(rm?.categorias?.chunchullas_crudas || 0)
-    : (baseLista || []).filter((d) => esCrudaLch(d) && !esCrudaEstiloBogotaLch(d)).length;
+    : (baseLista || []).filter((d) => esCrudaLch(d) && !tieneEstiloBogotaLch(d)).length;
 
   const vOlimpica =
     rm && !usarSoloLibrillos
@@ -2176,7 +2174,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const vEstiloBogota =
     rm && !usarSoloLibrillos
       ? Number(rm?.categorias?.estilo_bogota ?? 0)
-      : (baseLista || []).filter(esCrudaEstiloBogotaLch).length;
+      : (baseLista || []).filter(tieneEstiloBogotaLch).length;
 
   /** Conteo por agrupacion_codigo del plan completo (misma fuente que listado / API). */
   const vAsurGlo = mapAgr.get('asurcarnes_glo') || 0;
@@ -2317,7 +2315,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
             </tbody>
           </table>
           <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:520px">
-            OLIMPICA: sucursal o plaza contiene «OLIMPICA» (con o sin tilde). ESTILO BOGOTA: crudas con ese texto en observación/plan/parte/retiro (no entran en CHUNCHULLAS CRUDAS).
+            OLIMPICA: sucursal o plaza contiene «OLIMPICA» (con o sin tilde). ESTILO BOGOTA: cualquier fila con ese texto en observación/plan/parte/retiro (con o sin CRUDAS; no entran en CHUNCHULLAS CRUDAS).
           </p>
         </div>
       </div>

@@ -9,7 +9,7 @@
  * - Por defecto se cuentan todos los registros del universo del día (incl. pendientes de parte).
  * - Opcionalmente puede usarse solo cierre real del día (solo registros con parte).
  * - `chunchullas_crudas`: observación con CRUDAS y sin texto «ESTILO BOGOTA».
- * - `estilo_bogota`: crudas con «ESTILO BOGOTA» / «ESTILO BOGOTÁ» en observación, observación parseada o texto de plan faena (se unen para no perder marca si `plan_first` oculta el parte).
+ * - `estilo_bogota`: filas con «ESTILO BOGOTA» / «ESTILO BOGOTÁ» en el texto unido (plan/parte/retiro/obs.); con o sin CRUDAS. Si hay CRUDAS + estilo Bogotá, solo cuentan aquí (no en chunchullas_crudas).
  * - `olimpica`: filas cuya sucursal o plaza contiene «OLIMPICA» (normalizado sin tildes).
  * - Por categoría: se incrementa según `agrupacion_codigo` de cada fila.
  *
