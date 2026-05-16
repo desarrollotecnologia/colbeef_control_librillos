@@ -148,7 +148,7 @@ export function normalizarObservacionMacro(obsRaw) {
  * 2) ASURCARNESCOL / «asurcarnes col» con retiro.
  * 3) ASURCARNES GLO / variantes.
  * 4) RETIRA(R) LIBRILLOS … CAT → cat.
- * 5) Derivados cárnicos (palabras clave + Ruth Cacua, Cacua, Carmen, Larrota, Carviscol, etc.).
+ * 5) Derivados cárnicos: «derivados cárnicos», Carviscol, Ruth Cacua sin retiro; con retiro: derivados / Rut Cacua / Cacua / Carmen / Larrota / Juan (Carlos) Rueda.
  * 6) Global Hides / Salomon / hides (con retiro si aplica).
  * 7) Sin «RETIRAR LIBRILLOS» (texto no vacío) → cocidos.
  * 8) Alias del JSON sobre el texto completo.
@@ -233,7 +233,8 @@ export function clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback 
     (retLibr && /\bcacua\b/.test(t)) ||
     (retLibr && /\bcarmen\b/.test(t)) ||
     (retLibr && /\blarrota\s*edin(ison|son)\b/.test(t)) ||
-    /\bjuan(\s+carlos)?\s+rueda\b/.test(t)
+    /** Juan Rueda solo con retiro explícito; sin retiro → cocidos (ej. «chunchullas cocidas para juan rueda»). */
+    (retLibr && /\bjuan(\s+carlos)?\s+rueda\b/.test(t))
   ) {
     return { codigo: 'derivados_carnicos', etiqueta: 'Derivados cárnicos', regla: 'match_derivados_keywords', observacion_normalizada: obsNorm };
   }

@@ -37,7 +37,7 @@ let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no exis
 const cachePorFecha = new Map();
 const cachePorRango = new Map();
 /** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 9;
+const CACHE_FECHA_ROW_SCHEMA = 10;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
