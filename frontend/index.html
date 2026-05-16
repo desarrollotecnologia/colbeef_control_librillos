@@ -1,4 +1,4 @@
-
+﻿
 
 
 
@@ -58,7 +58,7 @@
       </button>
       <button type="button" class="nav-item" data-vista="historico" onclick="irVista('historico',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5a6.5 6.5 0 106.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 1.8v3.4M10 10V6.3M10 10l2.7 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        <span class="nav-item-label"><span class="nav-item-title">Histórico cambios</span><span class="nav-item-hint">Auditoría · reimpresión</span></span>
+        <span class="nav-item-label"><span class="nav-item-title">Histórico cambios</span><span class="nav-item-hint">Reimpresión crudas</span></span>
       </button>
     </nav>
     <div class="sidebar-foot">
@@ -68,22 +68,6 @@
       </div>
       <div class="sidebar-foot-sep" aria-hidden="true"></div>
       <div class="sidebar-foot-icons">
-        <button type="button" class="btn-foot-ico" onclick="abrirModalCambiosObs()" title="Observación" aria-label="Observación">
-          <svg class="foot-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="4" y1="6.5" x2="14" y2="6.5"/>
-            <line x1="4" y1="11" x2="12" y2="11"/>
-            <line x1="4" y1="15.5" x2="10" y2="15.5"/>
-            <path d="M17.5 8.5L21 12l-7 7h-3v-3l6.5-7.5z"/>
-          </svg>
-        </button>
-        <button type="button" class="btn-foot-ico" onclick="abrirModalCambiosObsLogistica()" title="Reimpresiones" aria-label="Reimpresiones">
-          <svg class="foot-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M6 9V4h12v5"/>
-            <rect x="5" y="13" width="14" height="7" rx="1.5"/>
-            <rect x="7" y="15" width="10" height="5" rx="1"/>
-            <circle cx="17.5" cy="11.2" r="0.8" fill="currentColor"/>
-          </svg>
-        </button>
         <button
           type="button"
           class="btn-foot-ico"
@@ -670,11 +654,11 @@
         <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
           <div>
             <label class="fl" title="Día del plan de faena">Plan (desde)</label>
-            <input type="date" class="fi" id="fecha-historico-desde">
+            <input type="date" class="fi" id="fecha-historico-desde" onchange="actualizarHistoricoReimpFechas()">
           </div>
           <div>
             <label class="fl" title="Día del chequeo de sucursal">Revisión (hasta)</label>
-            <input type="date" class="fi" id="fecha-historico-hasta">
+            <input type="date" class="fi" id="fecha-historico-hasta" onchange="actualizarHistoricoReimpFechas()">
           </div>
           <button type="button" class="btn-gen btn-gen-sec" onclick="cargarHistoricoCambios()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 10a7 7 0 10-2 5.2"/><path d="M17 10V6M17 10h-4"/></svg></span>Actualizar</button>
         </div>
@@ -702,14 +686,18 @@
         </div>
       </div>
 
-      <div class="panel" style="margin-top:20px">
+      <div class="panel panel-reimp-crudas" style="margin-top:20px">
         <div class="ph">
-          <span class="pt">Crudas y cambios de sucursal del plan (etiquetas)</span>
+          <span class="pt">Reimpresión de etiquetas — crudas (día siguiente al plan)</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <button type="button" class="btn-sel-all" onclick="seleccionarTodosHistoricoCrudas()">Seleccionar todas</button>
-            <button type="button" class="btn-gen btn-gen-sec" onclick="imprimirEtiquetasHistoricoCrudasSeleccion()">Imprimir etiquetas seleccionadas (<span id="n-hist-crudas-sel">0</span>)</button>
+            <button type="button" class="btn-gen" onclick="imprimirEtiquetasHistoricoCrudasSeleccion()">Imprimir etiquetas (<span id="n-hist-crudas-sel">0</span>)</button>
           </div>
         </div>
+        <p id="historico-reimp-ayuda" class="hist-reimp-ayuda" style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.45">
+          Marque las filas con cambio de sucursal en crudas. Los datos de puesto salen del <strong>día de etiquetas</strong> (plan + 1 día). F.B. = plan · F.V. = plan + 1 día.
+        </p>
+        <p id="historico-reimp-fechas" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--rojo);font-weight:600"></p>
         <div class="tw">
           <table class="dt">
             <thead>
@@ -718,7 +706,7 @@
                 <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Obs. antes</th><th>Obs. ahora</th><th>Sucursal antes</th><th>Sucursal después</th>
               </tr>
             </thead>
-            <tbody id="tbody-historico-crudas"><tr><td colspan="8" class="empty">Sin cambios a crudas en el rango</td></tr></tbody>
+            <tbody id="tbody-historico-crudas"><tr><td colspan="8" class="empty">Sin crudas con cambio de sucursal en el rango</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -757,32 +745,6 @@
       </div>
     </div>
 
-    <!-- Modal historial de cambios de observación -->
-    <div class="modal-bg" id="modal-cambios-obs" onclick="cerrarModalCambiosObs()">
-      <div class="modal" onclick="event.stopPropagation()">
-        <div class="modal-head">
-          <span class="modal-title" id="modal-cambios-obs-title">Cambios de observación (antes / ahora)</span>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button type="button" id="btn-copiar-cambios-obs" class="btn-gen btn-gen-sec" style="padding:6px 10px;font-size:12px" onclick="copiarIdsCambiosObs()">Copiar IDs</button>
-            <button type="button" id="btn-imprimir-lista-cambios-obs" class="btn-gen btn-gen-sec" style="padding:6px 10px;font-size:12px" onclick="imprimirListadoCambiosObs()">Imprimir lista</button>
-            <button type="button" class="btn-gen" id="btn-etq-reimp-suc" style="display:none;padding:6px 10px;font-size:12px" onclick="imprimirEtiquetasReimpSucursalSeleccion()">Imprimir etiquetas (selección)</button>
-          </div>
-          <button type="button" class="modal-close" onclick="cerrarModalCambiosObs()" aria-label="Cerrar">×</button>
-        </div>
-        <p id="modal-cambios-obs-sub" style="display:none;margin:0;padding:4px 16px 10px;font-size:12px;color:#5a7060;line-height:1.35"></p>
-        <div class="tw">
-          <table class="dt">
-            <thead>
-              <tr>
-                <th title="Prioriza la fecha/hora del registro en trazabilidad; si no hay, la hora en que la app detectó el cambio">Momento</th><th>Tipo</th><th>ID</th><th>Antes</th><th>Ahora</th>
-              </tr>
-            </thead>
-            <tbody id="tbody-cambios-obs"><tr><td colspan="5" class="empty">Sin cambios detectados</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
   </main>
 
   <button
@@ -803,6 +765,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="./colbeef-logo-data.js?v=20260417"></script>
-  <script src="./app.js?v=20260428-guia"></script>
+  <script src="./app.js?v=20260516-hist"></script>
 </body>
 </html>

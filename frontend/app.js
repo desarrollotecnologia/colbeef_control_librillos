@@ -1162,12 +1162,6 @@ let _autoObsSnapshot = '';
 let _obsTextoMapPrev = new Map();
 /** Plan faena vs insensibilización (GET /api/librillos/universo-meta). */
 let metaUniversoTurno = null;
-let historialCambiosObs = [];
-/** IDs (crudas) seleccionados en modal logística para reimprimir etiquetas tras cambio de sucursal. */
-let _seleccionReimpSucursalCrudas = new Set();
-/** Historial de cambios de observación solo en este navegador (sin tablas en servidor). */
-const LS_HIST_OBS = 'colbeef_historial_obs_v1';
-let _modoCambiosObsActual = 'normal';
 let _toastOnClick = null;
 let historicoCambios = [];
 let historicoCambiosFiltrados = [];
@@ -1674,7 +1668,7 @@ function aplicarVistaDesdeQueryString() {
 }
 
 // ── NAVEGACIÓN ────────────────────────────────────────────────────────────────
-function irVista(nombre, btn) {
+function irVista(nombre, btn, opts = {}) {
   document.querySelectorAll('.vista').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const vista = document.getElementById('vista-' + nombre);
@@ -1730,12 +1724,15 @@ function irVista(nombre, btn) {
   else if (nombre === 'totales') void actualizarVistaTotales();
   else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
-    const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-    const fd = document.getElementById('fecha-historico-desde');
-    const fh = document.getElementById('fecha-historico-hasta');
-    if (fd) fd.value = diaAnteriorISO(fechaRevision);
-    if (fh) fh.value = fechaRevision;
-    void cargarHistoricoCambios();
+    if (!opts.skipHistoricoFechas) {
+      const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+      const fd = document.getElementById('fecha-historico-desde');
+      const fh = document.getElementById('fecha-historico-hasta');
+      if (fd) fd.value = diaAnteriorISO(fechaRevision);
+      if (fh) fh.value = fechaRevision;
+    }
+    actualizarHistoricoReimpFechas();
+    if (!opts.skipHistoricoCarga) void cargarHistoricoCambios();
   }
   trackVista(nombre);
   if (window.innerWidth <= 900) cerrarMenuMovil();
@@ -4119,23 +4116,19 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
   return cambios;
 }
 
-/** Texto breve para el toast; el detalle está en el modal (clic en la notificación). */
+/** Texto breve para el toast; clic abre Histórico de cambios. */
 function textoToastCambiosObservacion(cantidad) {
   const n = Number(cantidad) || 0;
-  if (n <= 0) return 'Cambios en observación. Ver más.';
-  if (n === 1) return '1 cambio en observación. Ver más.';
-  return `${n} cambios en observación. Ver más.`;
+  if (n <= 0) return 'Cambios detectados. Ver histórico.';
+  if (n === 1) return '1 cambio detectado. Ver histórico.';
+  return `${n} cambios detectados. Ver histórico.`;
 }
 
-/**
- * Registra cambios para el modal / historial.
- * `momentoPorId`: ISO desde a_parte_producto.fecha (última fila del día por ID) — hora del registro en trazabilidad.
- * `detectado_en` queda como respaldo si no hay timestamp en BD.
- */
+/** Enriquece cambios en vivo con momento BD (toast → histórico). */
 function registrarCambiosObservacion(cambios, momentoPorId = new Map()) {
-  if (!cambios?.length) return;
+  if (!cambios?.length) return [];
   const detectadoApp = new Date().toISOString();
-  const nuevos = cambios.map((c) => {
+  return cambios.map((c) => {
     const id = String(c.id);
     const momentoBd = momentoPorId.get(id) || null;
     return {
@@ -4144,398 +4137,77 @@ function registrarCambiosObservacion(cambios, momentoPorId = new Map()) {
       detectado_en: detectadoApp,
     };
   });
-  historialCambiosObs = [...nuevos, ...historialCambiosObs].slice(0, 300);
-  guardarHistorialCambiosObsLS();
-  return nuevos;
-}
-
-function guardarHistorialCambiosObsLS() {
-  try {
-    localStorage.setItem(LS_HIST_OBS, JSON.stringify(historialCambiosObs.slice(0, 300)));
-  } catch {
-    // silencioso
-  }
-}
-
-function cargarHistorialCambiosObsLS() {
-  try {
-    const raw = localStorage.getItem(LS_HIST_OBS);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
-    return arr.slice(0, 300);
-  } catch {
-    return [];
-  }
-}
-
-function mergeHistorialCambios(...listas) {
-  const seen = new Set();
-  const out = [];
-  for (const arr of listas) {
-    for (const c of arr || []) {
-      if (!c) continue;
-      const k = `${String(c.id)}|${String(c.tipo || '')}|${String(c.antes || '').trim()}|${String(c.despues || '').trim()}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(c);
-    }
-  }
-  return out;
-}
-
-function ordenarHistorialPorMomento(lista) {
-  return [...lista].sort((a, b) => {
-    const ta = new Date(a.momento_bd || a.detectado_en || 0).getTime();
-    const tb = new Date(b.momento_bd || b.detectado_en || 0).getTime();
-    return tb - ta;
-  });
-}
-
-function aplicarTheadModalCambiosObs(modo) {
-  const table = document.querySelector('#modal-cambios-obs table.dt');
-  const btnEtq = document.getElementById('btn-etq-reimp-suc');
-  const btnCopiar = document.getElementById('btn-copiar-cambios-obs');
-  const btnLista = document.getElementById('btn-imprimir-lista-cambios-obs');
-  if (btnCopiar) btnCopiar.style.display = modo === 'logistica' ? 'none' : '';
-  if (btnLista) btnLista.style.display = '';
-  if (btnEtq) btnEtq.style.display = modo === 'logistica' ? '' : 'none';
-  if (!table) return;
-  const thead = table.querySelector('thead');
-  if (!thead) return;
-  if (modo === 'logistica') {
-    thead.innerHTML = `<tr>
-      <th class="no-print" style="width:44px;text-align:center" title="Seleccionar todas">
-        <input type="checkbox" onclick="toggleTodosReimpSucursal(this)" aria-label="Seleccionar todas" />
-      </th>
-      <th>ID</th>
-      <th>Identificación</th>
-      <th>Cliente destino</th>
-      <th>Agrupación</th>
-      <th>Suc. anterior</th>
-      <th>Suc. actual</th>
-      <th>Observación</th>
-    </tr>`;
-  } else {
-    thead.innerHTML = `<tr>
-      <th title="Prioriza la fecha/hora del registro en trazabilidad; si no hay, la hora en que la app detectó el cambio">Momento</th><th>Tipo</th><th>ID</th><th>Antes</th><th>Ahora</th>
-    </tr>`;
-  }
-}
-
-function truncTextUi(s, max = 64) {
-  const t = String(s || '').replace(/\s+/g, ' ').trim();
-  if (!t) return '—';
-  if (t.length <= max) return t;
-  return `${t.slice(0, max - 1)}…`;
-}
-
-function renderFilasModalCambiosObsLogistica(tbody, lista) {
-  _seleccionReimpSucursalCrudas.clear();
-  const solo = (lista || []).filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
-  tbody.innerHTML = solo.map((c) => {
-    const momentoMostrar = c.momento_bd || c.detectado_en;
-    const titleMomento = c.momento_bd
-      ? 'Momento trazabilidad (a_parte_producto)'
-      : momentoMostrar
-        ? `Detectado: ${formatFecha(momentoMostrar)}`
-        : '';
-    const idRaw = String(c.id || '');
-    const chk = `<input type="checkbox" class="js-chk-reimp-suc" data-reimp-id="${idRaw.replace(/"/g, '&quot;')}" onchange="toggleReimpSucursalDesdeModal(this)" />`;
-    const sa = escapeHtml(String(c.sucursal_antes ?? c.antes ?? '—'));
-    const sn = escapeHtml(String(c.sucursal_despues ?? c.despues ?? '—'));
-    const idTitle = titleMomento ? escapeHtml(titleMomento) : '';
-    const idCell = idTitle
-      ? `<span title="${idTitle}">${escapeHtml(idRaw || '—')}</span>`
-      : escapeHtml(idRaw || '—');
-    const ident = escapeHtml(truncTextUi(c.identificacion, 20));
-    const cli = escapeHtml(truncTextUi(c.cliente_destino, 28));
-    const ag = escapeHtml(truncTextUi(c.agrupacion, 22));
-    const obsRaw = String(c.observacion_texto || '').trim();
-    const obs = escapeHtml(truncTextUi(obsRaw, 56));
-    const obsTitle = obsRaw ? escapeHtml(obsRaw.slice(0, 500)) : '';
-    return `<tr>
-      <td class="no-print" style="text-align:center">${chk}</td>
-      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo);font-size:13px">${idCell}</td>
-      <td style="font-size:11px" title="${escapeHtml(String(c.identificacion || '').trim())}">${ident}</td>
-      <td style="font-size:11px" title="${escapeHtml(String(c.cliente_destino || '').trim())}">${cli}</td>
-      <td style="font-size:11px" title="${escapeHtml(String(c.agrupacion || '').trim())}">${ag}</td>
-      <td style="font-size:11px">${sa}</td>
-      <td style="font-size:11px">${sn}</td>
-      <td style="font-size:11px;max-width:220px" title="${obsTitle}">${obs}</td>
-    </tr>`;
-  }).join('');
-}
-
-function renderFilasModalCambiosObs(tbody, lista) {
-  if (_modoCambiosObsActual === 'logistica') {
-    renderFilasModalCambiosObsLogistica(tbody, lista);
-    return;
-  }
-  tbody.innerHTML = lista.map((c) => {
-    const momentoMostrar = c.momento_bd || c.detectado_en;
-    const hora = momentoMostrar ? formatFecha(momentoMostrar) : '—';
-    const titleMomento = c.momento_bd
-      ? 'Fecha/hora del registro en trazabilidad (tabla a_parte_producto)'
-      : 'Hora en que la app detectó el cambio (sin momento de BD en este evento)';
-    const antes = c.antes && c.antes.trim() ? c.antes : '—';
-    const despues = c.despues && c.despues.trim() ? c.despues : '—';
-    return `<tr>
-      <td style="font-size:12px" title="${escapeHtml(titleMomento)}">${escapeHtml(hora)}</td>
-      <td>${escapeHtml(c.tipo || 'REGISTRO')}</td>
-      <td style="font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--rojo)">${escapeHtml(c.id || '—')}</td>
-      <td style="font-size:12px">${escapeHtml(antes)}</td>
-      <td style="font-size:12px">${escapeHtml(despues)}</td>
-    </tr>`;
-  }).join('');
-}
-
-function extraerClienteRetiro(obs) {
-  const txt = String(obs || '').replace(/\s+/g, ' ').trim();
-  if (!txt) return '';
-  const m = txt.match(/RETIRAR\s+LIBRILLOS\s+([A-Z0-9 ._-]+)/i);
-  return m ? String(m[1] || '').trim().toUpperCase() : '';
-}
-
-function esCambioCriticoReimpresion(c) {
-  const t0 = String(c?.tipo || '').toUpperCase();
-  if (t0 === 'CRUDA_SUCURSAL') return true;
-  const antes = String(c?.antes || '').trim();
-  const despues = String(c?.despues || '').trim();
-  if (!despues || antes === despues) return false;
-  const cliAntes = extraerClienteRetiro(antes);
-  const cliDespues = extraerClienteRetiro(despues);
-  if (cliAntes !== cliDespues) return true;
-  const t = String(c?.tipo || '').toUpperCase();
-  return t === 'LIBRILLO' || t === 'CRUDA';
-}
-
-/** Cruce crudas / sucursal vs día anterior: mismo criterio que antes, pero calculado en el servidor (BD al vuelo). */
-async function fetchCrudasCambioSucursalDesdeBd(fechaIso) {
-  try {
-    const f = String(fechaIso || '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return [];
-    const res = await fetch(`${API_URL}/crudas-cambio-sucursal?fecha=${encodeURIComponent(f)}`);
-    if (!res.ok) return [];
-    const j = await res.json();
-    return Array.isArray(j.cambios) ? j.cambios : [];
-  } catch {
-    return [];
-  }
-}
-
-function listaCambiosObsActual(cambiosExplicitos = null, modo = 'normal') {
-  let lista = mergeHistorialCambios(cargarHistorialCambiosObsLS(), historialCambiosObs);
-  if (cambiosExplicitos?.length) {
-    lista = mergeHistorialCambios(lista, cambiosExplicitos);
-  }
-  if (modo === 'logistica') {
-    lista = lista.filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
-  }
-  return ordenarHistorialPorMomento(lista);
-}
-
-/** Historial: solo navegador (localStorage) + sesión actual; opcional lista recién detectada. */
-async function abrirModalCambiosObs(cambiosExplicitos = null, modo = 'normal', opts = {}) {
-  const omitFetchCruceSucursal = !!opts.omitFetchCruceSucursal;
-  const subtituloLogistica =
-    typeof opts.subtituloLogistica === 'string' && opts.subtituloLogistica.trim()
-      ? opts.subtituloLogistica.trim()
-      : null;
-  const tituloLogistica =
-    typeof opts.tituloLogistica === 'string' && opts.tituloLogistica.trim()
-      ? opts.tituloLogistica.trim()
-      : null;
-  const modal = document.getElementById('modal-cambios-obs');
-  const tbody = document.getElementById('tbody-cambios-obs');
-  const ttl = document.getElementById('modal-cambios-obs-title');
-  if (!modal || !tbody) return;
-  _modoCambiosObsActual = modo;
-  if (ttl) {
-    ttl.textContent =
-      modo === 'logistica'
-        ? tituloLogistica || 'Reimpresiones logística — crudas (cambio de sucursal)'
-        : 'Cambios de observación (antes / ahora)';
-  }
-  const sub = document.getElementById('modal-cambios-obs-sub');
-  if (sub) {
-    if (modo === 'logistica') {
-      const fg = document.getElementById('fecha-global')?.value || hoyISO();
-      const fSig = sumarDiasISO(fg, 1) || fg;
-      sub.style.display = 'block';
-      sub.textContent =
-        subtituloLogistica ||
-        `Lista desde la base de datos: crudas con sucursal distinta respecto al día anterior (${fg}). Las etiquetas usan el día siguiente al turno (${fSig}), fecha de despacho prevista. Se combinan con avisos de este navegador si los hay.`;
-    } else {
-      sub.style.display = 'none';
-      sub.textContent = '';
-    }
-  }
-  aplicarTheadModalCambiosObs(modo);
-  modal.classList.add('open');
-  let lista = listaCambiosObsActual(cambiosExplicitos, modo);
-  if (modo === 'logistica') {
-    const fg = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
-    if (!omitFetchCruceSucursal) {
-      const desdeBd = await fetchCrudasCambioSucursalDesdeBd(fg);
-      lista = mergeHistorialCambios(desdeBd, lista);
-    }
-    lista = lista.filter((c) => String(c?.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL');
-    lista = ordenarHistorialPorMomento(lista);
-  }
-  if (!lista.length) {
-    tbody.innerHTML = modo === 'logistica'
-      ? '<tr><td colspan="9" class="empty">Sin cambios de sucursal en crudas para reimpresión</td></tr>'
-      : '<tr><td colspan="5" class="empty">Sin cambios detectados</td></tr>';
-    return;
-  }
-  renderFilasModalCambiosObs(tbody, lista);
-}
-
-async function abrirModalCambiosObsLogistica() {
-  await abrirModalCambiosObs(null, 'logistica');
-}
-
-async function copiarIdsCambiosObs() {
-  const ids = [...new Set(listaCambiosObsActual(null, _modoCambiosObsActual).map((c) => String(c.id || '').trim()).filter(Boolean))];
-  if (!ids.length) {
-    mostrarToast('Sin IDs para copiar', 'err');
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(ids.join('\n'));
-    mostrarToast(`${ids.length} IDs copiados`, 'ok');
-  } catch {
-    mostrarToast('No se pudo copiar IDs', 'err');
-  }
-}
-
-function imprimirListadoCambiosObs() {
-  const lista = listaCambiosObsActual(null, _modoCambiosObsActual);
-  if (!lista.length) {
-    mostrarToast('No hay cambios para imprimir', 'err');
-    return;
-  }
-  const esLog = _modoCambiosObsActual === 'logistica';
-  const rows = lista.slice(0, 200).map((c) => {
-    if (!esLog) {
-      return `<tr>
-      <td>${escapeHtml(c.momento_bd || c.detectado_en ? formatFecha(c.momento_bd || c.detectado_en) : '—')}</td>
-      <td>${escapeHtml(String(c.id || '—'))}</td>
-      <td>${escapeHtml(String(c.tipo || 'REGISTRO'))}</td>
-      <td>${escapeHtml(String(c.antes || '—'))}</td>
-      <td>${escapeHtml(String(c.despues || '—'))}</td>
-    </tr>`;
-    }
-    const esSuc = String(c.tipo || '').toUpperCase() === 'CRUDA_SUCURSAL';
-    const sa = esSuc ? escapeHtml(String(c.sucursal_antes ?? c.antes ?? '—')) : '—';
-    const sn = esSuc ? escapeHtml(String(c.sucursal_despues ?? c.despues ?? '—')) : '—';
-    const obsDet = esSuc
-      ? escapeHtml(String(c.observacion_texto || '—'))
-      : `${escapeHtml(String(c.antes || '—'))} → ${escapeHtml(String(c.despues || '—'))}`;
-    return `<tr>
-      <td>${escapeHtml(c.momento_bd || c.detectado_en ? formatFecha(c.momento_bd || c.detectado_en) : '—')}</td>
-      <td>${escapeHtml(String(c.id || '—'))}</td>
-      <td>${escapeHtml(esSuc ? 'Cruda · sucursal' : String(c.tipo || 'REGISTRO'))}</td>
-      <td>${escapeHtml(String(c.identificacion || '—'))}</td>
-      <td>${escapeHtml(String(c.propietario || '—'))}</td>
-      <td>${escapeHtml(String(c.cliente_destino || '—'))}</td>
-      <td>${escapeHtml(String(c.agrupacion || '—'))}</td>
-      <td>${sa}</td>
-      <td>${sn}</td>
-      <td>${obsDet}</td>
-      <td>${escapeHtml(String(c.empresa_destino || '—'))}</td>
-    </tr>`;
-  }).join('');
-  const fecha = document.getElementById('fecha-global')?.value || hoyISO();
-  const headNorm = '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Antes</th><th>Ahora</th></tr>';
-  const headLog =
-    '<tr><th>Momento</th><th>ID</th><th>Tipo</th><th>Identificación</th><th>Propietario</th><th>Cliente destino</th><th>Agrupación</th><th>Sucursal (antes)</th><th>Sucursal (nueva)</th><th>Observación / detalle</th><th>Empresa destino</th></tr>';
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Reimpresiones logística</title>
-    <style>body{font-family:Arial,sans-serif;margin:20px}h2{margin:0 0 10px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #ccc;padding:6px;text-align:left}th{background:#f0f0f0}.meta{margin:0 0 10px;color:#666}</style>
-  </head><body>
-    <h2>Reimpresiones logística</h2>
-    <p class="meta">Fecha operativa: ${escapeHtml(fecha)} · Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}</p>
-    <table><thead>${esLog ? headLog : headNorm}</thead><tbody>${rows}</tbody></table>
-  </body></html>`;
-  const w = window.open('', '_blank', 'width=1200,height=800');
-  if (!w) {
-    mostrarToast('El navegador bloqueó la ventana de impresión', 'err');
-    return;
-  }
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  w.print();
-}
-
-function cerrarModalCambiosObs() {
-  document.getElementById('modal-cambios-obs')?.classList.remove('open');
-  _seleccionReimpSucursalCrudas.clear();
-  const btnEtq = document.getElementById('btn-etq-reimp-suc');
-  if (btnEtq) btnEtq.style.display = 'none';
-  const btnCopiar = document.getElementById('btn-copiar-cambios-obs');
-  const btnLista = document.getElementById('btn-imprimir-lista-cambios-obs');
-  if (btnCopiar) btnCopiar.style.display = '';
-  if (btnLista) btnLista.style.display = '';
-  const sub = document.getElementById('modal-cambios-obs-sub');
-  if (sub) {
-    sub.style.display = 'none';
-    sub.textContent = '';
-  }
-}
-
-function toggleReimpSucursalDesdeModal(el) {
-  const id = el?.getAttribute?.('data-reimp-id');
-  if (!id) return;
-  if (el.checked) _seleccionReimpSucursalCrudas.add(id);
-  else _seleccionReimpSucursalCrudas.delete(id);
-}
-
-function toggleTodosReimpSucursal(master) {
-  const tbody = document.getElementById('tbody-cambios-obs');
-  if (!tbody || !master) return;
-  const on = !!master.checked;
-  tbody.querySelectorAll('input.js-chk-reimp-suc[type="checkbox"]').forEach((el) => {
-    el.checked = on;
-    const id = el.getAttribute('data-reimp-id');
-    if (!id) return;
-    if (on) _seleccionReimpSucursalCrudas.add(id);
-    else _seleccionReimpSucursalCrudas.delete(id);
-  });
-}
-
-function imprimirEtiquetasReimpSucursalSeleccion() {
-  const ids = [..._seleccionReimpSucursalCrudas].map(String).filter(Boolean);
-  if (!ids.length) {
-    mostrarToast('Selecciona al menos una fila con la casilla', 'err');
-    return;
-  }
-  return runWithAppLoader('Preparando etiquetas (día siguiente al turno)…', async () => {
-    const fechaTurno = String(document.getElementById('fecha-global')?.value || hoyISO()).trim();
-    const fechaImpresion = sumarDiasISO(fechaTurno, 1) || fechaTurno;
-    const datosDia = await fetchPorFecha(fechaImpresion);
-    const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
-    const lista = ids
-      .map((id) => map.get(String(id)))
-      .filter(Boolean)
-      .filter(esVistaHistorialCrudasSolo);
-    if (!lista.length) {
-      mostrarToast(
-        `No se encontraron crudas en ${fechaImpresion} para esos IDs (verifique plan del día siguiente).`,
-        'err'
-      );
-      return;
-    }
-    abrirVentanaEtiquetasCrudas(lista);
-    mostrarToast(`${lista.length} etiqueta(s) con datos de ${fechaImpresion} (sucursal / puesto actual en sistema)`, 'ok');
-  });
 }
 
 async function irHistorialYMostrarCambios(cambios) {
-  const btnHistorial = document.querySelector('.nav-item[data-vista="historial"]');
-  irVista('historial', btnHistorial || null);
-  await abrirModalCambiosObs(cambios);
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  await irHistoricoReimpresionCrudas(cambios, {
+    fechaPlan: fecha,
+    fechaRevision: sumarDiasISO(fecha, 1) || fecha,
+  });
+}
+
+function fechasReimpresionHistorico() {
+  const fechaPlan = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
+  const fechaRevision = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
+  const fechaEtiquetas = fechaPlan ? sumarDiasISO(fechaPlan, 1) || fechaPlan : '';
+  return { fechaPlan, fechaRevision, fechaEtiquetas };
+}
+
+function actualizarHistoricoReimpFechas() {
+  const { fechaPlan, fechaRevision, fechaEtiquetas } = fechasReimpresionHistorico();
+  const el = document.getElementById('historico-reimp-fechas');
+  if (!el) return;
+  if (!fechaPlan || !fechaEtiquetas) {
+    el.textContent = '';
+    return;
+  }
+  const revTxt = fechaRevision ? labelFecha(fechaRevision) : '—';
+  el.textContent =
+    `Plan ${labelFecha(fechaPlan)} → revisión ${revTxt} · datos de puesto: ${labelFecha(fechaEtiquetas)} · ` +
+    `F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fechaEtiquetas)}`;
+}
+
+function esFilaReimpresionCruda(r) {
+  if (!r?.idProducto) return false;
+  const sucAnt = normalizarObsHistorico(r.sucursalAntes);
+  const sucDes = normalizarObsHistorico(r.sucursalDespues);
+  const sucCambio = sucAnt !== sucDes && !!sucDes;
+  if (!sucCambio) return false;
+  if (r.esCambioSucursalRevision) {
+    return (
+      r.tipo === 'cruda' ||
+      /\bCRUDAS?\b/i.test(String(r.despues || '')) ||
+      /\bCRUDAS?\b/i.test(String(r.antes || ''))
+    );
+  }
+  return r.tipo === 'cruda';
+}
+
+async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {}) {
+  const btn = document.querySelector('.nav-item[data-vista="historico"]');
+  const fechaRevDefault =
+    String(opts.fechaRevision || document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  const fechaPlanDefault = String(opts.fechaPlan || diaAnteriorISO(fechaRevDefault)).trim();
+  const fd = document.getElementById('fecha-historico-desde');
+  const fh = document.getElementById('fecha-historico-hasta');
+  if (fd) fd.value = fechaPlanDefault;
+  if (fh) fh.value = fechaRevDefault;
+  irVista('historico', btn || null, { skipHistoricoFechas: true, skipHistoricoCarga: true });
+  await cargarHistoricoCambios();
+  actualizarHistoricoReimpFechas();
+  if (cambiosExplicitos?.length) {
+    const ids = new Set(
+      cambiosExplicitos
+        .map((c) => String(c.id || c.id_producto || '').trim())
+        .filter(Boolean)
+    );
+    historicoCrudasSeleccionadas = new Set(
+      historicoCambiosFiltrados.filter(esFilaReimpresionCruda).filter((r) => ids.has(r.idProducto)).map((r) => r.idProducto)
+    );
+    pintarTablaHistoricoCrudas();
+  }
+  document.querySelector('.panel-reimp-crudas')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function textoObsHistorico(payload) {
@@ -4770,14 +4442,12 @@ function pintarTablaHistoricoCrudas(gen) {
   const tbody = document.getElementById('tbody-historico-crudas');
   const chkAll = document.getElementById('chk-historico-crudas');
   if (!tbody) return;
-  const rows = historicoCambiosFiltrados.filter(
-    (x) => x.idProducto && (x.tipo === 'cruda' || x.esCambioSucursalRevision)
-  );
+  const rows = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
   if (!rows.length) {
     historicoCrudasSeleccionadas.clear();
     if (chkAll) chkAll.checked = false;
     actualizarContadorHistoricoCrudas();
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin crudas ni cambios de sucursal del plan en el rango</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin crudas con cambio de sucursal en el rango</td></tr>';
     return;
   }
   rows.forEach((r) => {
@@ -4839,17 +4509,13 @@ function toggleSeleccionHistoricoCruda(id, chk) {
   if (chk?.checked) historicoCrudasSeleccionadas.add(k);
   else historicoCrudasSeleccionadas.delete(k);
   actualizarContadorHistoricoCrudas();
-  const rows = historicoCambiosFiltrados.filter(
-    (x) => x.idProducto && (x.tipo === 'cruda' || x.esCambioSucursalRevision)
-  );
+  const rows = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
   const chkAll = document.getElementById('chk-historico-crudas');
   if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
 }
 
 function toggleTodasHistoricoCrudas(chkAll) {
-  const rows = historicoCambiosFiltrados.filter(
-    (x) => x.idProducto && (x.tipo === 'cruda' || x.esCambioSucursalRevision)
-  );
+  const rows = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
   if (chkAll?.checked) rows.forEach((r) => historicoCrudasSeleccionadas.add(r.idProducto));
   else rows.forEach((r) => historicoCrudasSeleccionadas.delete(r.idProducto));
   pintarTablaHistoricoCrudas();
@@ -4934,6 +4600,7 @@ async function cargarHistoricoCambios() {
         `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría)`;
     }
     filtrarHistoricoCambios();
+    actualizarHistoricoReimpFechas();
     const ms = Math.max(0, Date.now() - t0);
     enviarEventoAnalytics({
       eventName: 'historico_auditoria_cargar',
@@ -4957,20 +4624,31 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
     mostrarToast('Selecciona cambios a crudas para imprimir etiquetas', 'err');
     return;
   }
-  return runWithAppLoader('Preparando etiquetas de cambios a crudas...', async () => {
-    const fecha = String(document.getElementById('fecha-historico-hasta')?.value || document.getElementById('fecha-global')?.value || hoyISO()).trim();
-    const datosDia = await fetchPorFecha(fecha);
+  return runWithAppLoader('Preparando etiquetas (día siguiente al plan)…', async () => {
+    const { fechaPlan, fechaEtiquetas } = fechasReimpresionHistorico();
+    const fechaDatos = fechaEtiquetas || sumarDiasISO(fechaPlan, 1) || hoyISO();
+    if (!fechaPlan) {
+      mostrarToast('Selecciona el día del plan (desde) en histórico', 'err');
+      return;
+    }
+    const datosDia = await fetchPorFecha(fechaDatos);
     const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
     const lista = ids
       .map((id) => map.get(String(id)))
       .filter(Boolean)
       .filter(esVistaHistorialCrudasSolo);
     if (!lista.length) {
-      mostrarToast('No se encontraron crudas en la fecha seleccionada para imprimir etiquetas', 'err');
+      mostrarToast(
+        `No se encontraron crudas en ${labelFecha(fechaDatos)} para esos IDs (verifique día de etiquetas = plan + 1).`,
+        'err'
+      );
       return;
     }
-    abrirVentanaEtiquetasCrudas(lista);
-    mostrarToast(`${lista.length} etiqueta(s) de crudas listas para imprimir`, 'ok');
+    abrirVentanaEtiquetasCrudas(lista, { fechaPlanEtiqueta: fechaPlan });
+    mostrarToast(
+      `${lista.length} etiqueta(s) · puesto ${labelFecha(fechaDatos)} · F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fechaDatos)}`,
+      'ok'
+    );
   });
 }
 
@@ -5202,14 +4880,12 @@ async function revisarPostCierreSucursal() {
       }
       return;
     }
-    registrarCambiosObservacion(lista);
-    let msg = `${lista.length} cambio(s) de sucursal vs cierre. Abriendo lista para despacho…`;
+    let msg = `${lista.length} cambio(s) de sucursal vs cierre. Abriendo histórico…`;
     if (sinFila.length) msg += ` (${sinFila.length} sin fila hoy: ver aviso anterior).`;
     mostrarToast(msg, 'ok', { durationMs: 5200 });
-    await abrirModalCambiosObs(lista, 'logistica', {
-      omitFetchCruceSucursal: true,
-      tituloLogistica: 'Despacho / logística — sucursal vs cierre de proceso',
-      subtituloLogistica: `Fecha ${fecha}: sucursal guardada al cerrar vs sucursal y cliente actuales en sistema (una sola lectura BD; sin cruce día anterior). Etiquetas: día siguiente al turno (${sumarDiasISO(fecha, 1) || fecha}).`,
+    await irHistoricoReimpresionCrudas(lista, {
+      fechaPlan: fecha,
+      fechaRevision: sumarDiasISO(fecha, 1) || fecha,
     });
   } catch (e) {
     mostrarToast(String(e.message || e), 'err');
@@ -8363,7 +8039,7 @@ function textoSalidaEtiquetaCruda(registro) {
 }
 
 /** Abre ventana de impresión con etiquetas (crudas): código, plaza, propietario, ingreso proceso, salida (al despachar). */
-function abrirVentanaEtiquetasCrudas(crudas) {
+function abrirVentanaEtiquetasCrudas(crudas, opts = {}) {
   // Zebra ZD230 según configuración del usuario: 100 x 24 mm.
   const ZEBRA_LABEL_W_MM = 100;
   const ZEBRA_LABEL_H_MM = 24;
@@ -8388,8 +8064,11 @@ function abrirVentanaEtiquetasCrudas(crudas) {
   const grupos = {};
   const labelsData = [];
   let cardCounter = 0;
-  // Regla operativa CRUDAS: beneficio = fecha plan (selector global), vencimiento = +1 día.
-  const fechaPlanCrudas = document.getElementById('fecha-global')?.value || hoyISO();
+  // Regla operativa CRUDAS: beneficio = fecha plan, vencimiento = plan + 1 día (reimpresión histórico usa opts).
+  const fechaPlanCrudas =
+    String(opts.fechaPlanEtiqueta || '').trim() ||
+    document.getElementById('fecha-global')?.value ||
+    hoyISO();
   const fechaVenceCrudas = sumarDiasISO(fechaPlanCrudas, 1) || fechaPlanCrudas;
   sorted.forEach(d => {
     const s = plazaEtiquetaCruda(d);
@@ -9230,7 +8909,6 @@ async function cargarReporteLibrillosVista(forzar = false) {
 }
 
 // ── INICIAR ───────────────────────────────────────────────────────────────────
-historialCambiosObs = mergeHistorialCambios(cargarHistorialCambiosObsLS(), historialCambiosObs);
 iniciarAnalyticsUso();
 document.getElementById('pg-sub').textContent = labelFecha(fechaDefectoOperacion);
 actualizarColumnasRol();
