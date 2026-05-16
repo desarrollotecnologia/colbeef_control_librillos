@@ -1148,6 +1148,8 @@ const cacheRangoFront = new Map();
 let cacheSalidasFront = { ts: 0, data: null };
 const cacheResumenMacroFront = new Map();
 const CACHE_FRONT_MS = 60000;
+/** Evita repetir GET /universo-meta para la misma fecha en paralelo al listado/resumen (respuesta liviana pero suelta en grupo). */
+const cacheMetaUniversoFront = new Map();
 /** Caché más larga para rangos (reporte de librillos): evita repetir consultas pesadas al cambiar de vista. */
 const CACHE_RANGO_DATOS_MS = 5 * 60 * 1000;
 let inventarioSubtab = 'lib'; // 'lib' | 'crud'
@@ -1819,12 +1821,21 @@ async function fetchPorFecha(fecha, opts = {}) {
   return p;
 }
 
-async function fetchMetaUniverso(fecha) {
+async function fetchMetaUniverso(fecha, opts = {}) {
+  const bypass = opts && opts.bypassCache === true;
   const f = String(fecha || '').trim() || hoyISO();
+  if (!bypass) {
+    const hit = cacheMetaUniversoFront.get(f);
+    if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS) {
+      return hit.data;
+    }
+  }
   try {
     const res = await fetch(`${API_URL}/universo-meta?fecha=${encodeURIComponent(f)}`);
     if (!res.ok) return null;
-    return await res.json();
+    const data = await res.json();
+    if (!bypass && data !== undefined) cacheMetaUniversoFront.set(f, { ts: Date.now(), data });
+    return data;
   } catch {
     return null;
   }
@@ -1832,7 +1843,7 @@ async function fetchMetaUniverso(fecha) {
 
 async function refrescarMetaUniversoTurno() {
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  metaUniversoTurno = await fetchMetaUniverso(fecha);
+  metaUniversoTurno = await fetchMetaUniverso(fecha, { bypassCache: true });
   actualizarKpiTurno();
   refrescarPanelPlanInsens();
 }
