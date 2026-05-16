@@ -1791,18 +1791,32 @@ function cambiarSubtabInventario(tab) {
 }
 
 // ── FETCH ─────────────────────────────────────────────────────────────────────
+/** Peticiones duplicadas de la misma fecha se comparten (evita doble carga BD). Ignorado si hay AbortSignal. */
+const fetchPorFechaInflight = new Map();
+
 async function fetchPorFecha(fecha, opts = {}) {
   const signal = opts && opts.signal;
   const f = String(fecha || '').trim() || hoyISO();
-  const url = `${API_URL}?fecha=${encodeURIComponent(f)}`;
-  const res = await fetch(url, signal ? { signal } : {});
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (!Array.isArray(data)) {
-    console.error('fetchPorFecha: respuesta no es un arreglo', typeof data);
-    throw new Error('Respuesta API inválida');
+  if (!signal) {
+    const prev = fetchPorFechaInflight.get(f);
+    if (prev) return prev;
   }
-  return data;
+  const run = async () => {
+    const url = `${API_URL}?fecha=${encodeURIComponent(f)}`;
+    const res = await fetch(url, signal ? { signal } : {});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) {
+      console.error('fetchPorFecha: respuesta no es un arreglo', typeof data);
+      throw new Error('Respuesta API inválida');
+    }
+    return data;
+  };
+  const p = run().finally(() => {
+    if (!signal) fetchPorFechaInflight.delete(f);
+  });
+  if (!signal) fetchPorFechaInflight.set(f, p);
+  return p;
 }
 
 async function fetchMetaUniverso(fecha) {
@@ -5200,14 +5214,14 @@ async function cambiarFecha() {
     try {
       const [datos, salidas, meta] = await Promise.all([
         fetchPorFecha(fecha),
-        fetch(SALIDAS_URL).then((r) => r.json()).catch(() => []),
+        fetchSalidas(),
         fetchMetaUniverso(fecha),
       ]);
       datosGlobal = datos;
       fechaDatosGlobal = fecha;
       datosClientes = datos;
       metaUniversoTurno = meta;
-      salidasRegistradas = normalizarListaSalidas(salidas);
+      salidasRegistradas = salidas;
       separarDatos(datosGlobal);
       actualizarEstado(true);
       _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
@@ -5229,14 +5243,14 @@ async function cargarDatos() {
       const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
       const [datos, salidas, meta] = await Promise.all([
         fetchPorFecha(fecha),
-        fetch(SALIDAS_URL).then((r) => r.json()).catch(() => []),
+        fetchSalidas(),
         fetchMetaUniverso(fecha),
       ]);
       datosGlobal = datos;
       fechaDatosGlobal = fecha;
       datosClientes = datos;
       metaUniversoTurno = meta;
-      salidasRegistradas = normalizarListaSalidas(salidas);
+      salidasRegistradas = salidas;
       separarDatos(datos);
       actualizarEstado(true);
       _autoInvSnapshot = snapshotPendientes(datos, salidasRegistradas);
