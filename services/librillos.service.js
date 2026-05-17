@@ -312,16 +312,43 @@ export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
     };
   }
 
-  const [datosHoy, datosAyer] = await Promise.all([
-    consultarLibrillos(fecha),
-    consultarLibrillos(ayer),
+  const idsHoy = await idsUniversoReporteDia(fecha);
+  const idsAyer = await idsUniversoReporteDia(ayer);
+  const ids = [...new Set([...idsHoy, ...idsAyer])];
+  const [sucAyer, sucHoy, obsAyer, obsHoy] = await Promise.all([
+    mapaSucursalPorIdsHastaFechaDia(ayer, ids),
+    mapaSucursalPorIdsHastaFechaDia(fecha, ids),
+    mapaObservacionPartePorIdsEnFecha(ayer, ids),
+    mapaObservacionPartePorIdsEnFecha(fecha, ids),
   ]);
-  const cambios = listarCambiosSucursalCrudasEntreFilas(
-    datosAyer,
-    datosHoy,
-    ayer,
-    fecha
-  );
+  const cambios = [];
+  const generado = new Date().toISOString();
+  for (const id of ids) {
+    const sAnt = sucursalNormLibrilloRow({ sucursal: sucAyer.get(id) });
+    const sNue = sucursalNormLibrilloRow({ sucursal: sucHoy.get(id) });
+    if (sAnt === sNue) continue;
+    const obsAnt = obsAyer.get(id) || '';
+    const obsNue = obsHoy.get(id) || '';
+    if (!esCrudaHistorialLibrillosRow({ observaciones: obsAnt }) && !esCrudaHistorialLibrillosRow({ observaciones: obsNue })) {
+      continue;
+    }
+    cambios.push({
+      id,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: sAnt || '—',
+      despues: sNue || '—',
+      sucursal_antes: sAnt,
+      sucursal_despues: sNue,
+      observacion_antes: obsAnt,
+      observacion_despues: obsNue,
+      observacion_texto: obsNue,
+      detectado_en: generado,
+      momento_bd: null,
+      fuente: 'bd_servidor',
+      fecha_referencia: ayer,
+      fecha_revision: fecha,
+    });
+  }
 
   return {
     fecha,
@@ -331,8 +358,82 @@ export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
   };
 }
 
+/** Sucursal (local Colbeef) vigente al cierre del día calendario Bogotá, por última parte tipo Colbeef ≤ esa fecha. */
+async function mapaSucursalPorIdsHastaFechaDia(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const out = new Map();
+  const grupos = chunks(ids, META_RAIZ_BATCH);
+  for (const grupo of grupos) {
+    const res = await pool.query(
+      `
+      WITH pp_asof AS (
+        SELECT DISTINCT ON (pp.id_producto::text)
+          pp.id_producto::text AS id_producto,
+          pp.id AS id_parte_producto
+        FROM trazabilidad_proceso.parte_producto pp
+        WHERE pp.id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
+          AND pp.id_producto::text = ANY($2::text[])
+          AND (timezone('America/Bogota', pp.fecha_registro))::date <= $1::date
+        ORDER BY pp.id_producto::text, pp.fecha_registro DESC NULLS LAST, pp.id DESC
+      ),
+      ppe_lnk AS (
+        SELECT DISTINCT ON (ppe.id_producto::text)
+          ppe.id_producto::text AS id_producto,
+          ppe.id AS id_parte_producto_empresa
+        FROM trazabilidad_proceso.parte_producto_empresa ppe
+        INNER JOIN pp_asof pa
+          ON pa.id_producto = ppe.id_producto::text
+         AND pa.id_parte_producto = ppe.id_parte_producto
+        ORDER BY ppe.id_producto::text, ppe.id DESC
+      ),
+      ppel_lnk AS (
+        SELECT DISTINCT ON (ppel.id_parte_producto_empresa)
+          ppel.id_parte_producto_empresa,
+          ppel.id_local
+        FROM trazabilidad_proceso.parte_producto_empresa_local ppel
+        INNER JOIN ppe_lnk pl ON pl.id_parte_producto_empresa = ppel.id_parte_producto_empresa
+        ORDER BY ppel.id_parte_producto_empresa, ppel.id DESC
+      )
+      SELECT
+        pa.id_producto,
+        s.nombre AS sucursal
+      FROM pp_asof pa
+      LEFT JOIN ppe_lnk pl ON pl.id_producto = pa.id_producto
+      LEFT JOIN ppel_lnk pel ON pel.id_parte_producto_empresa = pl.id_parte_producto_empresa
+      LEFT JOIN organizaciones.sucursal s ON s.id = pel.id_local
+      `,
+      [fechaISO, grupo]
+    );
+    (res.rows || []).forEach((r) => {
+      out.set(String(r.id_producto), String(r.sucursal || '').trim());
+    });
+  }
+  return out;
+}
+
+/** Observación de parte_producto ese día (última del calendario); respaldo última conocida si no hubo registro. */
+async function mapaObservacionPartePorIdsEnFecha(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const { map: delDia } = await filasParteProductoPorIdsYFecha(fechaISO, ids);
+  const faltantes = ids.filter((id) => !delDia.has(String(id)));
+  const ult = faltantes.length ? await observacionesUltimasPorIds(faltantes) : new Map();
+  for (const id of ids) {
+    const row = delDia.get(String(id)) || ult.get(String(id));
+    out.set(
+      String(id),
+      String(row?.observaciones || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+  }
+  return out;
+}
+
 /**
- * Revisión logística: códigos del plan de faena de un día vs sucursal en BD en fecha de revisión (p. ej. plan 13-may, revisión 14-may).
+ * Revisión logística: plan de faena (día N) vs sucursal al cierre de cada día (no el valor «actual» único).
  */
 export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fechaRevisionISO) {
   const fechaPlan = String(fechaPlanISO || '').trim();
@@ -341,20 +442,59 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
   }
   const planSet = await idsPlanFaenaPorFecha(fechaPlan);
-  const [arrPlan, arrRevision] = await Promise.all([
-    consultarLibrillosConCache(fechaPlan),
-    consultarLibrillosConCache(fechaRevision),
+  const ids = [...planSet];
+  const generado = new Date().toISOString();
+  if (!ids.length) {
+    return {
+      fecha_plan: fechaPlan,
+      fecha_revision: fechaRevision,
+      total_plan_faena: 0,
+      cambios: [],
+      generado_en: generado,
+    };
+  }
+
+  const [sucPlan, sucRev, obsPlan, obsRev] = await Promise.all([
+    mapaSucursalPorIdsHastaFechaDia(fechaPlan, ids),
+    mapaSucursalPorIdsHastaFechaDia(fechaRevision, ids),
+    mapaObservacionPartePorIdsEnFecha(fechaPlan, ids),
+    mapaObservacionPartePorIdsEnFecha(fechaRevision, ids),
   ]);
-  const cambios = listarCambiosSucursalEntreFilas(arrPlan, arrRevision, fechaPlan, fechaRevision, {
-    soloCrudas: false,
-    idsPermitidos: planSet,
-  });
+
+  const cambios = [];
+  for (const id of ids) {
+    const sAnt = sucursalNormLibrilloRow({ sucursal: sucPlan.get(id) });
+    const sNue = sucursalNormLibrilloRow({ sucursal: sucRev.get(id) });
+    if (sAnt === sNue) continue;
+    const obsAnt = obsPlan.get(id) || '';
+    const obsNue = obsRev.get(id) || '';
+    if (!esCrudaHistorialLibrillosRow({ observaciones: obsAnt }) && !esCrudaHistorialLibrillosRow({ observaciones: obsNue })) {
+      continue;
+    }
+    cambios.push({
+      id,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: sAnt || '—',
+      despues: sNue || '—',
+      sucursal_antes: sAnt,
+      sucursal_despues: sNue,
+      observacion_antes: obsAnt,
+      observacion_despues: obsNue,
+      observacion_texto: obsNue,
+      detectado_en: generado,
+      momento_bd: null,
+      fuente: 'bd_servidor',
+      fecha_referencia: fechaPlan,
+      fecha_revision: fechaRevision,
+    });
+  }
+
   return {
     fecha_plan: fechaPlan,
     fecha_revision: fechaRevision,
     total_plan_faena: planSet.size,
     cambios,
-    generado_en: new Date().toISOString(),
+    generado_en: generado,
   };
 }
 

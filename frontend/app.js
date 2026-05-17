@@ -4168,20 +4168,23 @@ function actualizarHistoricoReimpFechas() {
     `F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fechaEtiquetas)}`;
 }
 
+function sucursalHistoricoNorm(val) {
+  const t = normalizarObsHistorico(val);
+  if (!t || t === '—' || t === '-') return '';
+  return t;
+}
+
 function esFilaReimpresionCruda(r) {
   if (!r?.idProducto) return false;
-  const sucAnt = normalizarObsHistorico(r.sucursalAntes);
-  const sucDes = normalizarObsHistorico(r.sucursalDespues);
-  const sucCambio = sucAnt !== sucDes && !!sucDes;
+  const sucAnt = sucursalHistoricoNorm(r.sucursalAntes);
+  const sucDes = sucursalHistoricoNorm(r.sucursalDespues);
+  const sucCambio = sucAnt !== sucDes && (sucAnt !== '' || sucDes !== '');
   if (!sucCambio) return false;
-  if (r.esCambioSucursalRevision) {
-    return (
-      r.tipo === 'cruda' ||
-      /\bCRUDAS?\b/i.test(String(r.despues || '')) ||
-      /\bCRUDAS?\b/i.test(String(r.antes || ''))
-    );
-  }
-  return r.tipo === 'cruda';
+  const obsCruda =
+    r.tipo === 'cruda' ||
+    /\bCRUDAS?\b/i.test(String(r.despues || '')) ||
+    /\bCRUDAS?\b/i.test(String(r.antes || ''));
+  return r.esCambioSucursalRevision ? obsCruda : r.tipo === 'cruda' && sucCambio;
 }
 
 async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {}) {
