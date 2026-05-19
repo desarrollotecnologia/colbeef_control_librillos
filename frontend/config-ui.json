@@ -7,6 +7,9 @@
   "kpiStripTitle": "Plan de faena del día: el listado y el resumen incluyen todos los códigos del plan (clasificados al cargar). Los KPI muestran cuántos ya fueron insensibilizados.",
   "autoRefreshDatosMs": 30000,
   "autoRefreshObsMs": 20000,
+  "cacheFrontMs": 90000,
+  "cacheHistoricoMs": 120000,
+  "staleWhileRevalidate": true,
   "kpiLabels": {
     "universo": "En plan de faena",
     "conParte": "Insensibilizados (en plan)",

@@ -100,6 +100,14 @@ const CACHE_RANGO_MS = (() => {
   if (Number.isFinite(n) && n >= 5000 && n <= 900000) return n;
   return 90000;
 })();
+/** Cruce plan→revisión (histórico reimpresión): misma pareja de fechas = respuesta en memoria. */
+const CACHE_CRUCE_SUCURSAL_MS = (() => {
+  const n = parseInt(String(process.env.CACHE_CRUCE_SUCURSAL_MS || ''), 10);
+  if (Number.isFinite(n) && n >= 10000 && n <= 900000) return n;
+  return 120000;
+})();
+const cacheCambiosSucursalRevision = new Map();
+const cacheMapaSucursalHastaFecha = new Map();
 
 // ── PARSEAR OBSERVACIÓN ───────────────────────────────────────────────────────
 /**
@@ -358,10 +366,33 @@ export async function obtenerCrudasCambioSucursalCruceDiaAnterior(fechaISO) {
   };
 }
 
+function huellaIdsConsulta(ids) {
+  const s = [...ids].map(String).sort();
+  if (s.length <= 4) return s.join('\x1f');
+  return `${s.length}\x1f${s[0]}\x1f${s[s.length - 1]}`;
+}
+
+function invalidarCacheCruceSucursalPorFecha(fechaISO) {
+  const f = String(fechaISO || '').trim();
+  if (!f) return;
+  for (const k of cacheCambiosSucursalRevision.keys()) {
+    if (k.startsWith(`${f}|`) || k.endsWith(`|${f}`)) cacheCambiosSucursalRevision.delete(k);
+  }
+  for (const k of cacheMapaSucursalHastaFecha.keys()) {
+    if (k.startsWith(`${f}|`)) cacheMapaSucursalHastaFecha.delete(k);
+  }
+}
+
 /** Sucursal (local Colbeef) vigente al cierre del día calendario Bogotá, por última parte tipo Colbeef ≤ esa fecha. */
 async function mapaSucursalPorIdsHastaFechaDia(fechaISO, idsTexto) {
   const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
+  const fecha = String(fechaISO || '').trim();
+  const cacheKey = `${fecha}|${huellaIdsConsulta(ids)}`;
+  const hit = cacheMapaSucursalHastaFecha.get(cacheKey);
+  if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_FECHA_MS) {
+    return hit.map;
+  }
   const out = new Map();
   const grupos = chunks(ids, META_RAIZ_BATCH);
   for (const grupo of grupos) {
@@ -409,6 +440,7 @@ async function mapaSucursalPorIdsHastaFechaDia(fechaISO, idsTexto) {
       out.set(String(r.id_producto), String(r.sucursal || '').trim());
     });
   }
+  cacheMapaSucursalHastaFecha.set(cacheKey, { ts: Date.now(), map: out });
   return out;
 }
 
@@ -440,6 +472,11 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
   const fechaRevision = String(fechaRevisionISO || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
     throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
+  }
+  const cacheKey = `${fechaPlan}|${fechaRevision}`;
+  const hitCruce = cacheCambiosSucursalRevision.get(cacheKey);
+  if (hitCruce && Date.now() - Number(hitCruce.ts || 0) <= CACHE_CRUCE_SUCURSAL_MS) {
+    return hitCruce.data;
   }
   const planSet = await idsPlanFaenaPorFecha(fechaPlan);
   const ids = [...planSet];
@@ -489,13 +526,15 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     });
   }
 
-  return {
+  const payload = {
     fecha_plan: fechaPlan,
     fecha_revision: fechaRevision,
     total_plan_faena: planSet.size,
     cambios,
     generado_en: generado,
   };
+  cacheCambiosSucursalRevision.set(cacheKey, { ts: Date.now(), data: payload });
+  return payload;
 }
 
 function claveCacheFecha(fechaISO) {
@@ -1507,8 +1546,10 @@ export async function obtenerLibrillosConsultaBdDirecta(fechaISO) {
 }
 
 export function invalidarCacheLibrillosFecha(fechaISO) {
-  const k = claveCacheFecha(String(fechaISO || '').trim());
+  const f = String(fechaISO || '').trim();
+  const k = claveCacheFecha(f);
   if (k) cachePorFecha.delete(k);
+  invalidarCacheCruceSucursalPorFecha(f);
 }
 
 // ── CACHE ─────────────────────────────────────────────────────────────────────

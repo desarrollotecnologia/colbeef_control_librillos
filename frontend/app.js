@@ -1147,7 +1147,13 @@ let fechaDatosGlobal = '';
 const cacheRangoFront = new Map();
 let cacheSalidasFront = { ts: 0, data: null };
 const cacheResumenMacroFront = new Map();
-const CACHE_FRONT_MS = 60000;
+const cacheDatosPorFechaFront = new Map();
+const cacheObsPorFechaFront = new Map();
+const cacheHistoricoFront = new Map();
+const fetchObsPorFechaInflight = new Map();
+let CACHE_FRONT_MS = 60000;
+let CACHE_HISTORICO_MS = 120000;
+let STALE_WHILE_REVALIDATE = true;
 /** Evita repetir GET /universo-meta para la misma fecha en paralelo al listado/resumen (respuesta liviana pero suelta en grupo). */
 const cacheMetaUniversoFront = new Map();
 /** Caché más larga para rangos (reporte de librillos): evita repetir consultas pesadas al cambiar de vista. */
@@ -1533,6 +1539,11 @@ const DEFAULT_COLBEEF_UI = {
   /** Menos peticiones a BD = interfaz más fluida (mín. 15000). */
   autoRefreshDatosMs: 30000,
   autoRefreshObsMs: 20000,
+  /** Caché en navegador (ms): misma fecha / histórico sin volver a pedir al servidor. */
+  cacheFrontMs: 60000,
+  cacheHistoricoMs: 120000,
+  /** Si hay caché al cambiar fecha, pintar al instante y refrescar en segundo plano. */
+  staleWhileRevalidate: true,
 };
 let colbeefUiConfig = { ...DEFAULT_COLBEEF_UI };
 
@@ -1552,6 +1563,11 @@ async function cargarConfigUi() {
   } catch {
     colbeefUiConfig = { ...DEFAULT_COLBEEF_UI };
   }
+  const cf = Number(colbeefUiConfig.cacheFrontMs);
+  const ch = Number(colbeefUiConfig.cacheHistoricoMs);
+  if (Number.isFinite(cf) && cf >= 15000 && cf <= 600000) CACHE_FRONT_MS = cf;
+  if (Number.isFinite(ch) && ch >= 15000 && ch <= 600000) CACHE_HISTORICO_MS = ch;
+  STALE_WHILE_REVALIDATE = colbeefUiConfig.staleWhileRevalidate !== false;
   aplicarConfigUi();
   reiniciarIntervalosAutoRefresh();
 }
@@ -1728,8 +1744,10 @@ function irVista(nombre, btn, opts = {}) {
       const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
       const fd = document.getElementById('fecha-historico-desde');
       const fh = document.getElementById('fecha-historico-hasta');
-      if (fd) fd.value = diaAnteriorISO(fechaRevision);
+      const fechaPlan = diaAnteriorISO(fechaRevision);
+      if (fd) fd.value = fechaPlan;
       if (fh) fh.value = fechaRevision;
+      prefetchDatosHistoricoReimp(fechaPlan, fechaRevision);
     }
     actualizarHistoricoReimpFechas();
     if (!opts.skipHistoricoCarga) void cargarHistoricoCambios();
@@ -1793,10 +1811,24 @@ function cambiarSubtabInventario(tab) {
 /** Peticiones duplicadas de la misma fecha se comparten (evita doble carga BD). Ignorado si hay AbortSignal. */
 const fetchPorFechaInflight = new Map();
 
+function invalidarCacheDatosFechaFront(fecha) {
+  const f = String(fecha || '').trim();
+  if (!f) return;
+  cacheDatosPorFechaFront.delete(f);
+  cacheObsPorFechaFront.delete(f);
+  cacheMetaUniversoFront.delete(f);
+  cacheResumenMacroFront.delete(f);
+}
+
 async function fetchPorFecha(fecha, opts = {}) {
   const signal = opts && opts.signal;
+  const bypass = opts && opts.bypassCache === true;
   const f = String(fecha || '').trim() || hoyISO();
-  if (!signal) {
+  if (!signal && !bypass) {
+    const hit = cacheDatosPorFechaFront.get(f);
+    if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS) {
+      return hit.data;
+    }
     const prev = fetchPorFechaInflight.get(f);
     if (prev) return prev;
   }
@@ -1808,6 +1840,9 @@ async function fetchPorFecha(fecha, opts = {}) {
     if (!Array.isArray(data)) {
       console.error('fetchPorFecha: respuesta no es un arreglo', typeof data);
       throw new Error('Respuesta API inválida');
+    }
+    if (!signal && !bypass) {
+      cacheDatosPorFechaFront.set(f, { ts: Date.now(), data });
     }
     return data;
   };
@@ -1931,14 +1966,36 @@ function normalizarListaSalidas(lista) {
 
 async function fetchObservacionesPorFecha(fecha, opts = {}) {
   const signal = opts && opts.signal;
-  try {
-    const res = await fetch(`${API_URL}/observaciones?fecha=${encodeURIComponent(fecha)}`, signal ? { signal } : {});
-    if (!res.ok) return [];
-    return res.json();
-  } catch (e) {
-    if (e && e.name === 'AbortError') throw e;
-    return [];
+  const bypass = opts && opts.bypassCache === true;
+  const f = String(fecha || '').trim() || hoyISO();
+  if (!signal && !bypass) {
+    const hit = cacheObsPorFechaFront.get(f);
+    if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS) {
+      return hit.data;
+    }
+    const inflight = fetchObsPorFechaInflight.get(f);
+    if (inflight) return inflight;
   }
+  const run = async () => {
+    try {
+      const res = await fetch(`${API_URL}/observaciones?fecha=${encodeURIComponent(f)}`, signal ? { signal } : {});
+      if (!res.ok) return [];
+      const data = await res.json();
+      const out = Array.isArray(data) ? data : [];
+      if (!signal && !bypass) {
+        cacheObsPorFechaFront.set(f, { ts: Date.now(), data: out });
+      }
+      return out;
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw e;
+      return [];
+    }
+  };
+  const p = run().finally(() => {
+    if (!signal) fetchObsPorFechaInflight.delete(f);
+  });
+  if (!signal) fetchObsPorFechaInflight.set(f, p);
+  return p;
 }
 
 /**
@@ -4530,19 +4587,37 @@ function seleccionarTodosHistoricoCrudas() {
   toggleTodasHistoricoCrudas(chkAll);
 }
 
-async function cargarHistoricoCambios() {
-  return runWithAppLoader('Cargando historico de cambios...', async () => {
+function aplicarHistoricoDesdeCache(hit, fechaPlan, fechaRevision) {
+  historicoCambios = hit.historicoCambios || [];
+  const lbl = document.getElementById('historico-rango-label');
+  if (lbl && hit.lblText) lbl.textContent = hit.lblText;
+  filtrarHistoricoCambios();
+  actualizarHistoricoReimpFechas();
+}
+
+async function cargarHistoricoCambios(opts = {}) {
+  const fechaPlan = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
+  const fechaRevision = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
+  if (!fechaPlan || !fechaRevision) {
+    mostrarToast('Selecciona día del plan (desde) y día de revisión (hasta)', 'err');
+    return;
+  }
+  if (fechaPlan > fechaRevision) {
+    mostrarToast('El día del plan no puede ser posterior al día de revisión', 'err');
+    return;
+  }
+  const cacheKey = `${fechaPlan}|${fechaRevision}`;
+  const hit = cacheHistoricoFront.get(cacheKey);
+  const cacheVigente = hit && Date.now() - Number(hit.ts || 0) <= CACHE_HISTORICO_MS;
+  if (cacheVigente && !opts.bypassCache) {
+    aplicarHistoricoDesdeCache(hit, fechaPlan, fechaRevision);
+    if (STALE_WHILE_REVALIDATE) {
+      void cargarHistoricoCambios({ bypassCache: true, silencioso: true });
+    }
+    return;
+  }
+  const cargar = async () => {
     const t0 = Date.now();
-    const fechaPlan = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
-    const fechaRevision = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
-    if (!fechaPlan || !fechaRevision) {
-      mostrarToast('Selecciona día del plan (desde) y día de revisión (hasta)', 'err');
-      return;
-    }
-    if (fechaPlan > fechaRevision) {
-      mostrarToast('El día del plan no puede ser posterior al día de revisión', 'err');
-      return;
-    }
     clearTimeout(_histSearchDebounceT);
     _histSearchDebounceT = null;
     const qAud = new URLSearchParams({
@@ -4597,11 +4672,15 @@ async function cargarHistoricoCambios() {
     const lbl = document.getElementById('historico-rango-label');
     const nCruce = filasCruce.length;
     const nAud = filasAud.length;
-    if (lbl) {
-      lbl.textContent =
-        `Plan ${labelFecha(fechaPlan)} → revisión ${labelFecha(fechaRevision)} · ` +
-        `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría)`;
-    }
+    const lblText =
+      `Plan ${labelFecha(fechaPlan)} → revisión ${labelFecha(fechaRevision)} · ` +
+      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría)`;
+    if (lbl) lbl.textContent = lblText;
+    cacheHistoricoFront.set(cacheKey, {
+      ts: Date.now(),
+      historicoCambios: [...historicoCambios],
+      lblText,
+    });
     filtrarHistoricoCambios();
     actualizarHistoricoReimpFechas();
     const ms = Math.max(0, Date.now() - t0);
@@ -4616,9 +4695,19 @@ async function cargarHistoricoCambios() {
         totalCruce: nCruce,
         totalAuditoria: nAud,
         total_plan: Number(payloadCruce?.total_plan_faena || 0),
+        desde_cache: false,
       },
     });
-  });
+  };
+  if (opts.silencioso) {
+    try {
+      await cargar();
+    } catch {
+      // silencioso
+    }
+    return;
+  }
+  return runWithAppLoader('Cargando historico de cambios...', cargar);
 }
 
 async function imprimirEtiquetasHistoricoCrudasSeleccion() {
@@ -4895,26 +4984,76 @@ async function revisarPostCierreSucursal() {
   }
 }
 
+function aplicarDatosTurnoEnMemoria(fecha, datos, salidas, meta) {
+  datosGlobal = datos;
+  fechaDatosGlobal = fecha;
+  datosClientes = datos;
+  metaUniversoTurno = meta;
+  salidasRegistradas = salidas;
+  separarDatos(datos);
+  actualizarEstado(true);
+  _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
+  _autoObsSnapshot = '';
+  _obsTextoMapPrev = new Map();
+}
+
+async function cargarDatosTurnoDesdeRed(fecha, opts = {}) {
+  const bypass = opts.bypassCache === true;
+  const [datos, salidas, meta] = await Promise.all([
+    fetchPorFecha(fecha, bypass ? { bypassCache: true } : {}),
+    fetchSalidas(),
+    fetchMetaUniverso(fecha, bypass ? { bypassCache: true } : {}),
+  ]);
+  aplicarDatosTurnoEnMemoria(fecha, datos, salidas, meta);
+  return { datos, salidas, meta };
+}
+
+function prefetchDatosHistoricoReimp(fechaPlan, fechaRevision) {
+  const plan = String(fechaPlan || '').trim();
+  const rev = String(fechaRevision || '').trim();
+  if (!plan || !rev) return;
+  const diaEtq = sumarDiasISO(plan, 1) || rev;
+  void fetchPorFecha(diaEtq).catch(() => {});
+  const key = `${plan}|${rev}`;
+  if (cacheHistoricoFront.has(key)) return;
+  const headers = { Accept: 'application/json' };
+  try {
+    const k = String(localStorage.getItem(LS_ANALYTICS_ADMIN_KEY) || '').trim();
+    if (k) headers['x-analytics-key'] = k;
+  } catch {
+    // ignore
+  }
+  void fetch(`${API_URL}/cambios-sucursal-revision?fecha_plan=${encodeURIComponent(plan)}&fecha_revision=${encodeURIComponent(rev)}`, {
+    headers,
+  }).catch(() => {});
+}
+
 // ── CAMBIAR FECHA ─────────────────────────────────────────────────────────────
 async function cambiarFecha() {
+  abortarLibAuto();
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  document.getElementById('pg-sub').textContent = labelFecha(fecha);
+  sincronizarFechasSecundariasConFechaGlobal();
+  const hit = cacheDatosPorFechaFront.get(fecha);
+  const cacheVigente = hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS;
+  if (STALE_WHILE_REVALIDATE && cacheVigente) {
+    const salidas = await fetchSalidas();
+    const meta = (await fetchMetaUniverso(fecha)) || metaUniversoTurno;
+    aplicarDatosTurnoEnMemoria(fecha, hit.data, salidas, meta);
+    aplicarUiTrasCargarDatos();
+    void cargarDatosTurnoDesdeRed(fecha, { bypassCache: true })
+      .then(() => {
+        sincronizarFechasSecundariasConFechaGlobal();
+        aplicarUiTrasCargarDatos();
+      })
+      .catch((e) => {
+        console.warn('Refresco en segundo plano:', e);
+      });
+    return;
+  }
   return runWithAppLoader('Actualizando datos por fecha...', async () => {
-    abortarLibAuto();
-    const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-    document.getElementById('pg-sub').textContent = labelFecha(fecha);
     try {
-      const [datos, salidas, meta] = await Promise.all([
-        fetchPorFecha(fecha),
-        fetchSalidas(),
-        fetchMetaUniverso(fecha),
-      ]);
-      datosGlobal = datos;
-      fechaDatosGlobal = fecha;
-      datosClientes = datos;
-      metaUniversoTurno = meta;
-      salidasRegistradas = salidas;
-      separarDatos(datosGlobal);
-      actualizarEstado(true);
-      _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
+      await cargarDatosTurnoDesdeRed(fecha);
       sincronizarFechasSecundariasConFechaGlobal();
       aplicarUiTrasCargarDatos();
     } catch (e) {
@@ -4927,23 +5066,28 @@ async function cambiarFecha() {
 
 // ── CARGAR DATOS ──────────────────────────────────────────────────────────────
 async function cargarDatos() {
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  const hit = cacheDatosPorFechaFront.get(fecha);
+  const cacheVigente = hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS;
+  if (STALE_WHILE_REVALIDATE && cacheVigente) {
+    abortarLibAuto();
+    const salidas = await fetchSalidas();
+    const meta = (await fetchMetaUniverso(fecha)) || null;
+    aplicarDatosTurnoEnMemoria(fecha, hit.data, salidas, meta);
+    sincronizarFechasSecundariasConFechaGlobal();
+    aplicarUiTrasCargarDatos();
+    void cargarDatosTurnoDesdeRed(fecha, { bypassCache: true })
+      .then(() => {
+        sincronizarFechasSecundariasConFechaGlobal();
+        aplicarUiTrasCargarDatos();
+      })
+      .catch((e) => console.warn('Refresco inicial en segundo plano:', e));
+    return;
+  }
   return runWithAppLoader('Cargando inventario del turno...', async () => {
     try {
       abortarLibAuto();
-      const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-      const [datos, salidas, meta] = await Promise.all([
-        fetchPorFecha(fecha),
-        fetchSalidas(),
-        fetchMetaUniverso(fecha),
-      ]);
-      datosGlobal = datos;
-      fechaDatosGlobal = fecha;
-      datosClientes = datos;
-      metaUniversoTurno = meta;
-      salidasRegistradas = salidas;
-      separarDatos(datos);
-      actualizarEstado(true);
-      _autoInvSnapshot = snapshotPendientes(datos, salidasRegistradas);
+      await cargarDatosTurnoDesdeRed(fecha);
       sincronizarFechasSecundariasConFechaGlobal();
       aplicarUiTrasCargarDatos();
     } catch (e) {
@@ -5995,11 +6139,14 @@ async function despacharSeleccionadosCrud() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      salidasRegistradas = await fetchSalidas();
+      invalidarCacheDatosFechaFront(fecha);
+      cacheSalidasFront = { ts: 0, data: null };
       seleccionadosCrud.clear();
       const ca = document.getElementById('chk-all-crud');
       if (ca) ca.checked = false;
-      await cargarDatos();
+      await cargarDatosTurnoDesdeRed(fecha, { bypassCache: true });
+      sincronizarFechasSecundariasConFechaGlobal();
+      aplicarUiTrasCargarDatos();
       const extras = Math.max(0, idsConRelacionados.length - idsValidos.length);
       mostrarToast(`${data.registradas || idsConRelacionados.length} salida(s) registradas. ${extras ? `Incluye ${extras} relacionada(s) por identificación.` : ''}`, 'ok');
     } catch(e) {
@@ -6039,11 +6186,14 @@ async function despacharSeleccionados() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      salidasRegistradas = await fetchSalidas();
+      invalidarCacheDatosFechaFront(fecha);
+      cacheSalidasFront = { ts: 0, data: null };
       seleccionados.clear();
       const ca = document.getElementById('chk-all');
       if (ca) ca.checked = false;
-      await cargarDatos();
+      await cargarDatosTurnoDesdeRed(fecha, { bypassCache: true });
+      sincronizarFechasSecundariasConFechaGlobal();
+      aplicarUiTrasCargarDatos();
       const extras = Math.max(0, idsConRelacionados.length - idsValidos.length);
       mostrarToast(`${data.registradas || idsConRelacionados.length} salida(s) registradas. ${extras ? `Incluye ${extras} relacionada(s) por identificación.` : ''}`, 'ok');
     } catch(e) {
