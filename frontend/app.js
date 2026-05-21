@@ -4240,23 +4240,52 @@ function sucursalHistoricoNorm(val) {
   return t;
 }
 
+function tieneCambioSucursalHistorico(r) {
+  const sucAnt = sucursalHistoricoNorm(r?.sucursalAntes);
+  const sucDes = sucursalHistoricoNorm(r?.sucursalDespues);
+  if (sucAnt === sucDes) return false;
+  return Boolean(sucAnt || sucDes);
+}
+
+function esObservacionCrudaHistorico(r) {
+  return (
+    r?.tipo === 'cruda' ||
+    /\bCRUDAS?\b/i.test(String(r?.despues || '')) ||
+    /\bCRUDAS?\b/i.test(String(r?.antes || ''))
+  );
+}
+
+/** Cruce plan→revisión en BD o cambio de sucursal registrado en auditoría (planillaje). */
+function esCandidatoReimpresionCruda(r) {
+  if (!r?.idProducto) return false;
+  if (!tieneCambioSucursalHistorico(r)) return false;
+  if (!esObservacionCrudaHistorico(r)) return false;
+  if (r.esCambioSucursalRevision) return true;
+  if (r.fuenteHistorico === 'auditoria' && r.esCambioRealObservacion) return true;
+  return false;
+}
+
 /**
- * Re-etiquetado: solo cruce plan→revisión con cambio real de sucursal (no movimiento interno de cava
- * ni auditoría en vivo) y pendiente de despacho (sin salida de cava ni despacho Colbeef).
+ * Re-etiquetado: cambio real de sucursal (cruce BD o auditoría) y pendiente de despacho.
  */
 function esFilaReimpresionCruda(r) {
-  if (!r?.idProducto) return false;
-  if (!r.esCambioSucursalRevision) return false;
-  const sucAnt = sucursalHistoricoNorm(r.sucursalAntes);
-  const sucDes = sucursalHistoricoNorm(r.sucursalDespues);
-  if (sucAnt === sucDes || (!sucAnt && !sucDes)) return false;
-  const obsCruda =
-    r.tipo === 'cruda' ||
-    /\bCRUDAS?\b/i.test(String(r.despues || '')) ||
-    /\bCRUDAS?\b/i.test(String(r.antes || ''));
-  if (!obsCruda) return false;
+  if (!esCandidatoReimpresionCruda(r)) return false;
   if (r.elegibleReimpresion === false) return false;
   return true;
+}
+
+/** Una fila por ID (la más reciente) para la tabla de impresión. */
+function filasReimpresionUnicasPorId(rows) {
+  const byId = new Map();
+  for (const r of rows || []) {
+    const id = String(r.idProducto || '').trim();
+    if (!id) continue;
+    const prev = byId.get(id);
+    if (!prev || Date.parse(r.fecha || 0) >= Date.parse(prev.fecha || 0)) {
+      byId.set(id, r);
+    }
+  }
+  return [...byId.values()].sort((a, b) => Date.parse(b.fecha || 0) - Date.parse(a.fecha || 0));
 }
 
 /** Elegible y aún sin registro de reimpresión para este plan → revisión. */
@@ -4327,7 +4356,9 @@ async function registrarReimpresionCrudasApi(fechaPlan, fechaRevision, listaDato
 function actualizarResumenReimpresionCrudas() {
   const el = document.getElementById('historico-reimp-resumen');
   if (!el) return;
-  const elegibles = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const elegibles = filasReimpresionUnicasPorId(
+    historicoCambiosFiltrados.filter(esFilaReimpresionCruda)
+  );
   const pendientes = elegibles.filter(esFilaPendienteReimpresionCruda);
   const hechas = elegibles.length - pendientes.length;
   if (!elegibles.length) {
@@ -4602,13 +4633,15 @@ function htmlFilaHistoricoCruda(r) {
   const checked = historicoCrudasSeleccionadas.has(r.idProducto) ? 'checked' : '';
   const sAnt = r.sucursalAntes || '—';
   const sDes = r.sucursalDespues || '—';
+  const fuenteCls = r.esCambioSucursalRevision ? 'hist-badge-cruce' : 'hist-badge-aud';
+  const fuenteTxt = r.esCambioSucursalRevision ? 'Cruce' : 'Aud.';
   const estado = r.yaReimpreso
     ? `<span class="hist-badge hist-badge-ok" title="${escapeHtml(r.reimpresoPor || '')}">Reimpresa</span>`
     : `<span class="hist-badge hist-badge-pend">Pendiente</span>`;
   const momentoReimp = r.yaReimpreso && r.reimpresoEn ? formatFecha(r.reimpresoEn) : '—';
   return `<tr class="row-hist-cruda${r.yaReimpreso ? ' row-hist-reimp-hecha' : ''}">
       <td><input type="checkbox" ${checked} onchange="toggleSeleccionHistoricoCruda('${escapeHtml(r.idProducto)}', this)"></td>
-      <td>${estado}</td>
+      <td>${estado} <span class="hist-badge ${fuenteCls}" style="margin-left:4px">${fuenteTxt}</span></td>
       <td>${escapeHtml(momentoReimp)}</td>
       <td>${escapeHtml(r.momento)}</td>
       <td>${escapeHtml(r.idProducto)}</td>
@@ -4624,15 +4657,28 @@ function pintarTablaHistoricoCrudas(gen) {
   const tbody = document.getElementById('tbody-historico-crudas');
   const chkAll = document.getElementById('chk-historico-crudas');
   if (!tbody) return;
-  const elegibles = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const elegibles = filasReimpresionUnicasPorId(
+    historicoCambiosFiltrados.filter(esFilaReimpresionCruda)
+  );
+  const candidatos = filasReimpresionUnicasPorId(
+    historicoCambiosFiltrados.filter(esCandidatoReimpresionCruda)
+  );
   const rows = elegibles.filter(esFilaPendienteReimpresionCruda);
   actualizarResumenReimpresionCrudas();
+  if (!candidatos.length) {
+    historicoCrudasSeleccionadas.clear();
+    if (chkAll) chkAll.checked = false;
+    actualizarContadorHistoricoCrudas();
+    tbody.innerHTML =
+      '<tr><td colspan="9" class="empty">Sin crudas con cambio de sucursal en este rango (cruce BD ni auditoría planillaje)</td></tr>';
+    return;
+  }
   if (!elegibles.length) {
     historicoCrudasSeleccionadas.clear();
     if (chkAll) chkAll.checked = false;
     actualizarContadorHistoricoCrudas();
     tbody.innerHTML =
-      '<tr><td colspan="9" class="empty">Sin crudas con cambio de sucursal (plan → revisión) pendientes de despacho</td></tr>';
+      `<tr><td colspan="9" class="empty">${candidatos.length} con cambio de sucursal, pero ninguna pendiente de despacho en el día de revisión (ya salieron de cava o despacho Colbeef)</td></tr>`;
     return;
   }
   if (!rows.length) {
@@ -4702,13 +4748,17 @@ function toggleSeleccionHistoricoCruda(id, chk) {
   if (chk?.checked) historicoCrudasSeleccionadas.add(k);
   else historicoCrudasSeleccionadas.delete(k);
   actualizarContadorHistoricoCrudas();
-  const rows = historicoCambiosFiltrados.filter(esFilaPendienteReimpresionCruda);
+  const rows = filasReimpresionUnicasPorId(
+    historicoCambiosFiltrados.filter(esFilaPendienteReimpresionCruda)
+  );
   const chkAll = document.getElementById('chk-historico-crudas');
   if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
 }
 
 function toggleTodasHistoricoCrudas(chkAll) {
-  const rows = historicoCambiosFiltrados.filter(esFilaPendienteReimpresionCruda);
+  const rows = filasReimpresionUnicasPorId(
+    historicoCambiosFiltrados.filter(esFilaPendienteReimpresionCruda)
+  );
   if (chkAll?.checked) rows.forEach((r) => historicoCrudasSeleccionadas.add(r.idProducto));
   else rows.forEach((r) => historicoCrudasSeleccionadas.delete(r.idProducto));
   pintarTablaHistoricoCrudas();
@@ -4744,7 +4794,7 @@ async function enriquecerElegibilidadReimpresionCrudas(fechaRevision) {
     const [datos, salidas] = await Promise.all([fetchPorFecha(fechaRev), fetchSalidas()]);
     const map = new Map((datos || []).map((d) => [String(d.id_producto), d]));
     for (const r of historicoCambios) {
-      if (!r.esCambioSucursalRevision) {
+      if (!esCandidatoReimpresionCruda(r)) {
         r.elegibleReimpresion = false;
         continue;
       }
@@ -4752,13 +4802,15 @@ async function enriquecerElegibilidadReimpresionCrudas(fechaRevision) {
       const enPlanilla = d && esVistaHistorialCrudasSolo(d);
       const sinSalida =
         d && !productoYaSalidaColbeefOTraz(d, salidas || salidasRegistradas);
-      r.elegibleReimpresion =
-        r.elegibleReimpresionBd !== false && Boolean(enPlanilla && sinSalida);
+      const baseBd = r.esCambioSucursalRevision ? r.elegibleReimpresionBd !== false : true;
+      r.elegibleReimpresion = baseBd && Boolean(enPlanilla && sinSalida);
     }
   } catch {
     for (const r of historicoCambios) {
-      if (r.esCambioSucursalRevision && r.elegibleReimpresion == null) {
-        r.elegibleReimpresion = r.elegibleReimpresionBd !== false;
+      if (!esCandidatoReimpresionCruda(r)) continue;
+      if (r.elegibleReimpresion == null) {
+        r.elegibleReimpresion =
+          r.esCambioSucursalRevision ? r.elegibleReimpresionBd !== false : true;
       }
     }
   }
@@ -4847,12 +4899,19 @@ async function cargarHistoricoCambios(opts = {}) {
     aplicarReimpresosAHistorico();
     const lbl = document.getElementById('historico-rango-label');
     const nCruce = filasCruce.length;
-    const nElegibles = historicoCambios.filter(esFilaReimpresionCruda).length;
-    const nPendientes = historicoCambios.filter(esFilaPendienteReimpresionCruda).length;
+    const nCandidatos = filasReimpresionUnicasPorId(
+      historicoCambios.filter(esCandidatoReimpresionCruda)
+    ).length;
+    const nElegibles = filasReimpresionUnicasPorId(
+      historicoCambios.filter(esFilaReimpresionCruda)
+    ).length;
+    const nPendientes = filasReimpresionUnicasPorId(
+      historicoCambios.filter(esFilaPendienteReimpresionCruda)
+    ).length;
     const nAud = filasAud.length;
     const lblText =
       `Plan ${labelFecha(fechaPlan)} → revisión ${labelFecha(fechaRevision)} · ` +
-      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría, ${nPendientes} pend. re-etiquetar, ${nElegibles - nPendientes} ya reimpresas)`;
+      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría, ${nCandidatos} c/sucursal cruda, ${nPendientes} pend. re-etiquetar, ${nElegibles - nPendientes} ya reimpresas)`;
     if (lbl) lbl.textContent = lblText;
     cacheHistoricoFront.set(cacheKey, {
       ts: Date.now(),

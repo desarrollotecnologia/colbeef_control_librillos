@@ -662,7 +662,7 @@
         </div>
         <p style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.4">
           <strong>Plan (desde)</strong> = estado del día de faena; <strong>Revisión (hasta)</strong> = día del chequeo (p. ej. 14-may).
-          Filas <em>Cruce plan</em> comparan sucursal en BD entre esas fechas. La tabla inferior de re-etiquetado solo incluye crudas con cambio de sucursal <strong>pendientes de despacho</strong> (no salieron de cava ni despacho Colbeef). Filas <em>Auditoría</em> = cambios en vivo (no disparan re-etiquetado automático en la tabla inferior).
+          Filas <em>Cruce plan</em> = sucursal en BD entre plan y revisión. Filas <em>Auditoría</em> = cambios en planillaje. La tabla inferior une ambas fuentes (CRUDAS + cambio de sucursal) y muestra solo las <strong>pendientes de despacho</strong> en el día de revisión.
         </p>
         <div class="tw">
           <table class="dt">
@@ -685,7 +685,7 @@
           </div>
         </div>
         <p id="historico-reimp-ayuda" class="hist-reimp-ayuda" style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.45">
-          Lista solo las que <strong>aún deben</strong> re-etiquetarse: cambio de sucursal entre plan y revisión, pendientes de despacho, y sin registro de reimpresión en este cruce. Al imprimir quedan marcadas como <strong>Reimpresa</strong> (consultable en otros días cambiando las fechas plan/revisión). Puesto en etiqueta = día <strong>revisión</strong>. F.B. = plan · F.V. = plan + 1 día.
+          Lista las que <strong>aún deben</strong> re-etiquetarse: cambio de sucursal (cruce BD plan→revisión <em>o</em> auditoría planillaje con CRUDAS), pendientes de despacho en el día de revisión, sin reimpresión registrada. Al imprimir quedan como <strong>Reimpresa</strong>. Puesto en etiqueta = día <strong>revisión</strong>. F.B. = plan · F.V. = plan + 1 día.
         </p>
         <p id="historico-reimp-resumen" class="hist-reimp-fechas" style="margin:0 0 6px;font-size:12px;color:var(--azul);font-weight:600"></p>
         <details id="historico-reimp-hechas-wrap" class="hist-reimp-hechas-wrap" style="display:none;margin:0 0 10px">
