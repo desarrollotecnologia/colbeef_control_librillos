@@ -142,17 +142,6 @@
         </div>
         <div id="panel-plan-insens-body"></div>
       </div>
-      <!-- Cierre manual de crudas: reemplazado por Histórico → Reimpresión (cruce plan/revisión + pendientes de despacho). -->
-      <div class="panel" style="display:none;margin:0 0 12px 0;padding:10px 14px;border:1px solid var(--brd2);background:#fafbf9;border-radius:8px" id="panel-cierre-proceso" aria-hidden="true">
-        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-          <span class="pt" style="margin:0">Cierre de proceso (crudas)</span>
-          <span id="lbl-estado-cierre" style="font-size:13px;color:var(--tx2)">—</span>
-          <div style="flex:1"></div>
-          <button type="button" class="btn-gen btn-gen-sec" id="btn-cierre-revisar" onclick="revisarPostCierreSucursal()">Revisar sucursal vs cierre</button>
-          <button type="button" class="btn-gen" id="btn-cierre-terminar" onclick="terminarProcesoCierre()">Terminar proceso</button>
-        </div>
-        <p style="margin:8px 0 0;font-size:11px;color:var(--tx2);max-width:960px;line-height:1.35">Use menú <strong>Histórico cambios</strong> para re-etiquetar crudas.</p>
-      </div>
       <!-- Historial Librillos -->
       <div id="subtab-librillos">
         <div class="panel">
@@ -689,25 +678,30 @@
 
       <div class="panel panel-reimp-crudas" style="margin-top:20px">
         <div class="ph">
-          <span class="pt">Reimpresión de etiquetas — crudas (día siguiente al plan)</span>
+          <span class="pt">Reimpresión de etiquetas — crudas (nueva sucursal)</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <button type="button" class="btn-sel-all" onclick="seleccionarTodosHistoricoCrudas()">Seleccionar todas</button>
+            <button type="button" class="btn-sel-all" onclick="seleccionarTodosHistoricoCrudas()">Seleccionar pendientes</button>
             <button type="button" class="btn-gen" onclick="imprimirEtiquetasHistoricoCrudasSeleccion()">Imprimir etiquetas (<span id="n-hist-crudas-sel">0</span>)</button>
           </div>
         </div>
         <p id="historico-reimp-ayuda" class="hist-reimp-ayuda" style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.45">
-          Solo aparecen crudas con <strong>cambio real de sucursal</strong> entre plan y revisión (no movimientos internos de cava) y <strong>pendientes de despacho</strong> (sin salida de cava ni despacho registrado). Puesto del día de etiquetas (revisión). F.B. = plan · F.V. = plan + 1 día.
+          Lista solo las que <strong>aún deben</strong> re-etiquetarse: cambio de sucursal entre plan y revisión, pendientes de despacho, y sin registro de reimpresión en este cruce. Al imprimir quedan marcadas como <strong>Reimpresa</strong> (consultable en otros días cambiando las fechas plan/revisión). Puesto en etiqueta = día <strong>revisión</strong>. F.B. = plan · F.V. = plan + 1 día.
         </p>
+        <p id="historico-reimp-resumen" class="hist-reimp-fechas" style="margin:0 0 6px;font-size:12px;color:var(--azul);font-weight:600"></p>
+        <details id="historico-reimp-hechas-wrap" class="hist-reimp-hechas-wrap" style="display:none;margin:0 0 10px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--tx2)">Ver crudas ya reimpresas en este cruce</summary>
+          <div id="historico-reimp-hechas-list" style="margin-top:8px;font-size:12px;color:var(--tx2);line-height:1.5"></div>
+        </details>
         <p id="historico-reimp-fechas" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--rojo);font-weight:600"></p>
         <div class="tw">
           <table class="dt">
             <thead>
               <tr>
                 <th style="width:36px"><input type="checkbox" id="chk-historico-crudas" onchange="toggleTodasHistoricoCrudas(this)"></th>
-                <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Obs. antes</th><th>Obs. ahora</th><th>Sucursal antes</th><th>Sucursal después</th>
+                <th>Estado</th><th>Reimpresa</th><th>Cruce</th><th>ID producto</th><th>Obs. antes</th><th>Obs. ahora</th><th>Sucursal antes</th><th>Sucursal nueva</th>
               </tr>
             </thead>
-            <tbody id="tbody-historico-crudas"><tr><td colspan="8" class="empty">Sin crudas pendientes de re-etiquetar (cambio sucursal plan → revisión)</td></tr></tbody>
+            <tbody id="tbody-historico-crudas"><tr><td colspan="9" class="empty">Cargue plan y revisión, luego Actualizar</td></tr></tbody>
           </table>
         </div>
       </div>

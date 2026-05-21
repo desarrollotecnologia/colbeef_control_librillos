@@ -1,10 +1,10 @@
 const API_URL      = '/api/librillos';
-const API_CIERRE_PROCESO = '/api/cierre-proceso';
 const SALIDAS_URL  = '/api/salidas';
 const GUIAS_URL = '/api/guias';
 const ANALYTICS_URL = '/api/analytics/event';
 const ANALYTICS_RESUMEN_ADMIN_URL = '/api/analytics/resumen-admin';
 const AUDITORIA_CAMBIOS_URL = '/api/auditoria/cambios';
+const AUDITORIA_REIMPRESION_CRUDAS_URL = '/api/auditoria/reimpresion-crudas';
 
 /** Auto-actualización (ms); se puede sobreescribir desde config-ui.json. */
 let AUTO_REFRESH_DATOS_MS = 30000;
@@ -279,6 +279,7 @@ function labelEventoAnalitica(e) {
     export_html: 'Descarga HTML',
     print_report: 'Impresión reporte',
     print_labels_crudas: 'Impresión etiquetas crudas',
+    reimpresion_crudas_registrar: 'Reimpresión crudas registrada',
     historico_auditoria_cargar: 'Histórico de cambios (consulta)',
     reporte_librillos_cargar: 'Reporte de librillos (consulta)',
   };
@@ -1179,6 +1180,8 @@ let _toastOnClick = null;
 let historicoCambios = [];
 let historicoCambiosFiltrados = [];
 let historicoCrudasSeleccionadas = new Set();
+/** IDs ya reimpresos para el par plan→revisión cargado (Map id → { fecha, usuario, ... }). */
+let reimpresosCrudasMap = new Map();
 /** Cancelación incremental: tablas principal y crudas usan contadores distintos (evita cruce al marcar checkboxes). */
 let _histMainPaintGen = 0;
 let _histCrudasPaintGen = 0;
@@ -1608,7 +1611,6 @@ function aplicarUiTrasCargarDatos(opts = {}) {
   if (v === 'historial') {
     renderHistorialLib(datosLibrillos);
     renderHistorialCrudas(datosCrudasHist);
-    void refrescarToolbarCierreProceso();
     refrescarPanelPlanInsens();
   } else if (v === 'inventario') {
     renderInventario();
@@ -1741,7 +1743,6 @@ function irVista(nombre, btn, opts = {}) {
       filtrarHistorialLib();
       filtrarHistorialCrud();
     }
-    void refrescarToolbarCierreProceso();
     refrescarPanelPlanInsens();
   } else if (nombre === 'clientes') filtrarCli();
   else if (nombre === 'totales') void actualizarVistaTotales();
@@ -4214,7 +4215,8 @@ async function irHistorialYMostrarCambios(cambios) {
 function fechasReimpresionHistorico() {
   const fechaPlan = String(document.getElementById('fecha-historico-desde')?.value || '').trim();
   const fechaRevision = String(document.getElementById('fecha-historico-hasta')?.value || '').trim();
-  const fechaEtiquetas = fechaPlan ? sumarDiasISO(fechaPlan, 1) || fechaPlan : '';
+  const fechaEtiquetas =
+    fechaRevision || (fechaPlan ? sumarDiasISO(fechaPlan, 1) || fechaPlan : '');
   return { fechaPlan, fechaRevision, fechaEtiquetas };
 }
 
@@ -4228,8 +4230,8 @@ function actualizarHistoricoReimpFechas() {
   }
   const revTxt = fechaRevision ? labelFecha(fechaRevision) : '—';
   el.textContent =
-    `Plan ${labelFecha(fechaPlan)} → revisión ${revTxt} · datos de puesto: ${labelFecha(fechaEtiquetas)} · ` +
-    `F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fechaEtiquetas)}`;
+    `Plan ${labelFecha(fechaPlan)} → revisión ${revTxt} · puesto en etiqueta: ${labelFecha(fechaEtiquetas)} · ` +
+    `F.B. ${labelFecha(fechaPlan)} · F.V. ${sumarDiasISO(fechaPlan, 1) ? labelFecha(sumarDiasISO(fechaPlan, 1)) : labelFecha(fechaEtiquetas)}`;
 }
 
 function sucursalHistoricoNorm(val) {
@@ -4257,6 +4259,102 @@ function esFilaReimpresionCruda(r) {
   return true;
 }
 
+/** Elegible y aún sin registro de reimpresión para este plan → revisión. */
+function esFilaPendienteReimpresionCruda(r) {
+  return esFilaReimpresionCruda(r) && !r.yaReimpreso;
+}
+
+function aplicarReimpresosAHistorico() {
+  for (const r of historicoCambios) {
+    const id = String(r.idProducto || '').trim();
+    const info = id ? reimpresosCrudasMap.get(id) : null;
+    r.yaReimpreso = Boolean(info);
+    r.reimpresoEn = info?.fecha || null;
+    r.reimpresoPor = info?.usuario || null;
+  }
+}
+
+async function fetchReimpresionesCrudasMap(fechaPlan, fechaRevision) {
+  const plan = String(fechaPlan || '').trim();
+  const rev = String(fechaRevision || '').trim();
+  if (!plan || !rev) return new Map();
+  const q = new URLSearchParams({ fecha_plan: plan, fecha_revision: rev });
+  const res = await fetch(`${AUDITORIA_REIMPRESION_CRUDAS_URL}?${q.toString()}`, {
+    headers: { Accept: 'application/json' },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return new Map();
+  const map = new Map();
+  for (const row of data.reimpresos || []) {
+    const id = String(row.id_producto || '').trim();
+    if (!id) continue;
+    map.set(id, {
+      fecha: row.fecha,
+      usuario: row.usuario,
+      sucursal_despues: row.sucursal_despues,
+      plaza: row.plaza,
+    });
+  }
+  return map;
+}
+
+async function registrarReimpresionCrudasApi(fechaPlan, fechaRevision, listaDatos, filasHistorico) {
+  const porId = new Map((filasHistorico || []).map((r) => [String(r.idProducto || '').trim(), r]));
+  const items = (listaDatos || []).map((d) => {
+    const id = String(d.id_producto || '').trim();
+    const h = porId.get(id);
+    return {
+      id_producto: id,
+      sucursal_antes: h?.sucursalAntes || null,
+      sucursal_despues: h?.sucursalDespues || d?.sucursal || null,
+      plaza: ubicacionPlaza(d) !== '—' ? ubicacionPlaza(d) : null,
+    };
+  });
+  const res = await fetch(AUDITORIA_REIMPRESION_CRUDAS_URL, {
+    method: 'POST',
+    headers: headersOperacionApi(),
+    body: JSON.stringify({
+      fecha_plan: fechaPlan,
+      fecha_revision: fechaRevision,
+      items,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function actualizarResumenReimpresionCrudas() {
+  const el = document.getElementById('historico-reimp-resumen');
+  if (!el) return;
+  const elegibles = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const pendientes = elegibles.filter(esFilaPendienteReimpresionCruda);
+  const hechas = elegibles.length - pendientes.length;
+  if (!elegibles.length) {
+    el.textContent = '';
+    return;
+  }
+  el.textContent =
+    `${pendientes.length} pendiente(s) de re-etiquetar · ${hechas} ya reimpresa(s) en este cruce`;
+  const wrap = document.getElementById('historico-reimp-hechas-wrap');
+  const list = document.getElementById('historico-reimp-hechas-list');
+  const hechasRows = elegibles.filter((r) => r.yaReimpreso);
+  if (wrap && list) {
+    if (!hechasRows.length) {
+      wrap.style.display = 'none';
+      list.innerHTML = '';
+    } else {
+      wrap.style.display = 'block';
+      list.innerHTML = hechasRows
+        .map(
+          (r) =>
+            `<div><strong>${escapeHtml(r.idProducto)}</strong> → ${escapeHtml(r.sucursalDespues || '—')} · ${escapeHtml(formatFecha(r.reimpresoEn) || '—')}${r.reimpresoPor ? ` · ${escapeHtml(r.reimpresoPor)}` : ''}</div>`
+        )
+        .join('');
+    }
+  }
+}
+
 async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {}) {
   const btn = document.querySelector('.nav-item[data-vista="historico"]');
   const fechaRevDefault =
@@ -4276,7 +4374,10 @@ async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {})
         .filter(Boolean)
     );
     historicoCrudasSeleccionadas = new Set(
-      historicoCambiosFiltrados.filter(esFilaReimpresionCruda).filter((r) => ids.has(r.idProducto)).map((r) => r.idProducto)
+      historicoCambiosFiltrados
+        .filter(esFilaPendienteReimpresionCruda)
+        .filter((r) => ids.has(r.idProducto))
+        .map((r) => r.idProducto)
     );
     pintarTablaHistoricoCrudas();
   }
@@ -4501,15 +4602,20 @@ function htmlFilaHistoricoCruda(r) {
   const checked = historicoCrudasSeleccionadas.has(r.idProducto) ? 'checked' : '';
   const sAnt = r.sucursalAntes || '—';
   const sDes = r.sucursalDespues || '—';
-  return `<tr class="row-hist-cruda">
+  const estado = r.yaReimpreso
+    ? `<span class="hist-badge hist-badge-ok" title="${escapeHtml(r.reimpresoPor || '')}">Reimpresa</span>`
+    : `<span class="hist-badge hist-badge-pend">Pendiente</span>`;
+  const momentoReimp = r.yaReimpreso && r.reimpresoEn ? formatFecha(r.reimpresoEn) : '—';
+  return `<tr class="row-hist-cruda${r.yaReimpreso ? ' row-hist-reimp-hecha' : ''}">
       <td><input type="checkbox" ${checked} onchange="toggleSeleccionHistoricoCruda('${escapeHtml(r.idProducto)}', this)"></td>
+      <td>${estado}</td>
+      <td>${escapeHtml(momentoReimp)}</td>
       <td>${escapeHtml(r.momento)}</td>
-      <td>${escapeHtml(r.usuario)}</td>
       <td>${escapeHtml(r.idProducto)}</td>
-      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 100))}</td>
-      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 100))}</td>
-      <td title="${escapeHtml(sAnt)}">${escapeHtml((sAnt || '—').slice(0, 72))}</td>
-      <td title="${escapeHtml(sDes)}">${escapeHtml((sDes || '—').slice(0, 72))}</td>
+      <td title="${escapeHtml(r.antes || '—')}">${escapeHtml((r.antes || '—').slice(0, 90))}</td>
+      <td title="${escapeHtml(r.despues || '—')}">${escapeHtml((r.despues || '—').slice(0, 90))}</td>
+      <td title="${escapeHtml(sAnt)}">${escapeHtml((sAnt || '—').slice(0, 64))}</td>
+      <td title="${escapeHtml(sDes)}"><strong>${escapeHtml((sDes || '—').slice(0, 64))}</strong></td>
     </tr>`;
 }
 
@@ -4518,13 +4624,23 @@ function pintarTablaHistoricoCrudas(gen) {
   const tbody = document.getElementById('tbody-historico-crudas');
   const chkAll = document.getElementById('chk-historico-crudas');
   if (!tbody) return;
-  const rows = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const elegibles = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const rows = elegibles.filter(esFilaPendienteReimpresionCruda);
+  actualizarResumenReimpresionCrudas();
+  if (!elegibles.length) {
+    historicoCrudasSeleccionadas.clear();
+    if (chkAll) chkAll.checked = false;
+    actualizarContadorHistoricoCrudas();
+    tbody.innerHTML =
+      '<tr><td colspan="9" class="empty">Sin crudas con cambio de sucursal (plan → revisión) pendientes de despacho</td></tr>';
+    return;
+  }
   if (!rows.length) {
     historicoCrudasSeleccionadas.clear();
     if (chkAll) chkAll.checked = false;
     actualizarContadorHistoricoCrudas();
     tbody.innerHTML =
-      '<tr><td colspan="8" class="empty">Sin crudas con cambio de sucursal pendientes de despacho (plan → revisión)</td></tr>';
+      `<tr><td colspan="9" class="empty">Todas las crudas elegibles (${elegibles.length}) ya tienen etiqueta reimpresa para este cruce</td></tr>`;
     return;
   }
   rows.forEach((r) => {
@@ -4586,13 +4702,13 @@ function toggleSeleccionHistoricoCruda(id, chk) {
   if (chk?.checked) historicoCrudasSeleccionadas.add(k);
   else historicoCrudasSeleccionadas.delete(k);
   actualizarContadorHistoricoCrudas();
-  const rows = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const rows = historicoCambiosFiltrados.filter(esFilaPendienteReimpresionCruda);
   const chkAll = document.getElementById('chk-historico-crudas');
   if (chkAll) chkAll.checked = rows.length > 0 && rows.every((r) => historicoCrudasSeleccionadas.has(r.idProducto));
 }
 
 function toggleTodasHistoricoCrudas(chkAll) {
-  const rows = historicoCambiosFiltrados.filter(esFilaReimpresionCruda);
+  const rows = historicoCambiosFiltrados.filter(esFilaPendienteReimpresionCruda);
   if (chkAll?.checked) rows.forEach((r) => historicoCrudasSeleccionadas.add(r.idProducto));
   else rows.forEach((r) => historicoCrudasSeleccionadas.delete(r.idProducto));
   pintarTablaHistoricoCrudas();
@@ -4606,12 +4722,18 @@ function seleccionarTodosHistoricoCrudas() {
 
 function aplicarHistoricoDesdeCache(hit, fechaPlan, fechaRevision) {
   historicoCambios = hit.historicoCambios || [];
+  reimpresosCrudasMap = new Map(hit.reimpresosEntries || []);
   const lbl = document.getElementById('historico-rango-label');
   if (lbl && hit.lblText) lbl.textContent = hit.lblText;
-  void enriquecerElegibilidadReimpresionCrudas(fechaRevision).then(() => {
+  void (async () => {
+    if (!reimpresosCrudasMap.size) {
+      reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
+    }
+    aplicarReimpresosAHistorico();
+    await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
     filtrarHistoricoCambios();
     actualizarHistoricoReimpFechas();
-  });
+  })();
 }
 
 /** Cruza cruce BD con planilla del día revisión + salidas Colbeef (solo pendientes de despacho). */
@@ -4719,18 +4841,23 @@ async function cargarHistoricoCambios(opts = {}) {
       mostrarToast('Cruce de sucursal no disponible; mostrando solo auditoría', 'warn');
     }
     historicoCambios = fusionarHistoricoCambios(filasAud, filasCruce);
+    reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
+    aplicarReimpresosAHistorico();
     await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
+    aplicarReimpresosAHistorico();
     const lbl = document.getElementById('historico-rango-label');
     const nCruce = filasCruce.length;
-    const nReimp = historicoCambios.filter(esFilaReimpresionCruda).length;
+    const nElegibles = historicoCambios.filter(esFilaReimpresionCruda).length;
+    const nPendientes = historicoCambios.filter(esFilaPendienteReimpresionCruda).length;
     const nAud = filasAud.length;
     const lblText =
       `Plan ${labelFecha(fechaPlan)} → revisión ${labelFecha(fechaRevision)} · ` +
-      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría, ${nReimp} re-etiquetar)`;
+      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría, ${nPendientes} pend. re-etiquetar, ${nElegibles - nPendientes} ya reimpresas)`;
     if (lbl) lbl.textContent = lblText;
     cacheHistoricoFront.set(cacheKey, {
       ts: Date.now(),
       historicoCambios: [...historicoCambios],
+      reimpresosEntries: [...reimpresosCrudasMap.entries()],
       lblText,
     });
     filtrarHistoricoCambios();
@@ -4765,19 +4892,20 @@ async function cargarHistoricoCambios(opts = {}) {
 async function imprimirEtiquetasHistoricoCrudasSeleccion() {
   const ids = [...historicoCrudasSeleccionadas];
   if (!ids.length) {
-    mostrarToast('Selecciona cambios a crudas para imprimir etiquetas', 'err');
+    mostrarToast('Selecciona crudas pendientes de re-etiquetar', 'err');
     return;
   }
-  return runWithAppLoader('Preparando etiquetas (día siguiente al plan)…', async () => {
-    const { fechaPlan, fechaEtiquetas } = fechasReimpresionHistorico();
-    const fechaDatos = fechaEtiquetas || sumarDiasISO(fechaPlan, 1) || hoyISO();
-    if (!fechaPlan) {
-      mostrarToast('Selecciona el día del plan (desde) en histórico', 'err');
+  return runWithAppLoader('Preparando etiquetas (día de revisión)…', async () => {
+    const { fechaPlan, fechaRevision, fechaEtiquetas } = fechasReimpresionHistorico();
+    const fechaDatos = fechaEtiquetas || fechaRevision || sumarDiasISO(fechaPlan, 1) || hoyISO();
+    if (!fechaPlan || !fechaRevision) {
+      mostrarToast('Selecciona plan (desde) y revisión (hasta) en histórico', 'err');
       return;
     }
     const datosDia = await fetchPorFecha(fechaDatos);
     const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
     const salidas = await fetchSalidas();
+    const filasHist = historicoCambiosFiltrados.filter((r) => ids.includes(String(r.idProducto)));
     const lista = ids
       .map((id) => map.get(String(id)))
       .filter(Boolean)
@@ -4791,10 +4919,37 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
       return;
     }
     abrirVentanaEtiquetasCrudas(lista, { fechaPlanEtiqueta: fechaPlan });
+    try {
+      await registrarReimpresionCrudasApi(fechaPlan, fechaRevision, lista, filasHist);
+      reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
+      aplicarReimpresosAHistorico();
+      historicoCrudasSeleccionadas.clear();
+      filtrarHistoricoCambios();
+      const ck = `${fechaPlan}|${fechaRevision}`;
+      const hit = cacheHistoricoFront.get(ck);
+      if (hit) {
+        hit.historicoCambios = [...historicoCambios];
+        hit.reimpresosEntries = [...reimpresosCrudasMap.entries()];
+      }
+    } catch (e) {
+      mostrarToast(`Etiquetas abiertas, pero no se registró la reimpresión: ${e?.message || e}`, 'warn');
+    }
+    const fv = sumarDiasISO(fechaPlan, 1) || fechaDatos;
     mostrarToast(
-      `${lista.length} etiqueta(s) · puesto ${labelFecha(fechaDatos)} · F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fechaDatos)}`,
+      `${lista.length} etiqueta(s) registrada(s) · puesto ${labelFecha(fechaDatos)} · F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fv)}`,
       'ok'
     );
+    enviarEventoAnalytics({
+      eventName: 'print_labels_crudas',
+      viewName: 'historico',
+      meta: {
+        modo: 'reimpresion_historico',
+        fecha_plan: fechaPlan,
+        fecha_revision: fechaRevision,
+        total: lista.length,
+        ids: lista.map((d) => d.id_producto),
+      },
+    });
   });
 }
 
@@ -4924,120 +5079,6 @@ function separarDatos(datos) {
   poblarFiltroAgrupaciones();
 }
 
-// ── CIERRE DE PROCESO (snapshot crudas → comparar sucursal en BD) ─────────────
-async function refrescarToolbarCierreProceso() {
-  const lbl = document.getElementById('lbl-estado-cierre');
-  const btnR = document.getElementById('btn-cierre-revisar');
-  const btnT = document.getElementById('btn-cierre-terminar');
-  if (!lbl || !btnR || !btnT) return;
-  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  try {
-    const r = await fetch(`${API_CIERRE_PROCESO}/${encodeURIComponent(fecha)}`);
-    if (!r.ok) throw new Error('HTTP');
-    const j = await r.json();
-    if (j.cerrado) {
-      lbl.textContent = `Cerrado ${j.cerrado_en ? formatFecha(j.cerrado_en) : '—'} · ${j.total_items ?? 0} crudas en snapshot.`;
-      btnR.disabled = false;
-      btnT.textContent = 'Volver a cerrar (sobrescribe snapshot)';
-    } else {
-      lbl.textContent = 'Sin cierre registrado para esta fecha.';
-      btnR.disabled = true;
-      btnT.textContent = 'Terminar proceso';
-    }
-  } catch {
-    lbl.textContent = 'No se pudo consultar el estado de cierre.';
-    btnR.disabled = true;
-  }
-}
-
-async function terminarProcesoCierre() {
-  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  if (
-    !confirm(
-      `¿Confirma TERMINAR PROCESO para la fecha ${fecha}?\n\nSe guardará la sucursal actual de cada cruda (texto con CRUDA/CRUDAS) para comparar después con la base de datos.`
-    )
-  ) {
-    return;
-  }
-  try {
-    const r = await fetch(`${API_CIERRE_PROCESO}/${encodeURIComponent(fecha)}/registrar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    mostrarToast(`Proceso cerrado: ${j.total_items ?? 0} crudas en snapshot.`, 'ok');
-    await refrescarToolbarCierreProceso();
-  } catch (e) {
-    mostrarToast(String(e.message || e), 'err');
-  }
-}
-
-async function revisarPostCierreSucursal() {
-  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  try {
-    const r = await fetch(`${API_CIERRE_PROCESO}/${encodeURIComponent(fecha)}/revisar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.status === 404) {
-      mostrarToast(j.error || 'No hay cierre para esta fecha.', 'err');
-      return;
-    }
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    const sinFila = Array.isArray(j.sin_fila_hoy) ? j.sin_fila_hoy : [];
-    if (sinFila.length) {
-      const muestra = sinFila
-        .slice(0, 6)
-        .map((x) => String(x?.id_producto || '').trim())
-        .filter(Boolean)
-        .join(', ');
-      const suf = sinFila.length > 6 ? '…' : '';
-      mostrarToast(
-        `Atención: ${sinFila.length} código(s) del cierre no aparecen hoy en el día (${muestra}${suf}). Revisar planilla o trazabilidad.`,
-        'err',
-        { durationMs: 9000 }
-      );
-    }
-    const lista = (j.cambios_sucursal || []).map((c) => ({
-      id: c.id_producto,
-      tipo: 'CRUDA_SUCURSAL',
-      antes: c.sucursal_cierre || '—',
-      despues: c.sucursal_actual || '—',
-      sucursal_antes: c.sucursal_cierre || '—',
-      sucursal_despues: c.sucursal_actual || '—',
-      propietario: c.propietario || null,
-      identificacion: c.identificacion || null,
-      cliente_destino: c.cliente_destino || null,
-      agrupacion: c.agrupacion || null,
-      plaza: c.plaza || null,
-      empresa_destino: c.empresa_destino || null,
-      destino: c.destino || null,
-      observacion_texto:
-        String(c.observacion_texto || '').trim() || 'Conciliación vs cierre de proceso (sucursal)',
-      fuente: 'post_cierre',
-    }));
-    if (!lista.length) {
-      if (!sinFila.length) {
-        mostrarToast('Sin diferencias de sucursal respecto al cierre.', 'ok');
-      }
-      return;
-    }
-    let msg = `${lista.length} cambio(s) de sucursal vs cierre. Abriendo histórico…`;
-    if (sinFila.length) msg += ` (${sinFila.length} sin fila hoy: ver aviso anterior).`;
-    mostrarToast(msg, 'ok', { durationMs: 5200 });
-    await irHistoricoReimpresionCrudas(lista, {
-      fechaPlan: fecha,
-      fechaRevision: sumarDiasISO(fecha, 1) || fecha,
-    });
-  } catch (e) {
-    mostrarToast(String(e.message || e), 'err');
-  }
-}
-
 function aplicarDatosTurnoEnMemoria(fecha, datos, salidas, meta) {
   datosGlobal = datos;
   fechaDatosGlobal = fecha;
@@ -5066,7 +5107,7 @@ function prefetchDatosHistoricoReimp(fechaPlan, fechaRevision) {
   const plan = String(fechaPlan || '').trim();
   const rev = String(fechaRevision || '').trim();
   if (!plan || !rev) return;
-  const diaEtq = sumarDiasISO(plan, 1) || rev;
+  const diaEtq = rev || sumarDiasISO(plan, 1);
   void fetchPorFecha(diaEtq).catch(() => {});
   const key = `${plan}|${rev}`;
   if (cacheHistoricoFront.has(key)) return;

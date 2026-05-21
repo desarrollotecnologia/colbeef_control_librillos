@@ -1435,7 +1435,7 @@ async function consultarLibrillosConCache(fechaISO) {
   return data;
 }
 
-/** Lectura BD sin caché por fecha (cierre proceso, conciliaciones). */
+/** Lectura BD sin caché por fecha (conciliaciones, consultas puntuales). */
 export async function obtenerLibrillosConsultaBdDirecta(fechaISO) {
   return consultarLibrillos(String(fechaISO || '').trim());
 }

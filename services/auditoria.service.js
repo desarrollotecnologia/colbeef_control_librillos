@@ -258,3 +258,94 @@ export async function obtenerHistoricoCambios({
     items,
   };
 }
+
+function itemsDesdeRegistroReimpresion(row) {
+  const despues = row?.despues && typeof row.despues === 'object' ? row.despues : null;
+  if (Array.isArray(despues?.items)) return despues.items;
+  const meta = row?.meta && typeof row.meta === 'object' ? row.meta : null;
+  if (Array.isArray(meta?.items)) return meta.items;
+  return [];
+}
+
+/**
+ * IDs ya reimpresos para un par plan → revisión (último registro gana por id).
+ * @returns {Promise<Map<string, { fecha: string, usuario: string|null, sucursal_despues: string|null, plaza: string|null }>>}
+ */
+export async function obtenerReimpresionesCrudasMap(fechaPlanISO, fechaRevisionISO) {
+  const fechaPlan = String(fechaPlanISO || '').trim();
+  const fechaRevision = String(fechaRevisionISO || '').trim();
+  const out = new Map();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
+    return out;
+  }
+
+  const { items } = await obtenerHistoricoCambios({
+    desde: fechaPlan,
+    modulo: 'reimpresion_crudas',
+    accion: 'imprimir_etiquetas',
+    limit: 1000,
+  });
+
+  const ordenados = [...(items || [])].sort(
+    (a, b) => Date.parse(a.fecha || 0) - Date.parse(b.fecha || 0)
+  );
+  for (const row of ordenados) {
+    const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
+    if (String(meta.fecha_plan || '') !== fechaPlan) continue;
+    if (String(meta.fecha_revision || '') !== fechaRevision) continue;
+    for (const it of itemsDesdeRegistroReimpresion(row)) {
+      const id = String(it.id_producto ?? it.id ?? '').trim();
+      if (!id) continue;
+      out.set(id, {
+        fecha: row.fecha,
+        usuario: row.usuario || null,
+        sucursal_despues: it.sucursal_despues != null ? String(it.sucursal_despues) : null,
+        plaza: it.plaza != null ? String(it.plaza) : null,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Registra un lote de reimpresión de etiquetas crudas (histórico).
+ * @param {{ fecha_plan: string, fecha_revision: string, items: Array<object>, usuario?: string }} input
+ */
+export async function registrarReimpresionCrudas({
+  fecha_plan,
+  fecha_revision,
+  items = [],
+  usuario = null,
+}) {
+  const fechaPlan = String(fecha_plan || '').trim();
+  const fechaRevision = String(fecha_revision || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
+    throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
+  }
+  const normalizados = (items || [])
+    .map((it) => ({
+      id_producto: String(it.id_producto ?? it.id ?? '').trim(),
+      sucursal_antes: it.sucursal_antes != null ? String(it.sucursal_antes) : null,
+      sucursal_despues: it.sucursal_despues != null ? String(it.sucursal_despues) : null,
+      plaza: it.plaza != null ? String(it.plaza) : null,
+    }))
+    .filter((it) => it.id_producto);
+  if (!normalizados.length) {
+    throw new Error('items requiere al menos un id_producto');
+  }
+
+  return registrarCambioHistorico({
+    modulo: 'reimpresion_crudas',
+    accion: 'imprimir_etiquetas',
+    entidad: 'cruda',
+    idEntidad: `${fechaPlan}|${fechaRevision}`,
+    usuario: usuario ? String(usuario).slice(0, 120) : null,
+    despues: { items: normalizados },
+    meta: {
+      fecha_plan: fechaPlan,
+      fecha_revision: fechaRevision,
+      total: normalizados.length,
+      origen: 'historico',
+    },
+  });
+}

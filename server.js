@@ -10,7 +10,6 @@ import dashboardRoutes from './routes/dashboard.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import auditoriaRoutes from './routes/auditoria.routes.js';
 import guiasRoutes from './routes/guias.routes.js';
-import cierreProcesoRoutes from './routes/cierre-proceso.routes.js';
 import { iniciarPolling, statsCache } from './services/librillos.service.js';
 import { pool } from './config/db.js';
 import { requestContextMiddleware } from './middleware/request-context.js';
@@ -63,8 +62,6 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/auditoria', auditoriaRoutes);
 app.use('/api/guias', guiasRoutes);
-app.use('/api/cierre-proceso', cierreProcesoRoutes);
-
 app.get('/api/health', async (req, res) => {
   try {
     const t0 = Date.now();
