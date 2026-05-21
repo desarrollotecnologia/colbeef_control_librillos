@@ -4162,21 +4162,34 @@ function obtenerCambiosObservacion(prev, next, obsMapPrev = new Map(), obsMapNow
       });
     }
 
-    // Crudas: cambio de sucursal en planilla (logística debe reimprimir etiqueta con puesto correcto).
+    // Crudas: cambio de puesto (agrupación / sucursal / plaza) entre plan y revisión.
     if (p && n) {
       const nObsRaw = String(n.observaciones ?? n.observacion ?? '');
+      const pObsRaw = String(p.observaciones ?? p.observacion ?? '');
       const nObsNorm = normalizarObs(nObsRaw);
-      if (/\bCRUDAS?\b/.test(nObsNorm)) {
-        const sAnt = String(p.sucursal ?? '').replace(/\s+/g, ' ').trim();
-        const sNue = String(n.sucursal ?? '').replace(/\s+/g, ' ').trim();
-        if (sAnt !== sNue) {
+      const pObsNorm = normalizarObs(pObsRaw);
+      if (/\bCRUDAS?\b/.test(nObsNorm) || /\bCRUDAS?\b/.test(pObsNorm)) {
+        const agAnt = String(p.agrupacion || '').replace(/\s+/g, ' ').trim();
+        const agNue = String(n.agrupacion || '').replace(/\s+/g, ' ').trim();
+        const codAnt = String(p.agrupacion_codigo || '').trim().toLowerCase();
+        const codNue = String(n.agrupacion_codigo || '').trim().toLowerCase();
+        let sAnt = agAnt && codAnt !== 'asurcarnes' ? agAnt : String(p.sucursal ?? '').replace(/\s+/g, ' ').trim();
+        let sNue = agNue && codNue !== 'asurcarnes' ? agNue : String(n.sucursal ?? '').replace(/\s+/g, ' ').trim();
+        if (!sAnt || /^cava\.?$/i.test(sAnt)) {
+          sAnt = String(p.plaza || '').replace(/\s+/g, ' ').trim() || sAnt;
+        }
+        if (!sNue || /^cava\.?$/i.test(sNue)) {
+          sNue = String(n.plaza || '').replace(/\s+/g, ' ').trim() || sNue;
+        }
+        const cambioAg = codAnt && codNue && codAnt !== codNue && codAnt !== 'asurcarnes' && codNue !== 'asurcarnes';
+        if (sAnt !== sNue || cambioAg) {
           cambios.push({
             id,
             tipo: 'CRUDA_SUCURSAL',
-            antes: sAnt || '—',
-            despues: sNue || '—',
-            sucursal_antes: sAnt,
-            sucursal_despues: sNue,
+            antes: (cambioAg ? agAnt : sAnt) || '—',
+            despues: (cambioAg ? agNue : sNue) || '—',
+            sucursal_antes: (cambioAg ? agAnt : sAnt) || '',
+            sucursal_despues: (cambioAg ? agNue : sNue) || '',
             observacion_texto: nObsRaw.replace(/\s+/g, ' ').trim(),
             propietario: String(n.propietario || p.propietario || '').trim(),
             empresa_destino: String(n.empresa_destino || p.empresa_destino || '').trim(),
@@ -4893,9 +4906,43 @@ async function cargarHistoricoCambios(opts = {}) {
       : Array.isArray(payloadCruce?.cambios)
         ? payloadCruce.cambios
         : [];
-    const filasCruce = resCruce.ok
+    let filasCruce = resCruce.ok
       ? listaCruceRaw.map((c) => normalizarCambioHistoricoCruce(c, payloadCruce))
       : [];
+    const nCambioApi = Number(payloadCruce?.total_cambios_sucursal || filasCruce.length);
+    if (
+      resCruce.ok &&
+      nCambioApi === 0 &&
+      Number(payloadCruce?.total_crudas_plan || 0) > 0
+    ) {
+      try {
+        const [prev, next] = await Promise.all([
+          fetchPorFecha(fechaPlan),
+          fetchPorFecha(fechaRevision),
+        ]);
+        const extra = obtenerCambiosObservacion(prev, next).filter(
+          (c) => c.tipo === 'CRUDA_SUCURSAL'
+        );
+        if (extra.length) {
+          filasCruce = extra.map((c) =>
+            normalizarCambioHistoricoCruce(
+              {
+                id: c.id,
+                sucursal_antes: c.sucursal_antes || c.antes,
+                sucursal_despues: c.sucursal_despues || c.despues,
+                observacion_antes: c.antes,
+                observacion_despues: c.despues || c.observacion_texto,
+                observacion_texto: c.observacion_texto || c.despues,
+                elegible_reimpresion: true,
+              },
+              { fecha_plan: fechaPlan, fecha_revision: fechaRevision, generado_en: new Date().toISOString() }
+            )
+          );
+        }
+      } catch {
+        // respaldo opcional
+      }
+    }
     if (!resAud.ok) {
       mostrarToast('Auditoría no disponible; mostrando solo cruce plan → revisión', 'warn');
     }

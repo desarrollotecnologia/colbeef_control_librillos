@@ -302,10 +302,13 @@ export async function obtenerCambiosSucursalCrudasAuditoria(
 
   const puestoDesdeSnap = (snap) => {
     if (!snap || typeof snap !== 'object') return '';
+    const cod = String(snap.agrupacion_codigo || '').trim().toLowerCase();
+    const ag = String(snap.agrupacion || snap.cliente_destino || '').replace(/\s+/g, ' ').trim();
+    if (ag && cod && cod !== 'asurcarnes') return ag;
     const suc = String(snap.sucursal || '').replace(/\s+/g, ' ').trim();
-    if (suc) return suc;
+    if (suc && !/^cava\.?$/i.test(suc)) return suc;
     const obs = String(snap.observacion || '');
-    const m = obs.match(/\b(DRA\s+CAVA|\d+\s*ZAP|\d+ZAP|CAVA)\b/i);
+    const m = obs.match(/\b(DRA\s+CAVA|\d+\s*ZAP|\d+ZAP)\b/i);
     return m ? m[0].replace(/\s+/g, ' ').trim().toUpperCase() : '';
   };
 
