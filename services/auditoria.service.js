@@ -271,6 +271,94 @@ function itemsDesdeRegistroReimpresion(row) {
  * IDs ya reimpresos para un par plan → revisión (último registro gana por id).
  * @returns {Promise<Map<string, { fecha: string, usuario: string|null, sucursal_despues: string|null, plaza: string|null }>>}
  */
+/**
+ * Cambios de sucursal en crudas del plan, detectados en auditoría planillaje (antes ≠ despues).
+ * @param {string} fechaPlanISO
+ * @param {string} fechaRevisionISO
+ * @param {Set<string>|string[]} idsPermitidos IDs del plan de faena
+ */
+export async function obtenerCambiosSucursalCrudasAuditoria(
+  fechaPlanISO,
+  fechaRevisionISO,
+  idsPermitidos
+) {
+  const fechaPlan = String(fechaPlanISO || '').trim();
+  const fechaRevision = String(fechaRevisionISO || '').trim();
+  const ids =
+    idsPermitidos instanceof Set
+      ? idsPermitidos
+      : new Set((idsPermitidos || []).map((x) => String(x || '').trim()).filter(Boolean));
+  if (!ids.size || !/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
+    return [];
+  }
+
+  const { items } = await obtenerHistoricoCambios({
+    desde: fechaPlan,
+    hasta: fechaRevision,
+    modulo: 'planillaje',
+    accion: 'actualizar_en_turno',
+    limit: 8000,
+  });
+
+  const puestoDesdeSnap = (snap) => {
+    if (!snap || typeof snap !== 'object') return '';
+    const suc = String(snap.sucursal || '').replace(/\s+/g, ' ').trim();
+    if (suc) return suc;
+    const obs = String(snap.observacion || '');
+    const m = obs.match(/\b(DRA\s+CAVA|\d+\s*ZAP|\d+ZAP|CAVA)\b/i);
+    return m ? m[0].replace(/\s+/g, ' ').trim().toUpperCase() : '';
+  };
+
+  const diaBogotaIso = (iso) => {
+    const t = Date.parse(String(iso || ''));
+    if (!Number.isFinite(t)) return '';
+    return new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  };
+
+  const ordenados = [...(items || [])].sort(
+    (a, b) => Date.parse(a.fecha || 0) - Date.parse(b.fecha || 0)
+  );
+
+  const snapPlan = new Map();
+  const snapRev = new Map();
+  const snapUltimo = new Map();
+
+  for (const ev of ordenados) {
+    const id = String(
+      ev.idEntidad || ev.despues?.id_producto || ev.antes?.id_producto || ''
+    ).trim();
+    if (!id || !ids.has(id)) continue;
+    const despues = ev.despues && typeof ev.despues === 'object' ? ev.despues : null;
+    if (!despues) continue;
+    const obs = String(despues.observacion || '').trim();
+    if (!/\bCRUDAS?\b/i.test(obs)) continue;
+    const dia = diaBogotaIso(ev.fecha);
+    snapUltimo.set(id, despues);
+    if (dia === fechaPlan) snapPlan.set(id, despues);
+    if (dia === fechaRevision) snapRev.set(id, despues);
+  }
+
+  const out = [];
+  for (const id of ids) {
+    const sPlan = snapPlan.get(id) || snapUltimo.get(id);
+    const sRev = snapRev.get(id) || snapUltimo.get(id);
+    if (!sPlan || !sRev) continue;
+    const pAnt = puestoDesdeSnap(sPlan);
+    const pNue = puestoDesdeSnap(sRev);
+    if (pAnt === pNue) continue;
+    out.push({
+      id,
+      sucursal_antes: pAnt,
+      sucursal_despues: pNue,
+      observacion_antes: String(sPlan.observacion || '').trim(),
+      observacion_despues: String(sRev.observacion || '').trim(),
+      fecha: null,
+      usuario: null,
+    });
+  }
+  return out;
+}
+
 export async function obtenerReimpresionesCrudasMap(fechaPlanISO, fechaRevisionISO) {
   const fechaPlan = String(fechaPlanISO || '').trim();
   const fechaRevision = String(fechaRevisionISO || '').trim();

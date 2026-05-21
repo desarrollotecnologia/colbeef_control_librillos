@@ -4855,7 +4855,7 @@ async function cargarHistoricoCambios(opts = {}) {
       desde: fechaPlan,
       hasta: fechaRevision,
       modulo: 'planillaje',
-      limit: '400',
+      limit: '2000',
     });
     const qCruce = new URLSearchParams({
       fecha_plan: fechaPlan,

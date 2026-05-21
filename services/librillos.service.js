@@ -13,7 +13,7 @@ import {
   agrupacionDesdeTextoPlanFaena,
   reglaOverrideGutierrezCarviscol,
 } from './agrupaciones.service.js';
-import { registrarCambioHistorico } from './auditoria.service.js';
+import { obtenerCambiosSucursalCrudasAuditoria, registrarCambioHistorico } from './auditoria.service.js';
 import { persistirSucursalesCrudasDesdeSnapshot } from './crudas-sucursal.store.js';
 import {
   SQL_EXPR_FECHA_PARTE_BOGOTA,
@@ -148,6 +148,27 @@ function sucursalNormLibrilloRow(d) {
     .trim();
 }
 
+/** Puesto logístico para etiquetas: sucursal BD, luego plaza de fila, luego plaza en observación. */
+function puestoLogisticoNorm({ sucursal, plaza, observacion } = {}) {
+  const suc = sucursalNormLibrilloRow({ sucursal });
+  if (suc && !/^cava\.?$/i.test(suc)) return suc;
+  const pl = sucursalNormLibrilloRow({ sucursal: plaza });
+  if (pl && !/^cava\.?$/i.test(pl)) return pl;
+  const { plaza: pObs } = parsearObservacion(String(observacion || ''));
+  const po = sucursalNormLibrilloRow({ sucursal: pObs });
+  if (po && !/^cava\.?$/i.test(po)) return po;
+  return suc || pl || po || '';
+}
+
+function puestoDesdeFilaConsulta(d) {
+  if (!d) return '';
+  return puestoLogisticoNorm({
+    sucursal: d.sucursal,
+    plaza: d.plaza,
+    observacion: d.observaciones ?? d.observacion,
+  });
+}
+
 function listarCambiosSucursalEntreFilas(
   arrReferencia,
   arrRevision,
@@ -174,8 +195,8 @@ function listarCambiosSucursalEntreFilas(
     if (soloCrudas && !esCrudaHistorialLibrillosRow(n)) continue;
     const p = mapRef.get(id);
     if (!p) continue;
-    const sAnt = sucursalNormLibrilloRow(p);
-    const sNue = sucursalNormLibrilloRow(n);
+    const sAnt = puestoDesdeFilaConsulta(p);
+    const sNue = puestoDesdeFilaConsulta(n);
     if (sAnt === sNue) continue;
     const obsAnt = String(p.observaciones ?? p.observacion ?? '')
       .replace(/\s+/g, ' ')
@@ -347,6 +368,67 @@ async function mapaSucursalPorIdsHastaFechaDia(fechaISO, idsTexto) {
   return out;
 }
 
+/** Sucursal Colbeef registrada ese día calendario (última parte del día), no acumulada. */
+async function mapaSucursalPorIdsEnFechaCalendario(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const fecha = String(fechaISO || '').trim();
+  const cacheKey = `dia|${fecha}|${huellaIdsConsulta(ids)}`;
+  const hit = cacheMapaSucursalHastaFecha.get(cacheKey);
+  if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_FECHA_MS) {
+    return hit.map;
+  }
+  const out = new Map();
+  const grupos = chunks(ids, META_RAIZ_BATCH);
+  for (const grupo of grupos) {
+    const res = await pool.query(
+      `
+      WITH pp_dia AS (
+        SELECT DISTINCT ON (pp.id_producto::text)
+          pp.id_producto::text AS id_producto,
+          pp.id AS id_parte_producto
+        FROM trazabilidad_proceso.parte_producto pp
+        WHERE pp.id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
+          AND pp.id_producto::text = ANY($2::text[])
+          AND (timezone('America/Bogota', pp.fecha_registro))::date = $1::date
+        ORDER BY pp.id_producto::text, pp.fecha_registro DESC NULLS LAST, pp.id DESC
+      ),
+      ppe_lnk AS (
+        SELECT DISTINCT ON (ppe.id_producto::text)
+          ppe.id_producto::text AS id_producto,
+          ppe.id AS id_parte_producto_empresa
+        FROM trazabilidad_proceso.parte_producto_empresa ppe
+        INNER JOIN pp_dia pa
+          ON pa.id_producto = ppe.id_producto::text
+         AND pa.id_parte_producto = ppe.id_parte_producto
+        ORDER BY ppe.id_producto::text, ppe.id DESC
+      ),
+      ppel_lnk AS (
+        SELECT DISTINCT ON (ppel.id_parte_producto_empresa)
+          ppel.id_parte_producto_empresa,
+          ppel.id_local
+        FROM trazabilidad_proceso.parte_producto_empresa_local ppel
+        INNER JOIN ppe_lnk pl ON pl.id_parte_producto_empresa = ppel.id_parte_producto_empresa
+        ORDER BY ppel.id_parte_producto_empresa, ppel.id DESC
+      )
+      SELECT
+        pa.id_producto,
+        s.nombre AS sucursal
+      FROM pp_dia pa
+      LEFT JOIN ppe_lnk pl ON pl.id_producto = pa.id_producto
+      LEFT JOIN ppel_lnk pel ON pel.id_parte_producto_empresa = pl.id_parte_producto_empresa
+      LEFT JOIN organizaciones.sucursal s ON s.id = pel.id_local
+      `,
+      [fechaISO, grupo]
+    );
+    (res.rows || []).forEach((r) => {
+      out.set(String(r.id_producto), String(r.sucursal || '').trim());
+    });
+  }
+  cacheMapaSucursalHastaFecha.set(cacheKey, { ts: Date.now(), map: out });
+  return out;
+}
+
 /** Observación de parte_producto ese día (última del calendario); respaldo última conocida si no hubo registro. */
 async function mapaObservacionPartePorIdsEnFecha(fechaISO, idsTexto) {
   const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
@@ -414,7 +496,7 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
     throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
   }
-  const cacheKey = `${fechaPlan}|${fechaRevision}`;
+  const cacheKey = `v2-puesto|${fechaPlan}|${fechaRevision}`;
   const hitCruce = cacheCambiosSucursalRevision.get(cacheKey);
   if (hitCruce && Date.now() - Number(hitCruce.ts || 0) <= CACHE_CRUCE_SUCURSAL_MS) {
     return hitCruce.data;
@@ -464,9 +546,11 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     };
   }
 
-  const [sucPlan, sucRev, obsPlan, obsRev, mapaCava] = await Promise.all([
+  const [sucPlan, sucRev, sucPlanDia, sucRevDia, obsPlan, obsRev, mapaCava] = await Promise.all([
     mapaSucursalPorIdsHastaFechaDia(fechaPlan, idsPlan),
     mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsPlan),
+    mapaSucursalPorIdsEnFechaCalendario(fechaPlan, idsPlan),
+    mapaSucursalPorIdsEnFechaCalendario(fechaRevision, idsPlan),
     mapaObservacionPartePorIdsEnFecha(fechaPlan, idsPlan),
     mapaObservacionPartePorIdsEnFecha(fechaRevision, idsPlan),
     mapaPendienteSalidaCavaPorIds(idsPlan),
@@ -509,41 +593,57 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
 
   const cambios = [];
   const cambios_todos_sucursal = [];
+  const resolverPuesto = (dFila, sucDia, sucAsOf, obsText, filaCruceSide) => {
+    const base = puestoLogisticoNorm({
+      sucursal: sucDia || sucAsOf || filaCruceSide || dFila?.sucursal,
+      plaza: dFila?.plaza,
+      observacion: obsText || dFila?.observaciones || dFila?.observacion,
+    });
+    if (base) return base;
+    const ag = String(dFila?.agrupacion || '').trim();
+    if (ag && !/^asurcarnes$/i.test(ag)) {
+      return sucursalNormLibrilloRow({ sucursal: ag });
+    }
+    return '';
+  };
+
   for (const id of idsCrudasPlan) {
     const filaCruce = porIdFila.get(id);
-    const sAnt = sucursalNormLibrilloRow({
-      sucursal:
-        sucPlan.get(id) ||
-        sucursalEnFilaPlan.get(id) ||
-        filaCruce?.sucursal_antes ||
-        '',
-    });
-    const sNue = sucursalNormLibrilloRow({
-      sucursal:
-        sucRev.get(id) ||
-        sucursalEnFilaRev.get(id) ||
-        filaCruce?.sucursal_despues ||
-        '',
-    });
-    if (sAnt === sNue) continue;
+    const dPlan = filaPlanPorId.get(id);
+    const dRev = filaRevPorId.get(id);
     const obsAnt =
       obsPlan.get(id) ||
-      String(filaPlanPorId.get(id)?.observaciones ?? filaPlanPorId.get(id)?.observacion ?? '').trim();
+      String(dPlan?.observaciones ?? dPlan?.observacion ?? '').trim();
     const obsNue =
       obsRev.get(id) ||
-      String(filaRevPorId.get(id)?.observaciones ?? filaRevPorId.get(id)?.observacion ?? '').trim();
+      String(dRev?.observaciones ?? dRev?.observacion ?? '').trim();
     if (!esCrudaHistorialLibrillosRow({ observaciones: obsAnt }) && !esCrudaHistorialLibrillosRow({ observaciones: obsNue })) {
       continue;
     }
+    const pAnt = resolverPuesto(
+      dPlan,
+      sucPlanDia.get(id),
+      sucPlan.get(id),
+      obsAnt,
+      filaCruce?.sucursal_antes
+    );
+    const pNue = resolverPuesto(
+      dRev,
+      sucRevDia.get(id),
+      sucRev.get(id),
+      obsNue,
+      filaCruce?.sucursal_despues
+    );
+    if (pAnt === pNue) continue;
     const cava = mapaCava.get(id);
     const elegible_reimpresion = cava?.pendiente !== false;
     const row = {
       id,
       tipo: 'CRUDA_SUCURSAL',
-      antes: sAnt || '—',
-      despues: sNue || '—',
-      sucursal_antes: sAnt,
-      sucursal_despues: sNue,
+      antes: pAnt || '—',
+      despues: pNue || '—',
+      sucursal_antes: pAnt,
+      sucursal_despues: pNue,
       observacion_antes: obsAnt,
       observacion_despues: obsNue,
       observacion_texto: obsNue,
@@ -557,6 +657,18 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     };
     cambios_todos_sucursal.push(row);
     if (elegible_reimpresion) cambios.push(row);
+  }
+
+  const idsCrudasSet = new Set(idsCrudasPlan);
+  let cambiosAud = [];
+  try {
+    cambiosAud = await obtenerCambiosSucursalCrudasAuditoria(
+      fechaPlan,
+      fechaRevision,
+      idsCrudasSet
+    );
+  } catch (e) {
+    log.warn('Cruce sucursal: auditoría planillaje', { error: e.message });
   }
 
   for (const c of cambiosFilaDirecto) {
@@ -586,6 +698,33 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     if (elegible_reimpresion) cambios.push(row);
   }
 
+  for (const c of cambiosAud) {
+    const id = String(c?.id || '').trim();
+    if (!id || cambios_todos_sucursal.some((x) => x.id === id)) continue;
+    const cava = mapaCava.get(id);
+    const elegible_reimpresion = cava?.pendiente !== false;
+    const row = {
+      id,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: c.sucursal_antes || '—',
+      despues: c.sucursal_despues || '—',
+      sucursal_antes: c.sucursal_antes,
+      sucursal_despues: c.sucursal_despues,
+      observacion_antes: c.observacion_antes || '',
+      observacion_despues: c.observacion_despues || '',
+      observacion_texto: c.observacion_despues || '',
+      detectado_en: generado,
+      momento_bd: c.fecha || null,
+      fuente: 'auditoria_planillaje',
+      fecha_referencia: fechaPlan,
+      fecha_revision: fechaRevision,
+      elegible_reimpresion,
+      fecha_salida_cava: cava?.fecha_salida_cava || null,
+    };
+    cambios_todos_sucursal.push(row);
+    if (elegible_reimpresion) cambios.push(row);
+  }
+
   const payload = {
     fecha_plan: fechaPlan,
     fecha_revision: fechaRevision,
@@ -594,6 +733,7 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     cambios,
     cambios_todos_sucursal,
     total_cambios_sucursal: cambios_todos_sucursal.length,
+    total_cambios_auditoria: cambiosAud.length,
     total_elegibles_reimpresion: cambios.length,
     generado_en: generado,
   };
