@@ -1979,6 +1979,10 @@ body{
 .row-hist-cruda td{
   background:rgba(26,122,66,.11)!important;
 }
+.row-hist-cruda-no-sel td{
+  background:rgba(120,120,120,.08)!important;
+  opacity:.92;
+}
 .row-hist-otro td{
   background:rgba(21,101,192,.09)!important;
 }

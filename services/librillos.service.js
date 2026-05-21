@@ -420,34 +420,118 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     return hitCruce.data;
   }
   const planSet = await idsPlanFaenaPorFecha(fechaPlan);
-  const ids = [...planSet];
   const generado = new Date().toISOString();
-  if (!ids.length) {
+
+  let filasPlan = [];
+  let filasRev = [];
+  try {
+    [filasPlan, filasRev] = await Promise.all([
+      obtenerLibrillosConsultaBdDirecta(fechaPlan),
+      obtenerLibrillosConsultaBdDirecta(fechaRevision),
+    ]);
+  } catch (e) {
+    log.warn('Cruce sucursal: consulta librillos plan/revisión', { error: e.message });
+  }
+
+  const sucursalEnFilaPlan = new Map();
+  const sucursalEnFilaRev = new Map();
+  for (const d of filasPlan || []) {
+    const id = String(d?.id_producto ?? '').trim();
+    if (!id) continue;
+    sucursalEnFilaPlan.set(id, sucursalNormLibrilloRow(d));
+  }
+  for (const d of filasRev || []) {
+    const id = String(d?.id_producto ?? '').trim();
+    if (!id) continue;
+    sucursalEnFilaRev.set(id, sucursalNormLibrilloRow(d));
+  }
+
+  const filaPlanPorId = new Map((filasPlan || []).map((d) => [String(d?.id_producto ?? '').trim(), d]));
+  const filaRevPorId = new Map((filasRev || []).map((d) => [String(d?.id_producto ?? '').trim(), d]));
+  const idsPlan = [...planSet];
+
+  if (!idsPlan.length) {
     return {
       fecha_plan: fechaPlan,
       fecha_revision: fechaRevision,
-      total_plan_faena: 0,
+      total_plan_faena: planSet.size,
+      total_crudas_plan: 0,
       cambios: [],
+      cambios_todos_sucursal: [],
+      total_cambios_sucursal: 0,
+      total_elegibles_reimpresion: 0,
       generado_en: generado,
     };
   }
 
   const [sucPlan, sucRev, obsPlan, obsRev, mapaCava] = await Promise.all([
-    mapaSucursalPorIdsHastaFechaDia(fechaPlan, ids),
-    mapaSucursalPorIdsHastaFechaDia(fechaRevision, ids),
-    mapaObservacionPartePorIdsEnFecha(fechaPlan, ids),
-    mapaObservacionPartePorIdsEnFecha(fechaRevision, ids),
-    mapaPendienteSalidaCavaPorIds(ids),
+    mapaSucursalPorIdsHastaFechaDia(fechaPlan, idsPlan),
+    mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsPlan),
+    mapaObservacionPartePorIdsEnFecha(fechaPlan, idsPlan),
+    mapaObservacionPartePorIdsEnFecha(fechaRevision, idsPlan),
+    mapaPendienteSalidaCavaPorIds(idsPlan),
   ]);
+
+  const idsCrudasPlan = idsPlan.filter((id) => {
+    const dPlan = filaPlanPorId.get(id);
+    const dRev = filaRevPorId.get(id);
+    const o1 = String(
+      obsPlan.get(id) || dPlan?.observaciones || dPlan?.observacion || ''
+    ).trim();
+    const o2 = String(
+      obsRev.get(id) || dRev?.observaciones || dRev?.observacion || ''
+    ).trim();
+    return (
+      esCrudaHistorialLibrillosRow({ observaciones: o1 }) ||
+      esCrudaHistorialLibrillosRow({ observaciones: o2 })
+    );
+  });
+
+  if (!idsCrudasPlan.length) {
+    return {
+      fecha_plan: fechaPlan,
+      fecha_revision: fechaRevision,
+      total_plan_faena: planSet.size,
+      total_crudas_plan: 0,
+      cambios: [],
+      cambios_todos_sucursal: [],
+      total_cambios_sucursal: 0,
+      total_elegibles_reimpresion: 0,
+      generado_en: generado,
+    };
+  }
+
+  const cambiosFilaDirecto = listarCambiosSucursalEntreFilas(filasPlan, filasRev, fechaPlan, fechaRevision, {
+    soloCrudas: true,
+    idsPermitidos: new Set(idsCrudasPlan),
+  });
+  const porIdFila = new Map(cambiosFilaDirecto.map((c) => [String(c.id), c]));
 
   const cambios = [];
   const cambios_todos_sucursal = [];
-  for (const id of ids) {
-    const sAnt = sucursalNormLibrilloRow({ sucursal: sucPlan.get(id) });
-    const sNue = sucursalNormLibrilloRow({ sucursal: sucRev.get(id) });
+  for (const id of idsCrudasPlan) {
+    const filaCruce = porIdFila.get(id);
+    const sAnt = sucursalNormLibrilloRow({
+      sucursal:
+        sucPlan.get(id) ||
+        sucursalEnFilaPlan.get(id) ||
+        filaCruce?.sucursal_antes ||
+        '',
+    });
+    const sNue = sucursalNormLibrilloRow({
+      sucursal:
+        sucRev.get(id) ||
+        sucursalEnFilaRev.get(id) ||
+        filaCruce?.sucursal_despues ||
+        '',
+    });
     if (sAnt === sNue) continue;
-    const obsAnt = obsPlan.get(id) || '';
-    const obsNue = obsRev.get(id) || '';
+    const obsAnt =
+      obsPlan.get(id) ||
+      String(filaPlanPorId.get(id)?.observaciones ?? filaPlanPorId.get(id)?.observacion ?? '').trim();
+    const obsNue =
+      obsRev.get(id) ||
+      String(filaRevPorId.get(id)?.observaciones ?? filaRevPorId.get(id)?.observacion ?? '').trim();
     if (!esCrudaHistorialLibrillosRow({ observaciones: obsAnt }) && !esCrudaHistorialLibrillosRow({ observaciones: obsNue })) {
       continue;
     }
@@ -475,10 +559,38 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     if (elegible_reimpresion) cambios.push(row);
   }
 
+  for (const c of cambiosFilaDirecto) {
+    const id = String(c?.id || '').trim();
+    if (!id || cambios_todos_sucursal.some((x) => x.id === id)) continue;
+    const cava = mapaCava.get(id);
+    const elegible_reimpresion = cava?.pendiente !== false;
+    const row = {
+      id,
+      tipo: 'CRUDA_SUCURSAL',
+      antes: c.sucursal_antes || '—',
+      despues: c.sucursal_despues || '—',
+      sucursal_antes: c.sucursal_antes,
+      sucursal_despues: c.sucursal_despues,
+      observacion_antes: c.observacion_antes,
+      observacion_despues: c.observacion_despues,
+      observacion_texto: c.observacion_despues,
+      detectado_en: generado,
+      momento_bd: null,
+      fuente: 'bd_servidor',
+      fecha_referencia: fechaPlan,
+      fecha_revision: fechaRevision,
+      elegible_reimpresion,
+      fecha_salida_cava: cava?.fecha_salida_cava || null,
+    };
+    cambios_todos_sucursal.push(row);
+    if (elegible_reimpresion) cambios.push(row);
+  }
+
   const payload = {
     fecha_plan: fechaPlan,
     fecha_revision: fechaRevision,
     total_plan_faena: planSet.size,
+    total_crudas_plan: idsCrudasPlan.length,
     cambios,
     cambios_todos_sucursal,
     total_cambios_sucursal: cambios_todos_sucursal.length,
