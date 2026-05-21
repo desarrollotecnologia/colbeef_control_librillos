@@ -1783,7 +1783,22 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   }
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
-  return calcularResumenMacro(fecha, rowsAll, meta_universo, {
+  // Resumen / categorías solo cuentan lo que sigue vigente en plan de faena
+  // y fue insensibilizado (+ emergencia insensibilizada). Si retiran un ID del
+  // plan, deja de contar; mientras avanza el plan/insens del día crece en vivo.
+  let rowsResumen = rowsAll;
+  try {
+    const idsFiltro = await idsUniversoPlanInsensListado(fecha);
+    const setFiltro = new Set((idsFiltro || []).map((id) => String(id).trim()));
+    rowsResumen = setFiltro.size
+      ? rowsAll.filter((d) => setFiltro.has(String(d?.id_producto ?? '').trim()))
+      : [];
+  } catch (err) {
+    console.warn(
+      `⚠️ obtenerResumenMacroPorFecha(${fecha}): no se pudo filtrar a plan∩insens, uso universo completo: ${err.message}`
+    );
+  }
+  return calcularResumenMacro(fecha, rowsResumen, meta_universo, {
     requiere_insensibilizacion_plan_faena: REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
   });
