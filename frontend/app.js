@@ -1138,6 +1138,13 @@ function usuarioOperacionActual() {
   return _analyticsUsuarioActivo || USUARIO_ACTUAL;
 }
 
+/** Nombre para pantalla; evita mostrar el placeholder genérico «usuario». */
+function nombreUsuarioVisible(u) {
+  const s = String(u || '').trim();
+  if (!s || /^usuario$/i.test(s)) return 'sin identificar';
+  return s;
+}
+
 /** Cabeceras API (usuario operativo + JSON). */
 function headersOperacionApi(json = true) {
   const h = { 'X-Colbeef-Usuario': usuarioOperacionActual() };
@@ -1748,6 +1755,7 @@ function irVista(nombre, btn, opts = {}) {
   else if (nombre === 'totales') void actualizarVistaTotales();
   else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
+    actualizarUsuarioReimpresionVisible();
     if (!opts.skipHistoricoFechas) {
       const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
       const fd = document.getElementById('fecha-historico-desde');
@@ -4220,7 +4228,22 @@ function fechasReimpresionHistorico() {
   return { fechaPlan, fechaRevision, fechaEtiquetas };
 }
 
+function actualizarUsuarioReimpresionVisible() {
+  const el = document.getElementById('historico-reimp-usuario');
+  if (!el) return;
+  const vis = nombreUsuarioVisible(usuarioOperacionActual());
+  if (vis === 'sin identificar') {
+    el.textContent =
+      'Usuario sesión: no identificado (al registrar saldrá genérico; use ?usuario=suNombre en la URL o abra desde Inventarios)';
+    el.style.color = 'var(--rojo)';
+  } else {
+    el.textContent = `Usuario sesión: ${vis} (se guardará al confirmar reimpresión)`;
+    el.style.color = 'var(--tx2)';
+  }
+}
+
 function actualizarHistoricoReimpFechas() {
+  actualizarUsuarioReimpresionVisible();
   const { fechaPlan, fechaRevision, fechaEtiquetas } = fechasReimpresionHistorico();
   const el = document.getElementById('historico-reimp-fechas');
   if (!el) return;
@@ -4346,6 +4369,7 @@ async function registrarReimpresionCrudasApi(fechaPlan, fechaRevision, listaDato
       fecha_plan: fechaPlan,
       fecha_revision: fechaRevision,
       items,
+      usuario: usuarioOperacionActual(),
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -4379,7 +4403,7 @@ function actualizarResumenReimpresionCrudas() {
       list.innerHTML = hechasRows
         .map(
           (r) =>
-            `<div><strong>${escapeHtml(r.idProducto)}</strong> → ${escapeHtml(r.sucursalDespues || '—')} · ${escapeHtml(formatFecha(r.reimpresoEn) || '—')}${r.reimpresoPor ? ` · ${escapeHtml(r.reimpresoPor)}` : ''}</div>`
+            `<div><strong>${escapeHtml(r.idProducto)}</strong> → ${escapeHtml(r.sucursalDespues || '—')} · ${escapeHtml(formatFecha(r.reimpresoEn) || '—')}${(() => { const who = nombreUsuarioVisible(r.reimpresoPor); return who !== 'sin identificar' ? ` · ${escapeHtml(who)}` : ''; })()}</div>`
         )
         .join('');
     }
@@ -4977,7 +5001,23 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
       );
       return;
     }
-    abrirVentanaEtiquetasCrudas(lista, { fechaPlanEtiqueta: fechaPlan });
+    const ventanaOk = abrirVentanaEtiquetasCrudas(lista, { fechaPlanEtiqueta: fechaPlan });
+    if (!ventanaOk) {
+      mostrarToast('No se abrió la ventana de impresión. No se marcó nada como reimpresa.', 'err');
+      return;
+    }
+    const quien = nombreUsuarioVisible(usuarioOperacionActual());
+    const okMarcar = confirm(
+      `Se abrió la ventana con ${lista.length} etiqueta(s).\n\n` +
+        `¿Marcar como REIMPRESAS en el sistema?\n` +
+        `Pulse Aceptar solo si ya imprimió (o va a imprimir ahora) en esa ventana.\n` +
+        `Cancelar = siguen pendientes y puede volver a intentar.\n\n` +
+        `Usuario: ${quien}`
+    );
+    if (!okMarcar) {
+      mostrarToast('Sin cambios: las crudas siguen pendientes de re-etiquetar.', 'ok');
+      return;
+    }
     try {
       await registrarReimpresionCrudasApi(fechaPlan, fechaRevision, lista, filasHist);
       reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
@@ -4991,11 +5031,12 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
         hit.reimpresosEntries = [...reimpresosCrudasMap.entries()];
       }
     } catch (e) {
-      mostrarToast(`Etiquetas abiertas, pero no se registró la reimpresión: ${e?.message || e}`, 'warn');
+      mostrarToast(`Error al registrar reimpresión: ${e?.message || e}`, 'err');
+      return;
     }
     const fv = sumarDiasISO(fechaPlan, 1) || fechaDatos;
     mostrarToast(
-      `${lista.length} etiqueta(s) registrada(s) · puesto ${labelFecha(fechaDatos)} · F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fv)}`,
+      `${lista.length} etiqueta(s) marcadas como reimpresas · ${quien !== 'sin identificar' ? quien : 'usuario no identificado'} · puesto ${labelFecha(fechaDatos)} · F.B. ${labelFecha(fechaPlan)} · F.V. ${labelFecha(fv)}`,
       'ok'
     );
     enviarEventoAnalytics({
@@ -8469,7 +8510,10 @@ function abrirVentanaEtiquetasCrudas(crudas, opts = {}) {
 
   const fechaSel = escapeHtml(document.getElementById('fecha-global')?.value || '');
   const w = window.open('', '_blank', 'width=1100,height=900');
-  if (!w) { mostrarToast('El navegador bloqueó la ventana de impresión.', 'err'); return; }
+  if (!w) {
+    mostrarToast('El navegador bloqueó la ventana de impresión.', 'err');
+    return false;
+  }
   w.document.write(`
     <html>
     <head>
@@ -8631,6 +8675,7 @@ function abrirVentanaEtiquetasCrudas(crudas, opts = {}) {
     </html>
   `);
   w.document.close();
+  return true;
 }
 
 function imprimirEtiquetasCrudas() {

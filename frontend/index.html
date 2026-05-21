@@ -681,11 +681,12 @@
           <span class="pt">Reimpresión de etiquetas — crudas (nueva sucursal)</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <button type="button" class="btn-sel-all" onclick="seleccionarTodosHistoricoCrudas()">Seleccionar pendientes</button>
-            <button type="button" class="btn-gen" onclick="imprimirEtiquetasHistoricoCrudasSeleccion()">Imprimir etiquetas (<span id="n-hist-crudas-sel">0</span>)</button>
+            <button type="button" class="btn-gen" onclick="imprimirEtiquetasHistoricoCrudasSeleccion()">Abrir etiquetas (<span id="n-hist-crudas-sel">0</span>)</button>
           </div>
         </div>
+        <p id="historico-reimp-usuario" style="margin:0 0 8px;font-size:12px;color:var(--tx2)"></p>
         <p id="historico-reimp-ayuda" class="hist-reimp-ayuda" style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.45">
-          Lista las que <strong>aún deben</strong> re-etiquetarse: cambio de sucursal (cruce BD plan→revisión <em>o</em> auditoría planillaje con CRUDAS), pendientes de despacho en el día de revisión, sin reimpresión registrada. Al imprimir quedan como <strong>Reimpresa</strong>. Puesto en etiqueta = día <strong>revisión</strong>. F.B. = plan · F.V. = plan + 1 día.
+          Abre la ventana de impresión; solo al confirmar el cuadro «Marcar como reimpresas» salen de pendientes. Si cancela, siguen en la lista. Puesto en etiqueta = día <strong>revisión</strong>. F.B. = plan · F.V. = plan + 1 día.
         </p>
         <p id="historico-reimp-resumen" class="hist-reimp-fechas" style="margin:0 0 6px;font-size:12px;color:var(--azul);font-weight:600"></p>
         <details id="historico-reimp-hechas-wrap" class="hist-reimp-hechas-wrap" style="display:none;margin:0 0 10px">
