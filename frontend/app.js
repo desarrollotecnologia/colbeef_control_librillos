@@ -1137,6 +1137,13 @@ function usuarioOperacionActual() {
   return _analyticsUsuarioActivo || USUARIO_ACTUAL;
 }
 
+/** Cabeceras API (usuario operativo + JSON). */
+function headersOperacionApi(json = true) {
+  const h = { 'X-Colbeef-Usuario': usuarioOperacionActual() };
+  if (json) h['Content-Type'] = 'application/json';
+  return h;
+}
+
 // ── DATOS ─────────────────────────────────────────────────────────────────────
 let datosGlobal   = [];   // API: solo retiro librillos + crudas
 let datosLibrillos = [];  // RETIRAR LIBRILLOS (historial librillos)
@@ -4231,17 +4238,23 @@ function sucursalHistoricoNorm(val) {
   return t;
 }
 
+/**
+ * Re-etiquetado: solo cruce plan→revisión con cambio real de sucursal (no movimiento interno de cava
+ * ni auditoría en vivo) y pendiente de despacho (sin salida de cava ni despacho Colbeef).
+ */
 function esFilaReimpresionCruda(r) {
   if (!r?.idProducto) return false;
+  if (!r.esCambioSucursalRevision) return false;
   const sucAnt = sucursalHistoricoNorm(r.sucursalAntes);
   const sucDes = sucursalHistoricoNorm(r.sucursalDespues);
-  const sucCambio = sucAnt !== sucDes && (sucAnt !== '' || sucDes !== '');
-  if (!sucCambio) return false;
+  if (sucAnt === sucDes || (!sucAnt && !sucDes)) return false;
   const obsCruda =
     r.tipo === 'cruda' ||
     /\bCRUDAS?\b/i.test(String(r.despues || '')) ||
     /\bCRUDAS?\b/i.test(String(r.antes || ''));
-  return r.esCambioSucursalRevision ? obsCruda : r.tipo === 'cruda' && sucCambio;
+  if (!obsCruda) return false;
+  if (r.elegibleReimpresion === false) return false;
+  return true;
 }
 
 async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {}) {
@@ -4398,6 +4411,9 @@ function normalizarCambioHistoricoCruce(c, meta) {
     tipoLabel: tipo === 'cruda' ? 'CRUDAS' : (tipo === 'vacia' ? 'VACIA' : 'SUCURSAL'),
     fuenteHistorico: 'cruce_plan_revision',
     fuenteLabel: 'Cruce plan',
+    elegibleReimpresionBd: c.elegible_reimpresion !== false,
+    elegibleReimpresion: c.elegible_reimpresion !== false,
+    fechaSalidaCava: c.fecha_salida_cava || null,
     searchText: [
       c?.id,
       obsAntes,
@@ -4507,7 +4523,8 @@ function pintarTablaHistoricoCrudas(gen) {
     historicoCrudasSeleccionadas.clear();
     if (chkAll) chkAll.checked = false;
     actualizarContadorHistoricoCrudas();
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin crudas con cambio de sucursal en el rango</td></tr>';
+    tbody.innerHTML =
+      '<tr><td colspan="8" class="empty">Sin crudas con cambio de sucursal pendientes de despacho (plan → revisión)</td></tr>';
     return;
   }
   rows.forEach((r) => {
@@ -4591,8 +4608,38 @@ function aplicarHistoricoDesdeCache(hit, fechaPlan, fechaRevision) {
   historicoCambios = hit.historicoCambios || [];
   const lbl = document.getElementById('historico-rango-label');
   if (lbl && hit.lblText) lbl.textContent = hit.lblText;
-  filtrarHistoricoCambios();
-  actualizarHistoricoReimpFechas();
+  void enriquecerElegibilidadReimpresionCrudas(fechaRevision).then(() => {
+    filtrarHistoricoCambios();
+    actualizarHistoricoReimpFechas();
+  });
+}
+
+/** Cruza cruce BD con planilla del día revisión + salidas Colbeef (solo pendientes de despacho). */
+async function enriquecerElegibilidadReimpresionCrudas(fechaRevision) {
+  const fechaRev = String(fechaRevision || document.getElementById('fecha-historico-hasta')?.value || '').trim();
+  if (!fechaRev) return;
+  try {
+    const [datos, salidas] = await Promise.all([fetchPorFecha(fechaRev), fetchSalidas()]);
+    const map = new Map((datos || []).map((d) => [String(d.id_producto), d]));
+    for (const r of historicoCambios) {
+      if (!r.esCambioSucursalRevision) {
+        r.elegibleReimpresion = false;
+        continue;
+      }
+      const d = map.get(String(r.idProducto || '').trim());
+      const enPlanilla = d && esVistaHistorialCrudasSolo(d);
+      const sinSalida =
+        d && !productoYaSalidaColbeefOTraz(d, salidas || salidasRegistradas);
+      r.elegibleReimpresion =
+        r.elegibleReimpresionBd !== false && Boolean(enPlanilla && sinSalida);
+    }
+  } catch {
+    for (const r of historicoCambios) {
+      if (r.esCambioSucursalRevision && r.elegibleReimpresion == null) {
+        r.elegibleReimpresion = r.elegibleReimpresionBd !== false;
+      }
+    }
+  }
 }
 
 async function cargarHistoricoCambios(opts = {}) {
@@ -4657,10 +4704,13 @@ async function cargarHistoricoCambios(opts = {}) {
           .map(normalizarCambioHistorico)
           .filter((r) => r.esCambioRealObservacion)
       : [];
+    const listaCruceRaw = Array.isArray(payloadCruce?.cambios_todos_sucursal)
+      ? payloadCruce.cambios_todos_sucursal
+      : Array.isArray(payloadCruce?.cambios)
+        ? payloadCruce.cambios
+        : [];
     const filasCruce = resCruce.ok
-      ? (Array.isArray(payloadCruce?.cambios) ? payloadCruce.cambios : []).map((c) =>
-          normalizarCambioHistoricoCruce(c, payloadCruce)
-        )
+      ? listaCruceRaw.map((c) => normalizarCambioHistoricoCruce(c, payloadCruce))
       : [];
     if (!resAud.ok) {
       mostrarToast('Auditoría no disponible; mostrando solo cruce plan → revisión', 'warn');
@@ -4669,12 +4719,14 @@ async function cargarHistoricoCambios(opts = {}) {
       mostrarToast('Cruce de sucursal no disponible; mostrando solo auditoría', 'warn');
     }
     historicoCambios = fusionarHistoricoCambios(filasAud, filasCruce);
+    await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
     const lbl = document.getElementById('historico-rango-label');
     const nCruce = filasCruce.length;
+    const nReimp = historicoCambios.filter(esFilaReimpresionCruda).length;
     const nAud = filasAud.length;
     const lblText =
       `Plan ${labelFecha(fechaPlan)} → revisión ${labelFecha(fechaRevision)} · ` +
-      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría)`;
+      `${historicoCambios.length} cambios (${nCruce} cruce BD, ${nAud} auditoría, ${nReimp} re-etiquetar)`;
     if (lbl) lbl.textContent = lblText;
     cacheHistoricoFront.set(cacheKey, {
       ts: Date.now(),
@@ -4725,13 +4777,15 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
     }
     const datosDia = await fetchPorFecha(fechaDatos);
     const map = new Map((datosDia || []).map((d) => [String(d.id_producto), d]));
+    const salidas = await fetchSalidas();
     const lista = ids
       .map((id) => map.get(String(id)))
       .filter(Boolean)
-      .filter(esVistaHistorialCrudasSolo);
+      .filter(esVistaHistorialCrudasSolo)
+      .filter((d) => !productoYaSalidaColbeefOTraz(d, salidas));
     if (!lista.length) {
       mostrarToast(
-        `No se encontraron crudas en ${labelFecha(fechaDatos)} para esos IDs (verifique día de etiquetas = plan + 1).`,
+        `No hay crudas pendientes de despacho en ${labelFecha(fechaDatos)} para esos IDs (ya salieron de cava o fueron despachadas).`,
         'err'
       );
       return;
@@ -4991,7 +5045,7 @@ function aplicarDatosTurnoEnMemoria(fecha, datos, salidas, meta) {
   metaUniversoTurno = meta;
   salidasRegistradas = salidas;
   separarDatos(datos);
-  actualizarEstado(true);
+  void pingHealthServidor();
   _autoInvSnapshot = snapshotPendientes(datosGlobal, salidasRegistradas);
   _autoObsSnapshot = '';
   _obsTextoMapPrev = new Map();
@@ -5098,10 +5152,35 @@ async function cargarDatos() {
   });
 }
 
-function actualizarEstado(ok) {
+function actualizarEstado(ok, health) {
   document.getElementById('conn-dot').className = 'conn-dot ' + (ok ? 'ok' : 'err');
-  document.getElementById('conn-txt').textContent = ok ? 'Conectado' : 'Sin conexión';
+  const txt = document.getElementById('conn-txt');
+  if (txt) {
+    if (ok && health?.cache?.turno_edad_seg != null) {
+      const edad = health.cache.turno_edad_seg;
+      const filas = health.cache.turno_filas ?? '—';
+      txt.textContent = `Conectado · ${filas} reg · caché ${edad}s`;
+      txt.title = health.runtime?.lastPollError
+        ? `Último error poll: ${health.runtime.lastPollError}`
+        : `BD ${health.db_ping_ms ?? '?'} ms`;
+    } else {
+      txt.textContent = ok ? 'Conectado' : 'Sin conexión';
+      txt.title = health?.error || '';
+    }
+  }
   document.getElementById('last-upd').textContent = 'Act: ' + new Date().toLocaleTimeString('es-CO');
+}
+
+async function pingHealthServidor() {
+  try {
+    const r = await fetch('/api/health');
+    const j = await r.json();
+    actualizarEstado(!!j.ok, j);
+    return j;
+  } catch (e) {
+    actualizarEstado(false, { error: e?.message });
+    return null;
+  }
 }
 
 /** Cuadre del día: API validación (trazabilidad + pendientes de despacho). */
@@ -6134,8 +6213,8 @@ async function despacharSeleccionadosCrud() {
       const idsConRelacionados = expandirIdsRelacionadosPorIdentificacion(idsValidos, datosFresh, salidasFresh);
       const res = await fetch(SALIDAS_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids_productos: idsConRelacionados, rol: USUARIO_ACTUAL, usuario: usuarioOperacionActual() }),
+        headers: headersOperacionApi(),
+        body: JSON.stringify({ ids_productos: idsConRelacionados, usuario: usuarioOperacionActual() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -6181,8 +6260,8 @@ async function despacharSeleccionados() {
       const idsConRelacionados = expandirIdsRelacionadosPorIdentificacion(idsValidos, datosFresh, salidasFresh);
       const res = await fetch(SALIDAS_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids_productos: idsConRelacionados, rol: USUARIO_ACTUAL, usuario: usuarioOperacionActual() }),
+        headers: headersOperacionApi(),
+        body: JSON.stringify({ ids_productos: idsConRelacionados, usuario: usuarioOperacionActual() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -6227,7 +6306,7 @@ async function guardarEditSalida() {
   try {
     const res = await fetch(`${SALIDAS_URL}/${editSalidaId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headersOperacionApi(),
       body: JSON.stringify({ fecha_salida: new Date(nuevaFecha).toISOString(), rol: 'admin', usuario: usuarioOperacionActual() }),
     });
     const data = await res.json();

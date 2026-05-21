@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { pool } from '../config/db.js';
 import { registrarCambioHistorico } from './auditoria.service.js';
+import { invalidarCacheTurnoActual } from './librillos.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ARCHIVO = path.join(__dirname, '../data/salidas.json');
@@ -140,6 +141,7 @@ export const registrarSalidas = async (ids_productos, usuario = 'usuario') => {
       nuevas.push(nueva);
     });
     guardarSalidasFile(salidas);
+    if (nuevas.length) invalidarCacheTurnoActual();
     if (nuevas.length) {
       await registrarCambioHistorico({
         modulo: 'salidas',
@@ -156,6 +158,7 @@ export const registrarSalidas = async (ids_productos, usuario = 'usuario') => {
   try {
     const out = await registrarSalidasPg(ids_productos, usuarioTxt);
     if (out.length) {
+      invalidarCacheTurnoActual();
       await registrarCambioHistorico({
         modulo: 'salidas',
         accion: 'registrar',
@@ -184,6 +187,7 @@ export const editarSalida = async (id, fecha_salida, usuario_rol) => {
     salidas[idx].editado_por = usuarioTxt;
     salidas[idx].fecha_edicion = new Date().toISOString();
     guardarSalidasFile(salidas);
+    invalidarCacheTurnoActual();
     await registrarCambioHistorico({
       modulo: 'salidas',
       accion: 'editar',
@@ -202,6 +206,7 @@ export const editarSalida = async (id, fecha_salida, usuario_rol) => {
   );
   const editada = await editarSalidaPg(id, fecha_salida, usuarioTxt);
   if (editada) {
+    invalidarCacheTurnoActual();
     await registrarCambioHistorico({
       modulo: 'salidas',
       accion: 'editar',
@@ -224,6 +229,7 @@ export const eliminarSalida = async (id, usuario = 'admin') => {
     const antes = { ...salidas[idx] };
     salidas.splice(idx, 1);
     guardarSalidasFile(salidas);
+    invalidarCacheTurnoActual();
     await registrarCambioHistorico({
       modulo: 'salidas',
       accion: 'eliminar',
@@ -242,6 +248,7 @@ export const eliminarSalida = async (id, usuario = 'admin') => {
   );
   const ok = await eliminarSalidaPg(id);
   if (ok) {
+    invalidarCacheTurnoActual();
     await registrarCambioHistorico({
       modulo: 'salidas',
       accion: 'eliminar',

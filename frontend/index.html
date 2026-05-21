@@ -1,4 +1,4 @@
-﻿
+
 
 
 
@@ -142,7 +142,8 @@
         </div>
         <div id="panel-plan-insens-body"></div>
       </div>
-      <div class="panel" style="margin:0 0 12px 0;padding:10px 14px;border:1px solid var(--brd2);background:#fafbf9;border-radius:8px" id="panel-cierre-proceso">
+      <!-- Cierre manual de crudas: reemplazado por Histórico → Reimpresión (cruce plan/revisión + pendientes de despacho). -->
+      <div class="panel" style="display:none;margin:0 0 12px 0;padding:10px 14px;border:1px solid var(--brd2);background:#fafbf9;border-radius:8px" id="panel-cierre-proceso" aria-hidden="true">
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
           <span class="pt" style="margin:0">Cierre de proceso (crudas)</span>
           <span id="lbl-estado-cierre" style="font-size:13px;color:var(--tx2)">—</span>
@@ -150,7 +151,7 @@
           <button type="button" class="btn-gen btn-gen-sec" id="btn-cierre-revisar" onclick="revisarPostCierreSucursal()">Revisar sucursal vs cierre</button>
           <button type="button" class="btn-gen" id="btn-cierre-terminar" onclick="terminarProcesoCierre()">Terminar proceso</button>
         </div>
-        <p style="margin:8px 0 0;font-size:11px;color:var(--tx2);max-width:960px;line-height:1.35">El listado y el <strong>resumen del día</strong> incluyen <strong>todos los códigos del plan de faena</strong> (clasificados al cargar). Los KPI indican cuántos ya fueron insensibilizados. Sacrificio de emergencia fuera de plan también entra si aplica. Al terminar proceso se guarda sucursal de crudas.</p>
+        <p style="margin:8px 0 0;font-size:11px;color:var(--tx2);max-width:960px;line-height:1.35">Use menú <strong>Histórico cambios</strong> para re-etiquetar crudas.</p>
       </div>
       <!-- Historial Librillos -->
       <div id="subtab-librillos">
@@ -672,7 +673,7 @@
         </div>
         <p style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.4">
           <strong>Plan (desde)</strong> = estado del día de faena; <strong>Revisión (hasta)</strong> = día del chequeo (p. ej. 14-may).
-          Filas <em>Cruce plan</em> comparan sucursal en BD entre esas fechas (códigos del plan). Filas <em>Auditoría</em> = cambios detectados en vivo; «—» en sucursal antes suele ser alta en turno, no un cambio real.
+          Filas <em>Cruce plan</em> comparan sucursal en BD entre esas fechas. La tabla inferior de re-etiquetado solo incluye crudas con cambio de sucursal <strong>pendientes de despacho</strong> (no salieron de cava ni despacho Colbeef). Filas <em>Auditoría</em> = cambios en vivo (no disparan re-etiquetado automático en la tabla inferior).
         </p>
         <div class="tw">
           <table class="dt">
@@ -695,7 +696,7 @@
           </div>
         </div>
         <p id="historico-reimp-ayuda" class="hist-reimp-ayuda" style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.45">
-          Marque las filas con cambio de sucursal en crudas. Los datos de puesto salen del <strong>día de etiquetas</strong> (plan + 1 día). F.B. = plan · F.V. = plan + 1 día.
+          Solo aparecen crudas con <strong>cambio real de sucursal</strong> entre plan y revisión (no movimientos internos de cava) y <strong>pendientes de despacho</strong> (sin salida de cava ni despacho registrado). Puesto del día de etiquetas (revisión). F.B. = plan · F.V. = plan + 1 día.
         </p>
         <p id="historico-reimp-fechas" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--rojo);font-weight:600"></p>
         <div class="tw">
@@ -706,7 +707,7 @@
                 <th>Fecha y hora</th><th>Usuario</th><th>ID producto</th><th>Obs. antes</th><th>Obs. ahora</th><th>Sucursal antes</th><th>Sucursal después</th>
               </tr>
             </thead>
-            <tbody id="tbody-historico-crudas"><tr><td colspan="8" class="empty">Sin crudas con cambio de sucursal en el rango</td></tr></tbody>
+            <tbody id="tbody-historico-crudas"><tr><td colspan="8" class="empty">Sin crudas pendientes de re-etiquetar (cambio sucursal plan → revisión)</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -765,6 +766,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="./colbeef-logo-data.js?v=20260417"></script>
-  <script src="./app.js?v=20260516-perf"></script>
+  <script src="./app.js?v=20260520-reimp"></script>
 </body>
 </html>

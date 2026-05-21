@@ -3,6 +3,7 @@ import {
   registrarCierreProceso,
   revisarCambiosSucursalPostCierre,
 } from '../services/cierre-proceso.service.js';
+import { usuarioOperacion } from '../middleware/request-context.js';
 
 function validarFechaParam(req, res) {
   const fecha = String(req.params.fecha || '').trim();
@@ -29,8 +30,7 @@ export const postCierreRegistrar = async (req, res) => {
   try {
     const fecha = validarFechaParam(req, res);
     if (!fecha) return;
-    const usuario = req.body?.usuario != null ? String(req.body.usuario) : null;
-    const out = await registrarCierreProceso(fecha, usuario);
+    const out = await registrarCierreProceso(fecha, usuarioOperacion(req));
     res.json({ ok: true, ...out });
   } catch (e) {
     console.error(e);

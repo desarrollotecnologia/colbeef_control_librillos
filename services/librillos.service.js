@@ -16,10 +16,6 @@ import {
 import { registrarCambioHistorico } from './auditoria.service.js';
 import { persistirSucursalesCrudasDesdeSnapshot } from './crudas-sucursal.store.js';
 import {
-  RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
-  RESUMEN_SOLO_PARTE_DIA,
-} from '../config/reglas-librillos.js';
-import {
   SQL_EXPR_FECHA_PARTE_BOGOTA,
   SQL_WHERE_PARTE_DIA_BOGOTA_P1,
 } from '../config/parte-dia-bogota-sql.js';
@@ -29,15 +25,41 @@ import {
   SACRIFICIO_EMERGENCIA_PUESTO_TABLA,
   columnasNombrePuestoTrabajo,
 } from '../config/sacrificio-emergencia.js';
+import { parsearObservacion } from './librillos/observacion.parser.js';
+import {
+  hoyBogotaISO,
+  fechaTurnoOperativoBogotaISO,
+  diaAnteriorIsoBogota,
+} from './librillos/fecha-bogota.js';
+import {
+  cachePorFecha,
+  cachePorRango,
+  cacheCambiosSucursalRevision,
+  cacheMapaSucursalHastaFecha,
+  CACHE_FECHA_MS,
+  CACHE_RANGO_MS,
+  CACHE_CRUCE_SUCURSAL_MS,
+  leerCacheFecha,
+  guardarCacheFecha,
+  leerCacheRango,
+  guardarCacheRango,
+  invalidarCacheFecha,
+  invalidarCacheCruceSucursalPorFecha,
+  getCacheTurno,
+  setCacheTurno,
+  statsCache,
+} from './librillos/cache-store.js';
+import { calcularResumenMacro } from './librillos/resumen-macro.js';
+import { clasificarMovimiento } from './clasificacion-movimiento.service.js';
+import { markPollSuccess, markPollError } from '../lib/runtime-state.js';
+import { log } from '../lib/logger.js';
 
-let cache = { datos: [], ultimaActualizacion: null };
+export { parsearObservacion } from './librillos/observacion.parser.js';
+export { fechaTurnoOperativoBogotaISO } from './librillos/fecha-bogota.js';
+
 let cacheTurnoFecha = null;
 let cacheTurnoSnapshot = new Map();
 let columnaUsuarioPlanillaje = undefined; // undefined=no resuelto, null=no existe
-const cachePorFecha = new Map();
-const cachePorRango = new Map();
-/** Al cambiar la forma de las filas del API (p.ej. nuevos campos), subir para vaciar caché en caliente. */
-const CACHE_FECHA_ROW_SCHEMA = 10;
 
 const COLBEEF_DEBUG = process.env.COLBEEF_DEBUG === '1' || process.env.COLBEEF_DEBUG === 'true';
 const USE_PLAN_FAENA_UNIVERSE =
@@ -90,101 +112,7 @@ const RANGE_CONCURRENCY = (() => {
   if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
   return 3;
 })();
-const CACHE_FECHA_MS = (() => {
-  const n = parseInt(String(process.env.CACHE_FECHA_MS || ''), 10);
-  if (Number.isFinite(n) && n >= 5000 && n <= 900000) return n;
-  return 90000;
-})();
-const CACHE_RANGO_MS = (() => {
-  const n = parseInt(String(process.env.CACHE_RANGO_MS || ''), 10);
-  if (Number.isFinite(n) && n >= 5000 && n <= 900000) return n;
-  return 90000;
-})();
-/** Cruce plan→revisión (histórico reimpresión): misma pareja de fechas = respuesta en memoria. */
-const CACHE_CRUCE_SUCURSAL_MS = (() => {
-  const n = parseInt(String(process.env.CACHE_CRUCE_SUCURSAL_MS || ''), 10);
-  if (Number.isFinite(n) && n >= 10000 && n <= 900000) return n;
-  return 120000;
-})();
-const cacheCambiosSucursalRevision = new Map();
-const cacheMapaSucursalHastaFecha = new Map();
-
-// ── PARSEAR OBSERVACIÓN ───────────────────────────────────────────────────────
-/**
- * Cliente destino: no greedy hasta salto de línea, ")" o fin (evita OLIMPICA + VISCERAS PARA… en la misma captura).
- * Grupo 1: texto permitido tras RETIRAR LIBRILLOS (nombres, DERIVADOS CARNICOS, etc.).
- */
-const RX_RETIRO_CAPTURE =
-  /\bRETIRAR?\s+LIBRIL+OS?\b\s*[:\-]?\s*(?:PARA\s+)?([A-Z0-9a-z .,_/&\-ÁÉÍÓÚÑáéíóúñ]+?)(?=\s*[\n\r\)]|\s*$)/gi;
-/** Quitar frase RETIRAR LIBRILLOS… en la misma ventana (misma línea / antes de ) ). */
-const RX_RETIRO_STRIP =
-  /\bRETIRAR?\s+LIBRIL+OS?\b\s*[:\-]?\s*(?:PARA\s+)?[^\n\r\)]*/gi;
-/** Cola no operativa que suele venir pegada después del cliente útil. */
-const RX_COLA_PLAN_FAENA =
-  /\b(?:VISCERAS?\s+PARA|VISCERAS?|ACONDICIONAMIENTO|DESPOSTE|CONGELACION|CARNES?\s+DE)\b[\s\S]*$/i;
-
-/**
- * Formato típico: «ZONA - PUESTO/PLAZA ( RETIRAR LIBRILLOS … )».
- * La plaza operativa es lo que va **después del primer guion** en la parte anterior a "(".
- * Si no hay guion, se usa todo el tramo antes de "(".
- */
-function plazaLogisticaTrasGuion(antesParentesis) {
-  const s = String(antesParentesis || '')
-    .trim()
-    .replace(/\s*\.\s*$/, '');
-  if (!s) return null;
-  const m = s.match(/^(.+?)\s*-\s*(.+)$/s);
-  if (m && String(m[2]).trim()) return String(m[2]).trim().replace(/\s*\.\s*$/, '');
-  return s;
-}
-
-/** Plaza logística: tramo antes de "(" (sin prefijo COLBEEF), luego regla guion; quita punto final típico de "CAVA.". */
-function plazaDesdeTextoLimpio(limpio) {
-  if (!limpio) return null;
-  const antes = limpio
-    .replace(/^COLBEEF\s+S\.A\.S\s*[-–]\s*/i, '')
-    .split('(')[0]
-    .trim()
-    .replace(/\s*\.\s*$/, '');
-  return plazaLogisticaTrasGuion(antes);
-}
-
-function limpiarClienteRetiro(raw) {
-  const c = String(raw || '').replace(/\s+/g, ' ').trim();
-  if (!c) return null;
-  const sinCola = c.replace(RX_COLA_PLAN_FAENA, '').replace(/\s+/g, ' ').trim();
-  return (sinCola || c).replace(/\s*[-–:,.;]\s*$/, '').trim() || null;
-}
-
-export function parsearObservacion(obs) {
-  if (!obs || obs.trim() === '') {
-    return { observacion: null, cliente_destino: null, plaza: null };
-  }
-  const src = String(obs).replace(/\r\n/g, '\n');
-
-  let cliente = null;
-  let m = null;
-  const rxCap = new RegExp(RX_RETIRO_CAPTURE.source, RX_RETIRO_CAPTURE.flags);
-  while ((m = rxCap.exec(src)) !== null) {
-    const c = limpiarClienteRetiro(m?.[1] || '');
-    if (c) cliente = c;
-  }
-
-  const limpio = src.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
-  const plaza = plazaDesdeTextoLimpio(limpio);
-
-  let sinRetiro = limpio
-    .replace(RX_RETIRO_STRIP, ' ')
-    .replace(/\(\s*\)/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  sinRetiro = sinRetiro.replace(/\(\s*\)/g, '').replace(/\s+/g, ' ').trim();
-
-  const observacion = sinRetiro || null;
-  return { observacion, cliente_destino: cliente || null, plaza };
-}
-
-/** API completa: incluir todos los registros del día (la clasificación se hace en frontend). */
+/** API completa: incluir todos los registros del día. */
 function rowIncluidoColbeef(observacionesRaw, observacionParsed, cliente_destino) {
   return true;
 }
@@ -205,20 +133,6 @@ async function procesarGruposConLimite(grupos, worker, concurrency = 3) {
 }
 
 const keyCodigo = (c) => String(c);
-
-function hoyBogotaISO() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
-}
-
-/** Día calendario anterior en Bogotá (misma convención que el modal de reimpresión logística). */
-function diaAnteriorIsoBogota(fechaISO) {
-  const s = String(fechaISO || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
-  const d = new Date(`${s}T12:00:00-05:00`);
-  if (Number.isNaN(d.getTime())) return '';
-  d.setDate(d.getDate() - 1);
-  return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
-}
 
 function esCrudaHistorialLibrillosRow(d) {
   return /\bCRUDAS?\b/i.test(
@@ -372,17 +286,6 @@ function huellaIdsConsulta(ids) {
   return `${s.length}\x1f${s[0]}\x1f${s[s.length - 1]}`;
 }
 
-function invalidarCacheCruceSucursalPorFecha(fechaISO) {
-  const f = String(fechaISO || '').trim();
-  if (!f) return;
-  for (const k of cacheCambiosSucursalRevision.keys()) {
-    if (k.startsWith(`${f}|`) || k.endsWith(`|${f}`)) cacheCambiosSucursalRevision.delete(k);
-  }
-  for (const k of cacheMapaSucursalHastaFecha.keys()) {
-    if (k.startsWith(`${f}|`)) cacheMapaSucursalHastaFecha.delete(k);
-  }
-}
-
 /** Sucursal (local Colbeef) vigente al cierre del día calendario Bogotá, por última parte tipo Colbeef ≤ esa fecha. */
 async function mapaSucursalPorIdsHastaFechaDia(fechaISO, idsTexto) {
   const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
@@ -464,6 +367,44 @@ async function mapaObservacionPartePorIdsEnFecha(fechaISO, idsTexto) {
   return out;
 }
 
+/** Último registro cava por id: pendiente = sin fecha_salida (aún no sale de cava / no despachado). */
+async function mapaPendienteSalidaCavaPorIds(idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  for (const id of ids) out.set(id, { pendiente: true, fecha_salida_cava: null });
+  const grupos = chunks(ids, META_RAIZ_BATCH);
+  for (const grupo of grupos) {
+    const res = await pool.query(
+      `
+      SELECT DISTINCT ON (pp.id_producto::text)
+        pp.id_producto::text AS id_producto,
+        pcr.fecha_salida AS fecha_salida_cava
+      FROM trazabilidad_proceso.parte_producto pp
+      LEFT JOIN LATERAL (
+        SELECT x.fecha_salida
+        FROM trazabilidad_proceso.parte_producto_cava_riel x
+        WHERE x.id_producto::text = pp.id_producto::text
+          AND x.id_parte_producto = pp.id
+        ORDER BY x.id DESC
+        LIMIT 1
+      ) pcr ON TRUE
+      WHERE pp.id_tipo_parte_producto = ${ID_TIPO_PARTE_COLBEEF}
+        AND pp.id_producto::text = ANY($1::text[])
+      ORDER BY pp.id_producto::text, pp.fecha_registro DESC NULLS LAST, pp.id DESC
+      `,
+      [grupo]
+    );
+    (res.rows || []).forEach((r) => {
+      const id = String(r.id_producto || '').trim();
+      if (!id) return;
+      const fs = r.fecha_salida_cava || null;
+      out.set(id, { pendiente: !fs, fecha_salida_cava: fs });
+    });
+  }
+  return out;
+}
+
 /**
  * Revisión logística: plan de faena (día N) vs sucursal al cierre de cada día (no el valor «actual» único).
  */
@@ -491,14 +432,16 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     };
   }
 
-  const [sucPlan, sucRev, obsPlan, obsRev] = await Promise.all([
+  const [sucPlan, sucRev, obsPlan, obsRev, mapaCava] = await Promise.all([
     mapaSucursalPorIdsHastaFechaDia(fechaPlan, ids),
     mapaSucursalPorIdsHastaFechaDia(fechaRevision, ids),
     mapaObservacionPartePorIdsEnFecha(fechaPlan, ids),
     mapaObservacionPartePorIdsEnFecha(fechaRevision, ids),
+    mapaPendienteSalidaCavaPorIds(ids),
   ]);
 
   const cambios = [];
+  const cambios_todos_sucursal = [];
   for (const id of ids) {
     const sAnt = sucursalNormLibrilloRow({ sucursal: sucPlan.get(id) });
     const sNue = sucursalNormLibrilloRow({ sucursal: sucRev.get(id) });
@@ -508,7 +451,9 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     if (!esCrudaHistorialLibrillosRow({ observaciones: obsAnt }) && !esCrudaHistorialLibrillosRow({ observaciones: obsNue })) {
       continue;
     }
-    cambios.push({
+    const cava = mapaCava.get(id);
+    const elegible_reimpresion = cava?.pendiente !== false;
+    const row = {
       id,
       tipo: 'CRUDA_SUCURSAL',
       antes: sAnt || '—',
@@ -523,7 +468,11 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
       fuente: 'bd_servidor',
       fecha_referencia: fechaPlan,
       fecha_revision: fechaRevision,
-    });
+      elegible_reimpresion,
+      fecha_salida_cava: cava?.fecha_salida_cava || null,
+    };
+    cambios_todos_sucursal.push(row);
+    if (elegible_reimpresion) cambios.push(row);
   }
 
   const payload = {
@@ -531,71 +480,13 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     fecha_revision: fechaRevision,
     total_plan_faena: planSet.size,
     cambios,
+    cambios_todos_sucursal,
+    total_cambios_sucursal: cambios_todos_sucursal.length,
+    total_elegibles_reimpresion: cambios.length,
     generado_en: generado,
   };
   cacheCambiosSucursalRevision.set(cacheKey, { ts: Date.now(), data: payload });
   return payload;
-}
-
-function claveCacheFecha(fechaISO) {
-  const f = String(fechaISO || '').trim();
-  return f ? `${f}|${CACHE_FECHA_ROW_SCHEMA}` : '';
-}
-
-function leerCacheFecha(fechaISO) {
-  const k = claveCacheFecha(fechaISO);
-  if (!k) return null;
-  const hit = cachePorFecha.get(k);
-  if (!hit) return null;
-  if ((Date.now() - Number(hit.ts || 0)) > CACHE_FECHA_MS) {
-    cachePorFecha.delete(k);
-    return null;
-  }
-  return Array.isArray(hit.data) ? hit.data : null;
-}
-
-function guardarCacheFecha(fechaISO, data) {
-  const k = claveCacheFecha(fechaISO);
-  if (!k) return;
-  cachePorFecha.set(k, { ts: Date.now(), data: Array.isArray(data) ? data : [] });
-}
-
-function leerCacheRango(desde, hasta) {
-  const k = `${String(desde || '').trim()}|${String(hasta || '').trim()}`;
-  if (!k || k === '|') return null;
-  const hit = cachePorRango.get(k);
-  if (!hit) return null;
-  if ((Date.now() - Number(hit.ts || 0)) > CACHE_RANGO_MS) {
-    cachePorRango.delete(k);
-    return null;
-  }
-  return Array.isArray(hit.data) ? hit.data : null;
-}
-
-function guardarCacheRango(desde, hasta, data) {
-  const k = `${String(desde || '').trim()}|${String(hasta || '').trim()}`;
-  if (!k || k === '|') return;
-  cachePorRango.set(k, { ts: Date.now(), data: Array.isArray(data) ? data : [] });
-}
-
-const HORA_CORTE_TURNO_BOGOTA = (() => {
-  const n = parseInt(String(process.env.HORA_CORTE_TURNO_SALIDA_BOGOTA || ''), 10);
-  return Number.isFinite(n) && n >= 0 && n <= 23 ? n : 6;
-})();
-
-export function fechaTurnoOperativoBogotaISO() {
-  const now = new Date();
-  const fechaCal = now.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Bogota',
-    hour: 'numeric',
-    hour12: false,
-  }).formatToParts(now);
-  const h = parseInt(parts.find((p) => p.type === 'hour')?.value || '0', 10);
-  if (!(h < HORA_CORTE_TURNO_BOGOTA)) return fechaCal;
-  const d = new Date(`${fechaCal}T00:00:00-05:00`);
-  d.setDate(d.getDate() - 1);
-  return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
 async function obtenerColumnaUsuarioPlanillaje() {
@@ -1516,6 +1407,10 @@ const consultarLibrillos = async (fecha = null) => {
           sacrificio_emergencia: emergIdsDia.has(String(l.id_producto).trim()),
         };
       })
+      .map((row) => ({
+        ...row,
+        clasificacion_movimiento: clasificarMovimiento(row),
+      }))
       .filter((row) =>
         rowIncluidoColbeef(row.observaciones, row.observacion, row.cliente_destino)
       );
@@ -1547,15 +1442,29 @@ export async function obtenerLibrillosConsultaBdDirecta(fechaISO) {
 
 export function invalidarCacheLibrillosFecha(fechaISO) {
   const f = String(fechaISO || '').trim();
-  const k = claveCacheFecha(f);
-  if (k) cachePorFecha.delete(k);
+  invalidarCacheFecha(f);
   invalidarCacheCruceSucursalPorFecha(f);
+  const turno = getCacheTurno();
+  if (f && turno.fecha === f) {
+    setCacheTurno({
+      datos: [],
+      ultimaActualizacion: null,
+      fecha: f,
+      snapshot: new Map(),
+    });
+  }
+}
+
+/** Tras escrituras (salidas, etc.): vacía caché del turno operativo actual. */
+export function invalidarCacheTurnoActual() {
+  invalidarCacheLibrillosFecha(fechaTurnoOperativoBogotaISO());
 }
 
 // ── CACHE ─────────────────────────────────────────────────────────────────────
 const actualizarCache = async () => {
+  const t0 = Date.now();
   try {
-    if (COLBEEF_DEBUG) console.log('Consultando base de datos (cache servidor)…');
+    if (COLBEEF_DEBUG) log.debug('Consultando base de datos (cache servidor)');
     const turnoFecha = fechaTurnoOperativoBogotaISO();
     const datos = await consultarLibrillos(turnoFecha);
     const nextSnap = snapshotPlanillajeDesdeRows(datos);
@@ -1565,17 +1474,29 @@ const actualizarCache = async () => {
       cacheTurnoFecha = turnoFecha;
     }
     cacheTurnoSnapshot = nextSnap;
-    cache.datos = datos;
-    cache.ultimaActualizacion = new Date();
+    const ahora = new Date();
+    setCacheTurno({
+      datos,
+      ultimaActualizacion: ahora,
+      fecha: turnoFecha,
+      snapshot: nextSnap,
+    });
     guardarCacheFecha(turnoFecha, datos);
     try {
       await persistirSucursalesCrudasDesdeSnapshot(turnoFecha, nextSnap);
     } catch (e) {
-      console.warn(`⚠️ No se pudo guardar crudas-sucursal.json: ${e.message}`);
+      log.warn('No se pudo guardar crudas-sucursal.json', { error: e.message });
     }
-    if (COLBEEF_DEBUG) console.log(`✅ Cache actualizado — ${datos.length} registros (día completo)`);
+    markPollSuccess({
+      fecha: turnoFecha,
+      rows: datos.length,
+      ms: Date.now() - t0,
+      intervalMs: CACHE_POLL_MS,
+    });
+    if (COLBEEF_DEBUG) log.debug('Cache actualizado', { rows: datos.length, fecha: turnoFecha });
   } catch (error) {
-    console.error('Error cache:', error.message);
+    markPollError(error);
+    log.error('Error cache polling', { error: error.message });
   }
 };
 
@@ -1591,35 +1512,20 @@ export const iniciarPolling = async () => {
   setInterval(actualizarCache, CACHE_POLL_MS);
 };
 
-export const obtenerLibrillos = () => ({
-  datos: cache.datos,
-  ultimaActualizacion: cache.ultimaActualizacion,
-  total: cache.datos.length,
-});
+export const obtenerLibrillos = () => {
+  const c = getCacheTurno();
+  return {
+    datos: c.datos,
+    ultimaActualizacion: c.ultimaActualizacion,
+    total: c.datos.length,
+  };
+};
+
+export { statsCache };
 
 export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillosConCache(fecha);
 
-/**
- * Texto unido para marcas en resumen (CRUDAS / ESTILO BOGOTA): con `plan_first`,
- * `observaciones` puede traer solo el plan y ocultar el texto de `parte_producto`.
- */
-function textoMarcasResumenLibrillo(d) {
-  return [d?.observaciones, d?.observacion, d?.observacion_plan, d?.observaciones_parte, d?.texto_retiro_obs]
-    .map((x) => String(x ?? '').replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function sinMarcasDiacriticos(s) {
-  return String(s || '')
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '');
-}
-
 export async function obtenerResumenMacroPorFecha(fecha) {
-  /** Mismo universo que el listado: plan faena completo del día (clasificación por agrupacion_codigo). */
   let meta_universo = null;
   try {
     meta_universo = await obtenerMetaUniversoPorFecha(fecha);
@@ -1628,93 +1534,10 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   }
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
-  /**
-   * Resumen diario:
-   * - modo normal: mismo universo que el detalle del día (incl. pendientes).
-   * - modo cierre: solo registros con parte del día (sin pendientes).
-   * Conteos por `agrupacion_codigo` salvo excepciones explícitas en config/reglas-librillos.js
-   * y reclasificación resumen: `asurcarnes` + observación vacía → cocidos (macro Excel).
-   */
-  const rows = RESUMEN_SOLO_PARTE_DIA
-    ? rowsAll.filter((d) => !Boolean(d?.pendiente_registro_parte))
-    : rowsAll;
-  const pendientes = rowsAll.filter((d) => Boolean(d?.pendiente_registro_parte)).length;
-  const countCod = new Map();
-  const inc = (k) => countCod.set(k, Number(countCod.get(k) || 0) + 1);
-  const textoObs = (d) => textoMarcasResumenLibrillo(d);
-  const esCruda = (d) => /\bCRUDAS?\b/i.test(textoObs(d));
-  /** Texto unido contiene «ESTILO BOGOTA» / «ESTILO BOGOTÁ» (sin tildes). */
-  const tieneEstiloBogota = (d) => {
-    const u = sinMarcasDiacriticos(textoObs(d)).toUpperCase();
-    return u.includes('ESTILO BOGOTA');
-  };
-  const esSucursalOlimpica = (d) => {
-    const u = (s) => sinMarcasDiacriticos(String(s ?? '')).toUpperCase();
-    return (
-      u(d?.sucursal).includes('OLIMPICA') ||
-      u(d?.plaza).includes('OLIMPICA')
-    );
-  };
-  let chunchullasCrudas = 0;
-  let estiloBogota = 0;
-  let olimpica = 0;
-  rows.forEach((d) => {
-    if (tieneEstiloBogota(d)) {
-      estiloBogota += 1;
-    } else if (esCruda(d)) {
-      chunchullasCrudas += 1;
-    }
-    if (esSucursalOlimpica(d)) olimpica += 1;
-    const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
-    const recod =
-      RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS &&
-      codRaw === 'asurcarnes' &&
-      Boolean(d?.pendiente_registro_parte);
-    let cod = recod ? 'cocidos' : codRaw;
-    // Misma regla que `codigoAgrupacionMacro` / cuadro HTML: obs vacía + fallback asurcarnes
-    // cuenta en cocidos para el resumen (alineación con macro Excel tipo INICIO).
-    const obsResumen = textoMarcasResumenLibrillo(d);
-    if (cod === 'asurcarnes' && !obsResumen) cod = 'cocidos';
-    inc(cod);
+  return calcularResumenMacro(fecha, rowsAll, meta_universo, {
+    requiere_insensibilizacion_plan_faena: REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
+    incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
   });
-
-  const categorias = {
-    chunchullas_crudas: chunchullasCrudas,
-    estilo_bogota: estiloBogota,
-    olimpica,
-    asurcarnes_glo: Number(countCod.get('asurcarnes_glo') || 0),
-    asurcarnescol: Number(countCod.get('asurcarnescol') || 0),
-    global_hides: Number(countCod.get('global_hides') || 0),
-    asurcarnes: Number(countCod.get('asurcarnes') || 0),
-    cat: Number(countCod.get('cat') || 0),
-    derivados: Number(countCod.get('derivados_carnicos') || 0),
-    cocidos: Number(countCod.get('cocidos') || 0),
-    total: rows.length,
-    total_plan_faena: Number(meta_universo?.total_plan_faena) || rows.length,
-  };
-
-  const resumenLibros = {
-    crudos: categorias.cat + categorias.asurcarnescol,
-    cocidos: categorias.cocidos,
-    derivados: categorias.derivados + categorias.asurcarnes + categorias.global_hides,
-  };
-  resumenLibros.total = resumenLibros.crudos + resumenLibros.cocidos + resumenLibros.derivados;
-
-  return {
-    fecha,
-    total_registros: rows.length,
-    total_planillados: rowsAll.length,
-    total_pendientes_registro_parte: pendientes,
-    categorias,
-    resumen_libros: resumenLibros,
-    meta_universo,
-    opciones_resumen: {
-      solo_parte_dia: RESUMEN_SOLO_PARTE_DIA,
-      recodificar_asur_pendiente_a_cocidos: RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS,
-      requiere_insensibilizacion_plan_faena: REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
-      incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
-    },
-  };
 }
 
 /** Días calendario Bogotá entre dos fechas ISO (inclusive). */

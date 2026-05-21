@@ -10,10 +10,17 @@ const base = {
   user:     process.env.POSTGRES_USER,
   password: process.env.POSTGRES_PASSWORD,
   port:     process.env.POSTGRES_PORT,
-  // Si la BD es remota (ej: Azure, AWS, Render) suele requerir SSL.
-  // Esto lo habilita si el host no es localhost.
-  ssl: false,
+  ssl: resolvePgSsl(),
 };
+
+function resolvePgSsl() {
+  const raw = String(process.env.POSTGRES_SSL || '').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'require'].includes(raw)) return { rejectUnauthorized: false };
+  if (['0', 'false', 'no'].includes(raw)) return false;
+  const hostStr = String(process.env.POSTGRES_HOST || '');
+  const isLocal = /^(localhost|127\.0\.0\.1|::1)$/i.test(hostStr);
+  return isLocal ? false : { rejectUnauthorized: false };
+}
 
 /** Límite de tiempo por consulta en la réplica (ej: 90s, 120s). Vacío = sin cambiar. */
 const pgStatementTimeout = (process.env.PG_STATEMENT_TIMEOUT || '').trim();

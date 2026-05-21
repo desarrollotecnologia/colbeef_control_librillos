@@ -13,7 +13,8 @@
     "migrate:salidas": "node scripts/migrate-salidas-json-to-pg.mjs",
     "db:salidas-schema": "node scripts/apply-salidas-schema.mjs",
     "db:auditoria-schema": "node scripts/apply-auditoria-schema.mjs",
-    "migrate:auditoria": "node scripts/migrate-auditoria-json-to-pg.mjs"
+    "migrate:auditoria": "node scripts/migrate-auditoria-json-to-pg.mjs",
+    "test": "node --test test/**/*.test.js"
   },
   "dependencies": {
     "compression": "^1.7.5",

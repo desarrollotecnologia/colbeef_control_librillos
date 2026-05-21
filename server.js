@@ -11,8 +11,13 @@ import analyticsRoutes from './routes/analytics.routes.js';
 import auditoriaRoutes from './routes/auditoria.routes.js';
 import guiasRoutes from './routes/guias.routes.js';
 import cierreProcesoRoutes from './routes/cierre-proceso.routes.js';
-import { iniciarPolling } from './services/librillos.service.js';
+import { iniciarPolling, statsCache } from './services/librillos.service.js';
 import { pool } from './config/db.js';
+import { requestContextMiddleware } from './middleware/request-context.js';
+import { writeRateLimitMiddleware } from './middleware/rate-limit.js';
+import { errorHandlerMiddleware } from './middleware/error-handler.js';
+import { snapshotHealthExtra } from './lib/runtime-state.js';
+import { log } from './lib/logger.js';
 
 dotenv.config();
 
@@ -27,6 +32,8 @@ if (httpCompression) {
   app.use(compression({ threshold: 1024 }));
 }
 app.use(express.json());
+app.use(requestContextMiddleware);
+app.use('/api', writeRateLimitMiddleware);
 
 // URL oficial de acceso en red local (evita confusión localhost vs IP compartida).
 // Configurable vía .env (OFFICIAL_HOST). Si está vacío, se desactiva la redirección.
@@ -60,17 +67,30 @@ app.use('/api/cierre-proceso', cierreProcesoRoutes);
 
 app.get('/api/health', async (req, res) => {
   try {
+    const t0 = Date.now();
     await pool.query('SELECT 1');
-    res.json({ ok: true, db: 'up', time: new Date().toISOString() });
+    const turno = statsCache();
+    res.json({
+      ok: true,
+      db: 'up',
+      time: new Date().toISOString(),
+      db_ping_ms: Date.now() - t0,
+      version: process.env.npm_package_version || '1.0.0',
+      cache: turno,
+      runtime: snapshotHealthExtra(),
+    });
   } catch (e) {
     res.status(503).json({
       ok: false,
       db: 'down',
       error: String(e.message || e),
       time: new Date().toISOString(),
+      runtime: snapshotHealthExtra(),
     });
   }
 });
+
+app.use(errorHandlerMiddleware);
 
 // Interfaz web (sin caché agresiva: el navegador suele guardar app.js y parece que "no toma cambios")
 app.use(
@@ -86,6 +106,7 @@ app.use(
 const PORT = process.env.PORT || 3001;
 // Escucha en toda la red (evita "no se puede acceder" por bind a localhost)
 app.listen(PORT, '0.0.0.0', async () => {
+  log.info('Servidor iniciado', { port: PORT });
   console.log(`Servidor corriendo en puerto ${PORT}`);
   console.log('GET /api/health — estado de base de datos');
   console.log('GET /api/librillos/validacion?fecha=YYYY-MM-DD — cuadre de movimientos');
