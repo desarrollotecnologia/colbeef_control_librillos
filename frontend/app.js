@@ -2271,19 +2271,42 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       ? Number(rm?.categorias?.estilo_bogota ?? 0)
       : (baseLista || []).filter(tieneEstiloBogotaLch).length;
 
-  /** Conteo por agrupacion_codigo del plan completo (misma fuente que listado / API). */
-  const vAsurGlo = mapAgr.get('asurcarnes_glo') || 0;
-  const vAsurCol = mapAgr.get('asurcarnescol') || 0;
-  const vGlobal = mapAgr.get('global_hides') || 0;
-  const vAsur = mapAgr.get('asurcarnes') || 0;
-  const vCat = mapAgr.get('cat') || 0;
-  const vDeriv = mapAgr.get('derivados_carnicos') || 0;
-  const totalCocidos = mapAgr.get('cocidos') || 0;
-  const vOtros = mapAgr.get('otros') || 0;
-  const vSinDestino = mapAgr.get('sin_destino') || 0;
+  /**
+   * Conteo por agrupación. Si el backend nos pasa `rm.categorias` (resumen
+   * macro ya filtrado a plan ∩ insens), usamos esos números para que el
+   * cuadro refleje exactamente el resumen del backend (sin sumar ítems
+   * retirados del plan o sin insensibilizar). Si no, caemos al conteo local
+   * sobre baseLista.
+   */
+  const usarCategoriasBackend = Boolean(rm?.categorias) && !usarSoloLibrillos;
+  const vAsurGlo = usarCategoriasBackend
+    ? Number(rm.categorias.asurcarnes_glo || 0)
+    : (mapAgr.get('asurcarnes_glo') || 0);
+  const vAsurCol = usarCategoriasBackend
+    ? Number(rm.categorias.asurcarnescol || 0)
+    : (mapAgr.get('asurcarnescol') || 0);
+  const vGlobal = usarCategoriasBackend
+    ? Number(rm.categorias.global_hides || 0)
+    : (mapAgr.get('global_hides') || 0);
+  const vAsur = usarCategoriasBackend
+    ? Number(rm.categorias.asurcarnes || 0)
+    : (mapAgr.get('asurcarnes') || 0);
+  const vCat = usarCategoriasBackend
+    ? Number(rm.categorias.cat || 0)
+    : (mapAgr.get('cat') || 0);
+  const vDeriv = usarCategoriasBackend
+    ? Number(rm.categorias.derivados || 0)
+    : (mapAgr.get('derivados_carnicos') || 0);
+  const totalCocidos = usarCategoriasBackend
+    ? Number(rm.categorias.cocidos || 0)
+    : (mapAgr.get('cocidos') || 0);
+  const vOtros = usarCategoriasBackend ? 0 : (mapAgr.get('otros') || 0);
+  const vSinDestino = usarCategoriasBackend ? 0 : (mapAgr.get('sin_destino') || 0);
 
   const nPlanFaena = Number(opts?.metaUniverso?.total_plan_faena || rm?.categorias?.total_plan_faena || 0);
-  const totalGeneral = (baseLista || []).length || nPlanFaena || Number(rm?.categorias?.total || 0);
+  const totalGeneral = usarCategoriasBackend
+    ? Number(rm.categorias.total || 0)
+    : ((baseLista || []).length || nPlanFaena || Number(rm?.categorias?.total || 0));
   const fechaSel =
     String(opts.fechaReporte || opts.fechaISO || '').trim() ||
     document.getElementById('fecha-global')?.value ||
