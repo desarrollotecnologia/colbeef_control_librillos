@@ -1026,13 +1026,19 @@ function mapaTextoRetiroLocalPorFecha(fechaISO) {
 }
 
 async function idsPlanFaenaPorFecha(fechaISO) {
+  // Usa la tabla OPERATIVA (no auditoría). Cuando retiran un producto del plan,
+  // el sistema deja la fila pero pone `fecha_fin_vigencia = NULL`; las activas
+  // que sí van a sacrificio quedan con `fecha_fin_vigencia = fecha_plan`. Si un
+  // producto está en varios sub-planes el DISTINCT lo cuenta una sola vez,
+  // siempre que tenga al menos una fila activa.
   const res = await pool.query(
     `
     SELECT DISTINCT pfp.id_producto::text AS id_producto
-    FROM a_trazabilidad_proceso.a_plan_faena pf
-    JOIN a_trazabilidad_proceso.a_plan_faena_producto pfp
+    FROM trazabilidad_proceso.plan_faena pf
+    JOIN trazabilidad_proceso.plan_faena_producto pfp
       ON pfp.id_plan_faena = pf.id
     WHERE DATE(timezone('America/Bogota', pf.fecha_plan)) = $1::date
+      AND pfp.fecha_fin_vigencia = pf.fecha_plan
     `,
     [fechaISO]
   );
