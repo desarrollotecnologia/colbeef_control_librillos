@@ -1547,12 +1547,19 @@ function actualizarHintFechaReportes() {
   el.textContent = `Fecha del reporte: ${labelFecha(fechaOperativaISO())} (barra superior).`;
 }
 
+function actualizarHintFechaGuia() {
+  const el = document.getElementById('guia-fecha-hint');
+  if (!el) return;
+  el.textContent = `Día operativo: ${labelFecha(fechaOperativaISO())}.`;
+}
+
 function sincronizarFechaGuiaConFechaGlobal() {
   const fg = String(document.getElementById('fecha-global')?.value || '').trim();
   const operativa = fg || fechaOperativaDefectoISO();
   const inp = document.getElementById('inp-guia-fecha');
   if (inp) inp.value = operativa;
   actualizarHintFechaReportes();
+  actualizarHintFechaGuia();
   return operativa;
 }
 
@@ -1757,6 +1764,7 @@ function irVista(nombre, btn, opts = {}) {
   }   else if (nombre === 'clientes') filtrarCli();
   else if (nombre === 'totales') void actualizarVistaTotales();
   else if (nombre === 'reportes') actualizarHintFechaReportes();
+  else if (nombre === 'guias') actualizarHintFechaGuia();
   else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
     actualizarUsuarioReimpresionVisible();
@@ -3050,9 +3058,11 @@ function actualizarResumenControlGuia(data, manual) {
   const calc = calcularControlGuia(data, manual);
   const pendientesApi = Number(data?.cabecera?.resumen_categoria?.pendientes_hoy || 0);
   const cmp = compararDespachoConTotalGuia(calc.final, manual?.librosDespachados);
-  let estadoBloque = '';
+  box.classList.remove('guia-resumen-empty');
+
+  let estadoHtml = '';
   if (!cmp.tieneManual) {
-    estadoBloque = `<div class="guia-resumen-linea guia-resumen-hint">Libros despachados: <strong>${calc.final}</strong> (automático, igual al total). Completa el campo manual arriba si el cargue real fue distinto.</div>`;
+    estadoHtml = `<div class="guia-resumen-estado">Despachados: <strong>${calc.final}</strong> (automático)</div>`;
   } else {
     const cls =
       cmp.estado === 'completo'
@@ -3060,14 +3070,39 @@ function actualizarResumenControlGuia(data, manual) {
         : cmp.estado === 'pendientes'
           ? 'guia-resumen-warn'
           : 'guia-resumen-extra';
-    estadoBloque = `<div class="guia-resumen-linea ${cls}"><strong>Control despacho:</strong> ${cmp.mensaje} <span class="guia-resumen-hint">(total esperado: ${calc.final} · ingresado: ${manual.librosDespachados})</span></div>`;
+    const txt =
+      cmp.estado === 'completo'
+        ? 'Coincide con el total'
+        : cmp.estado === 'pendientes'
+          ? `Faltan ${cmp.pendientes} · esperado ${calc.final}, cargado ${manual.librosDespachados}`
+          : `+${cmp.adicionales} adicionales · esperado ${calc.final}, cargado ${manual.librosDespachados}`;
+    estadoHtml = `<div class="guia-resumen-estado ${cls}"><strong>Despacho:</strong> ${txt}</div>`;
   }
+
+  const extraAjuste =
+    calc.ajusteValor > 0 || calc.decomiso > 0
+      ? ` ${calc.op} ${calc.ajusteValor} ${calc.lbl} − ${calc.decomiso} dec.`
+      : '';
+
   box.innerHTML = `
-    <div class="guia-resumen-titulo"><strong>Control de cálculo</strong> <span class="guia-resumen-sub">(datos del día y categoría: ajuste/decomiso solo si los editaste)</span></div>
-    <div class="guia-resumen-linea">Pendientes hoy (API): <strong>${pendientesApi}</strong></div>
-    <div class="guia-resumen-linea">LIBROS A DESPACHAR (${calc.partes.nombreA}: ${calc.partes.a} + ${calc.partes.nombreB}: ${calc.partes.b}) = <strong>${calc.base}</strong></div>
-    <div class="guia-resumen-linea">TOTAL = ${calc.base} ${calc.op} ${calc.ajusteValor} ${calc.lbl} – ${calc.decomiso} DECOMISO = <strong>${calc.final}</strong></div>
-    ${estadoBloque}
+    <h4 class="guia-resumen-head">Cálculo</h4>
+    <div class="guia-resumen-kpis">
+      <div class="guia-resumen-kpi">
+        <span class="guia-resumen-kpi-label">Base</span>
+        <span class="guia-resumen-kpi-val">${calc.base}</span>
+      </div>
+      <div class="guia-resumen-kpi">
+        <span class="guia-resumen-kpi-label">Pend. hoy</span>
+        <span class="guia-resumen-kpi-val">${pendientesApi}</span>
+      </div>
+      <div class="guia-resumen-kpi">
+        <span class="guia-resumen-kpi-label">Total PDF</span>
+        <span class="guia-resumen-kpi-val">${calc.final}</span>
+      </div>
+    </div>
+    <p class="guia-resumen-detalle">${calc.partes.nombreA} ${calc.partes.a} + ${calc.partes.nombreB} ${calc.partes.b}</p>
+    <div class="guia-resumen-formula">${calc.base}${extraAjuste} → <strong>${calc.final}</strong></div>
+    ${estadoHtml}
   `;
 }
 

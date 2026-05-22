@@ -2065,9 +2065,32 @@ body{
   transform:scale(.95);
 }
 
-/* ── Guía de despacho: sección colapsable y panel control de cálculo ──── */
+/* ── Guía de despacho ─────────────────────────────────────────────────── */
+.guia-form{gap:12px;}
+.guia-form-top{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+.guia-fecha-readonly{
+  background:var(--bg3);
+  color:var(--tx2);
+  cursor:default;
+}
+.guia-fecha-hint{
+  margin:-4px 0 0;
+  font-size:11px;
+  color:var(--tx3);
+  line-height:1.3;
+}
+.guia-form-actions{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+.guia-campo-manual{margin-top:2px;}
 .guia-ajuste-section{
-  margin-top:14px;
+  margin-top:2px;
   border:1px solid var(--brd);
   border-radius:8px;
   background:var(--bg3);
@@ -2076,11 +2099,10 @@ body{
 .guia-ajuste-summary{
   list-style:none;
   cursor:pointer;
-  padding:10px 14px;
-  font-weight:700;
-  font-size:13px;
-  letter-spacing:.3px;
-  color:var(--tx);
+  padding:9px 12px;
+  font-weight:600;
+  font-size:12px;
+  color:var(--tx2);
   display:flex;
   align-items:center;
   gap:8px;
@@ -2089,61 +2111,102 @@ body{
 .guia-ajuste-summary::-webkit-details-marker{display:none}
 .guia-ajuste-summary::before{
   content:'▶';
-  font-size:10px;
-  color:var(--tx2);
+  font-size:9px;
+  color:var(--tx3);
   transition:transform .15s ease;
 }
-.guia-ajuste-section[open] > .guia-ajuste-summary::before{
-  transform:rotate(90deg);
-}
+.guia-ajuste-section[open] > .guia-ajuste-summary::before{transform:rotate(90deg);}
 .guia-ajuste-section[open] > .guia-ajuste-summary{
+  color:var(--tx);
   border-bottom:1px solid var(--brd);
 }
-.guia-ajuste-body{
-  padding:12px 14px 14px;
+.guia-ajuste-body{padding:10px 12px 12px;}
+.guia-ajuste-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
 }
 
 .guia-resumen-control{
-  margin-top:14px;
+  margin-top:4px;
   padding:12px 14px;
   border:1px solid var(--brd);
-  border-radius:8px;
-  background:var(--panel);
+  border-radius:10px;
+  background:linear-gradient(180deg,#fafcfb,#f4f7f5);
   color:var(--tx);
   font-size:13px;
-  line-height:1.55;
+  line-height:1.45;
 }
-.guia-resumen-titulo{
-  margin-bottom:6px;
+.guia-resumen-control.guia-resumen-empty{
+  text-align:center;
+  padding:14px;
+  background:var(--bg3);
 }
-.guia-resumen-sub{
-  color:var(--tx2);
-  font-weight:400;
-  font-size:12px;
-}
-.guia-resumen-linea{
-  font-family:'Barlow',sans-serif;
-}
-.guia-resumen-linea strong{
-  color:var(--tx);
+.guia-resumen-empty-txt{color:var(--tx3);font-size:12px;}
+.guia-resumen-head{
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:15px;
   font-weight:700;
+  letter-spacing:.04em;
+  margin:0 0 10px;
+  color:var(--tx);
 }
-.guia-resumen-hint{
-  color:var(--tx2);
+.guia-resumen-kpis{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+  margin-bottom:10px;
+}
+.guia-resumen-kpi{
+  padding:8px 10px;
+  border-radius:8px;
+  background:#fff;
+  border:1px solid var(--brd);
+  text-align:center;
+}
+.guia-resumen-kpi-label{
+  display:block;
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--tx3);
+  margin-bottom:4px;
+}
+.guia-resumen-kpi-val{
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:22px;
+  font-weight:700;
+  color:var(--rojo);
+  line-height:1;
+}
+.guia-resumen-detalle{
   font-size:12px;
+  color:var(--tx2);
+  margin:0 0 8px;
 }
-.guia-resumen-ok{
-  color:#1a7a42;
-  font-weight:600;
+.guia-resumen-detalle strong{color:var(--tx);font-weight:600;}
+.guia-resumen-formula{
+  font-size:12px;
+  color:var(--tx2);
+  padding:8px 10px;
+  border-radius:6px;
+  background:#fff;
+  border:1px dashed var(--brd);
+  margin-bottom:8px;
 }
-.guia-resumen-warn{
-  color:#c0392b;
-  font-weight:600;
+.guia-resumen-formula strong{color:var(--tx);font-size:14px;}
+.guia-resumen-estado{
+  font-size:12px;
+  padding:6px 8px;
+  border-radius:6px;
+  background:#fff;
 }
-.guia-resumen-extra{
-  color:#c27216;
-  font-weight:600;
-}
+.guia-resumen-estado strong{font-weight:600;}
+.guia-resumen-estado:not(.guia-resumen-warn):not(.guia-resumen-extra){color:var(--tx2);}
+.guia-resumen-ok{color:#1a7a42;}
+.guia-resumen-warn{color:#c0392b;background:#fff5f5;}
+.guia-resumen-extra{color:#c27216;background:#fffaf3;}
 
 /* ── REPORTE DE LIBRILLOS ────────────────────────── */
 .rep-lib-header{
