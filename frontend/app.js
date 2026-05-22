@@ -9036,144 +9036,172 @@ function repLibNombreArchivo(ext) {
   return `reporte_librillos_${anio}_${mesTxt}.${ext}`;
 }
 
-function repLibHtmlParaPdf(st) {
-  const { chartHtml, legendHtml } = repLibChartMarkup(st.filas);
-  const fact = st.facturacion || {};
-  const factRows = Array.isArray(fact.detalle) ? fact.detalle : [];
-  const factLabel = (cod) => {
-    if (cod === 'asur_combo') return 'ASURCARNES -COL-GLO';
-    if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
-    return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
-  };
-  const mesNombre = st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : '';
-  const periodoTxt = st.meta?.mes_nombre
-    ? `${st.meta.mes_nombre} ${st.anio}: ${repLibFmtFecha(st.meta.desde)} — ${repLibFmtFecha(st.meta.hasta)}`
-    : `${mesNombre} ${st.anio || ''}`.trim();
-
-  return `
-    <div style="font-size:12px;color:#4b5b50;margin:0 0 10px 2px">
-      ${escapeHtml(periodoTxt)} · Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}
-    </div>
-    <div class="panel rep-lib-header" style="margin-bottom:12px">
-      <div class="rep-lib-brand">
-        <div class="rep-lib-logo">Colbeef</div>
-        <h2 class="rep-lib-title">REPORTE DE LIBRILLOS</h2>
-      </div>
-      <div class="rep-lib-kpis">
-        <div class="rep-lib-kpi rep-lib-kpi-total">
-          <span class="rep-lib-kpi-label">TOTAL DE LIBROS</span>
-          <strong>${fmtNum(st.totalLibros || 0)}</strong>
-        </div>
-        <div class="rep-lib-kpi rep-lib-kpi-facturar">
-          <span class="rep-lib-kpi-label">CANTIDAD DE LIBROS A FACTURAR</span>
-          <strong>${fmtNum(st.totalFacturar || 0)}</strong>
-        </div>
-      </div>
-    </div>
-    <div class="panel" style="margin-bottom:12px">
-      <div class="tw">
-        <table class="dt rep-lib-tabla">
-          <thead>
-            <tr>
-              <th>FECHA DE BENEFICIO</th>
-              <th>DERIVADOS CARNICOS</th>
-              <th>ASURCARNES</th>
-              <th>ASURCARNES COL</th>
-              <th>CAT</th>
-              <th>GLOBAL HIDES</th>
-              <th>ASURCARNES GLO</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${st.filas.map((f) => `
-              <tr>
-                <td>${repLibFmtFecha(f.fecha)}</td>
-                <td>${fmtNum(f.derivados_carnicos)}</td>
-                <td>${fmtNum(f.asurcarnes)}</td>
-                <td>${fmtNum(f.asurcarnescol)}</td>
-                <td>${fmtNum(f.cat)}</td>
-                <td>${fmtNum(f.global_hides)}</td>
-                <td>${fmtNum(f.asurcarnes_glo)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-          <tfoot>
-            <tr>
-              <th>Total</th>
-              <th>${fmtNum(st.totales?.derivados_carnicos || 0)}</th>
-              <th>${fmtNum(st.totales?.asurcarnes || 0)}</th>
-              <th>${fmtNum(st.totales?.asurcarnescol || 0)}</th>
-              <th>${fmtNum(st.totales?.cat || 0)}</th>
-              <th>${fmtNum(st.totales?.global_hides || 0)}</th>
-              <th>${fmtNum(st.totales?.asurcarnes_glo || 0)}</th>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-    <div class="panel rep-lib-fact-panel" style="margin-bottom:12px">
-      <div class="rep-lib-fact-text">${escapeHtml(String(fact.periodoTexto || ''))}</div>
-      <div class="tw">
-        <table class="dt rep-lib-fact-table">
-          <tbody>
-            ${factRows.map((d) => `
-              <tr>
-                <td class="rep-lib-fact-label">${escapeHtml(factLabel(d.codigo))}</td>
-                <td class="rep-lib-fact-value">${fmtNum(d.total)}</td>
-              </tr>
-            `).join('')}
-            <tr class="rep-lib-fact-total">
-              <td class="rep-lib-fact-label">TOTAL ${escapeHtml(String(fact.mesNombre || 'MES'))}</td>
-              <td class="rep-lib-fact-value">${fmtNum(fact.totalMes || 0)}</td>
-            </tr>
-            <tr>
-              <td class="rep-lib-fact-label">TOTAL ${escapeHtml(String(fact.corteAnteriorLabel || ''))}</td>
-              <td class="rep-lib-fact-value">${fmtNum(fact.totalCorteAnterior || 0)}</td>
-            </tr>
-            <tr class="rep-lib-fact-total">
-              <td class="rep-lib-fact-label">TOTAL A FACTURAR</td>
-              <td class="rep-lib-fact-value">${fmtNum(fact.totalFacturar || 0)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="rep-lib-fact-note">NOTA: CAT Y COCIDOS NO SE FACTURAN</div>
-    </div>
-    <div class="panel rep-lib-chart-panel">
-      <div class="ph"><span class="pt">Totales del mes por canal (suma de días)</span></div>
-      <div class="rep-lib-chart" style="display:flex;gap:14px;align-items:flex-end;min-height:240px;padding:16px">${chartHtml}</div>
-      <div class="rep-lib-legend" style="display:flex;gap:10px;flex-wrap:wrap;padding:0 16px 14px">${legendHtml}</div>
-    </div>
-  `;
+function repLibFactLabelPdf(cod) {
+  if (cod === 'asur_combo' || cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
+  return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
 }
 
-function repLibCrearNodoPdf(st) {
-  const host = document.createElement('div');
-  host.id = 'rep-lib-pdf-clone';
-  host.className = 'rep-lib-pdf-root pdf-export-root';
-  host.style.position = 'fixed';
-  host.style.left = '-10000px';
-  host.style.top = '0';
-  host.style.width = '1100px';
-  host.style.background = '#fff';
-  host.style.zIndex = '-1';
-  host.style.pointerEvents = 'none';
-  host.innerHTML = repLibHtmlParaPdf(st);
-  const style = document.createElement('style');
-  style.textContent = `
-    .rep-lib-pdf-root{font-family:Barlow,Arial,sans-serif;color:#1a2e22;padding:12px}
-    .rep-lib-pdf-root .tw{overflow:visible!important;max-height:none!important}
-    .rep-lib-pdf-root table{border-collapse:collapse;width:100%;font-size:11px}
-    .rep-lib-pdf-root th,.rep-lib-pdf-root td{border:1px solid #c5d4c8;padding:4px 6px}
-    .rep-lib-pdf-root thead th,.rep-lib-pdf-root tfoot th{background:#1f5f3b;color:#fff}
-    .rep-lib-pdf-root .rep-lib-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
-    .rep-lib-pdf-root .rep-lib-kpis{display:flex;gap:10px}
-    .rep-lib-pdf-root .rep-lib-logo{font-size:26px;font-weight:800;color:#2daa41}
-    .rep-lib-pdf-root .rep-lib-chart{display:flex;gap:12px;align-items:flex-end;min-height:180px}
-    .rep-lib-pdf-root .rep-lib-bar{display:inline-block;width:26px;min-height:2px;border-radius:2px 2px 0 0}
-  `;
-  host.appendChild(style);
-  return host;
+function repLibJsPdfListo() {
+  return !!(
+    window.jspdf?.jsPDF &&
+    typeof window.jspdf.jsPDF.prototype.autoTable === 'function'
+  );
+}
+
+function ensureJsPdfDisponible() {
+  if (repLibJsPdfListo()) return Promise.resolve(window.jspdf.jsPDF);
+  const urls = [
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
+  ];
+  const loadOne = (src) => new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
+    document.head.appendChild(s);
+  });
+  return urls.reduce((p, src) => p.then(() => loadOne(src)), Promise.resolve())
+    .then(() => {
+      if (!repLibJsPdfListo()) throw new Error('jspdf no cargado');
+      return window.jspdf.jsPDF;
+    });
+}
+
+function repLibLimpiarResiduosPdf() {
+  document.querySelectorAll('#rep-lib-pdf-clone, .rep-lib-pdf-export').forEach((n) => {
+    try { n.remove(); } catch { /* ignore */ }
+  });
+}
+
+async function repLibGenerarPdfTabular(st) {
+  const JsPDF = await ensureJsPdfDisponible();
+  const doc = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const green = [31, 95, 59];
+  const mesNombre = String(st.meta?.mes_nombre || REP_LIB_MESES[Number(st.mes) - 1] || '');
+  const periodoTxt = st.meta?.desde
+    ? `${mesNombre} ${st.anio}: ${repLibFmtFecha(st.meta.desde)} — ${repLibFmtFecha(st.meta.hasta)}`
+    : `${mesNombre} ${st.anio || ''}`.trim();
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.setTextColor(45, 170, 65);
+  doc.text('Colbeef', 12, 14);
+  doc.setTextColor(26, 46, 34);
+  doc.setFontSize(14);
+  doc.text('REPORTE DE LIBRILLOS', 12, 21);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(75, 91, 80);
+  doc.text(periodoTxt, 12, 27);
+  doc.text(`Generado: ${new Date().toLocaleString('es-CO')}`, 12, 32);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(26, 46, 34);
+  doc.text(`Total libros: ${fmtNum(st.totalLibros || 0)}`, pageW - 12, 14, { align: 'right' });
+  doc.text(`A facturar: ${fmtNum(st.totalFacturar || 0)}`, pageW - 12, 20, { align: 'right' });
+
+  const head = [[
+    'FECHA DE BENEFICIO',
+    'DERIVADOS CARNICOS',
+    'ASURCARNES',
+    'ASURCARNES COL',
+    'CAT',
+    'GLOBAL HIDES',
+    'ASURCARNES GLO',
+  ]];
+  const body = (st.filas || []).map((f) => [
+    repLibFmtFecha(f.fecha),
+    fmtNum(f.derivados_carnicos),
+    fmtNum(f.asurcarnes),
+    fmtNum(f.asurcarnescol),
+    fmtNum(f.cat),
+    fmtNum(f.global_hides),
+    fmtNum(f.asurcarnes_glo),
+  ]);
+  const t = st.totales || {};
+  const foot = [[
+    'Total',
+    fmtNum(t.derivados_carnicos),
+    fmtNum(t.asurcarnes),
+    fmtNum(t.asurcarnescol),
+    fmtNum(t.cat),
+    fmtNum(t.global_hides),
+    fmtNum(t.asurcarnes_glo),
+  ]];
+
+  doc.autoTable({
+    head,
+    body,
+    foot,
+    startY: 36,
+    margin: { left: 10, right: 10 },
+    styles: { fontSize: 8, halign: 'right', cellPadding: 1.8 },
+    headStyles: { fillColor: green, textColor: 255, halign: 'center', fontStyle: 'bold' },
+    footStyles: { fillColor: green, textColor: 255, fontStyle: 'bold' },
+    columnStyles: { 0: { halign: 'left' } },
+  });
+
+  let y = doc.lastAutoTable.finalY + 8;
+  const fact = st.facturacion || {};
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  const factTxt = doc.splitTextToSize(String(fact.periodoTexto || ''), pageW - 24);
+  doc.text(factTxt, 12, y);
+  y += factTxt.length * 4.5 + 2;
+
+  const factRows = (fact.detalle || []).map((d) => [
+    repLibFactLabelPdf(d.codigo),
+    fmtNum(d.total),
+  ]);
+  factRows.push(
+    [`TOTAL ${fact.mesNombre || mesNombre}`, fmtNum(fact.totalMes || 0)],
+    [`TOTAL ${fact.corteAnteriorLabel || '—'}`, fmtNum(fact.totalCorteAnterior || 0)],
+    ['TOTAL A FACTURAR', fmtNum(fact.totalFacturar || 0)],
+  );
+
+  doc.autoTable({
+    body: factRows,
+    startY: y,
+    margin: { left: 10, right: 10 },
+    theme: 'grid',
+    styles: { fontSize: 9 },
+    columnStyles: {
+      0: { cellWidth: 120, fontStyle: 'bold' },
+      1: { halign: 'right' },
+    },
+    didParseCell: (data) => {
+      const raw = String(data.cell.raw ?? '');
+      if (raw.startsWith('TOTAL ') && (raw.includes('FACTURAR') || raw.includes(mesNombre))) {
+        data.cell.styles.fillColor = green;
+        data.cell.styles.textColor = 255;
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+  });
+
+  y = doc.lastAutoTable.finalY + 5;
+  doc.setFontSize(8);
+  doc.setTextColor(75, 91, 80);
+  doc.text('NOTA: CAT Y COCIDOS NO SE FACTURAN', 12, y);
+  y += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(26, 46, 34);
+  doc.text('Totales del mes por canal', 12, y);
+  doc.autoTable({
+    head: [['Canal', 'Total']],
+    body: REP_LIB_CANALES.map((c) => [c.label, fmtNum(st.totales?.[c.key] || 0)]),
+    startY: y + 3,
+    margin: { left: 10, right: 10 },
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: green, textColor: 255 },
+    columnStyles: { 1: { halign: 'right' } },
+  });
+
+  doc.save(repLibNombreArchivo('pdf'));
 }
 
 async function descargarReporteLibrillosPDF() {
@@ -9196,59 +9224,15 @@ async function descargarReporteLibrillosPDF() {
     btnPdf.textContent = 'Generando PDF…';
   }
 
-  let wrap = null;
   try {
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    mostrarToast('Generando PDF… puede tardar 20–40 s. No se abrirá otra pestaña.', 'warn');
-
-    const h2p = await ensureHtml2PdfDisponible();
-    if (typeof h2p !== 'function') throw new Error('html2pdf no disponible');
-
-    wrap = repLibCrearNodoPdf(st);
-    document.body.appendChild(wrap);
-    await new Promise((r) => setTimeout(r, 120));
-
-    const filename = repLibNombreArchivo('pdf');
-    const opt = {
-      margin: [6, 6, 6, 6],
-      filename,
-      image: { type: 'jpeg', quality: 0.9 },
-      html2canvas: {
-        scale: 1.1,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: 1100,
-      },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-      pagebreak: { mode: ['css', 'legacy'] },
-    };
-    const worker = h2p().set(opt).from(wrap);
-    const blob = await Promise.race([
-      worker.outputPdf('blob'),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('PDF_TIMEOUT')), 120000)
-      ),
-    ]);
-    descargarArchivoBlob(blob, filename);
+    await repLibGenerarPdfTabular(st);
     mostrarToast('PDF descargado', 'ok');
   } catch (e) {
-    const msg = String(e?.message || e);
     console.error('PDF reporte librillos:', e);
-    if (msg === 'PDF_TIMEOUT') {
-      mostrarToast('El PDF tardó demasiado. Espere a que termine de cargar el reporte e intente de nuevo.', 'err');
-    } else {
-      mostrarToast('No se pudo generar el PDF. Intente de nuevo en unos segundos.', 'err');
-    }
+    mostrarToast('No se pudo generar el PDF. Verifique conexión a internet e intente de nuevo.', 'err');
   } finally {
     repLibrillosState.generandoPdf = false;
-    if (wrap) {
-      try {
-        wrap.remove();
-      } catch {
-        // ignore
-      }
-    }
+    repLibLimpiarResiduosPdf();
     if (btnPdf) {
       btnPdf.disabled = false;
       btnPdf.textContent = btnLabel || 'Descargar PDF';
