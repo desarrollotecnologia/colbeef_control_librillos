@@ -9,6 +9,7 @@ import {
   obtenerCambiosSucursalRevisionPlanFaena,
   fechaTurnoOperativoBogotaISO,
   obtenerMetaUniversoPorFecha,
+  obtenerReporteLibrillosMensual,
 } from '../services/librillos.service.js';
 import { leerSucursalesCrudas } from '../services/crudas-sucursal.store.js';
 import {
@@ -209,6 +210,30 @@ export const getCrudasSucursalGuardadas = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: 'Error al leer sucursales de crudas guardadas' });
+  }
+};
+
+// GET /api/librillos/reporte-mensual?anio=2026&mes=5 — tabla día × canal + facturación
+export const getReporteMensualLibrillos = async (req, res) => {
+  try {
+    const anio = String(req.query?.anio || req.query?.year || '').trim();
+    const mes = String(req.query?.mes || req.query?.month || '').trim();
+    if (!/^\d{4}$/.test(anio)) {
+      return res.status(400).json({ error: 'Parámetro anio requerido (YYYY)' });
+    }
+    const m = Number(mes);
+    if (!Number.isFinite(m) || m < 1 || m > 12) {
+      return res.status(400).json({ error: 'Parámetro mes requerido (1-12)' });
+    }
+    const datos = await obtenerReporteLibrillosMensual(anio, m, {
+      bypassCache: Boolean(req.query?.refresh || req.query?.nocache),
+    });
+    return res.json(datos);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      error: error.message || 'Error al obtener reporte mensual de librillos',
+    });
   }
 };
 

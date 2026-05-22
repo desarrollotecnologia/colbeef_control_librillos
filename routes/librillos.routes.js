@@ -13,6 +13,7 @@ import {
   getCambiosSucursalRevisionPlan,
   getCrudasSucursalGuardadas,
   getUniversoMeta,
+  getReporteMensualLibrillos,
 } from '../controllers/librillos.controller.js';
 
 const router = express.Router();
@@ -21,6 +22,7 @@ router.get('/validacion', getValidacion); // ?fecha=YYYY-MM-DD
 router.get('/diagnostico', getDiagnostico); // ?fecha=YYYY-MM-DD
 router.get('/auditoria-clasificacion', getAuditoriaClasificacion); // ?fecha=YYYY-MM-DD
 router.get('/config', getConfigOperacion);
+router.get('/reporte-mensual', getReporteMensualLibrillos); // ?anio=YYYY&mes=1-12
 router.get('/resumen', getResumenMacro); // ?fecha=YYYY-MM-DD
 router.get('/crudas-cambio-sucursal', getCrudasCambioSucursal); // ?fecha=YYYY-MM-DD
 router.get('/cambios-sucursal-revision', getCambiosSucursalRevisionPlan); // ?fecha_plan=&fecha_revision=

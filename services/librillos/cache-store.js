@@ -26,6 +26,14 @@ export const cachePorFecha = new Map();
 export const cachePorRango = new Map();
 export const cacheCambiosSucursalRevision = new Map();
 export const cacheMapaSucursalHastaFecha = new Map();
+export const cacheReporteMensualLibrillos = new Map();
+
+/** Reporte mensual: TTL más largo en meses cerrados (se invalida al refrescar con ?refresh=1). */
+export const CACHE_REPORTE_MENSUAL_MS = (() => {
+  const n = parseInt(String(process.env.CACHE_REPORTE_MENSUAL_MS || ''), 10);
+  if (Number.isFinite(n) && n >= 30000 && n <= 3600000) return n;
+  return 300000;
+})();
 
 /** Caché turno actual (polling). */
 export let cacheTurno = {
@@ -118,6 +126,8 @@ export function statsCache() {
     turno_edad_seg: ageSec,
     cache_fecha_ttl_ms: CACHE_FECHA_MS,
     cache_rango_ttl_ms: CACHE_RANGO_MS,
+    cache_reporte_mensual_ttl_ms: CACHE_REPORTE_MENSUAL_MS,
+    reportes_mensuales_en_cache: cacheReporteMensualLibrillos.size,
     row_schema: CACHE_FECHA_ROW_SCHEMA,
   };
 }

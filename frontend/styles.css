@@ -2162,6 +2162,12 @@ body{
   font-size:30px;
   letter-spacing:.04em;
 }
+.rep-lib-periodo{
+  margin:6px 0 0;
+  font-size:13px;
+  color:#5a6b5f;
+  font-weight:600;
+}
 .rep-lib-kpis{display:flex;gap:12px;flex-wrap:wrap;justify-content:flex-end;}
 .rep-lib-kpi{
   border:2px solid #2f9650;

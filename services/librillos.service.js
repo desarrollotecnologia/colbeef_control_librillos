@@ -48,8 +48,14 @@ import {
   getCacheTurno,
   setCacheTurno,
   statsCache,
+  cacheReporteMensualLibrillos,
+  CACHE_REPORTE_MENSUAL_MS,
 } from './librillos/cache-store.js';
 import { calcularResumenMacro } from './librillos/resumen-macro.js';
+import {
+  armarReporteLibrillosMensual,
+  rangoMesReporteLibrillos,
+} from './librillos/reporte-mensual.js';
 import { clasificarMovimiento } from './clasificacion-movimiento.service.js';
 import { markPollSuccess, markPollError } from '../lib/runtime-state.js';
 import { log } from '../lib/logger.js';
@@ -1837,6 +1843,41 @@ export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
   const out = [...m.values()];
   guardarCacheRango(desde, hasta, out);
   return out;
+}
+
+/**
+ * Reporte mensual agregado (día × canal). Una consulta BD por rango (~32 días máx.).
+ * Respuesta compacta para la vista Rep. Librillos.
+ */
+export async function obtenerReporteLibrillosMensual(anio, mes, opts = {}) {
+  const y = Number(anio);
+  const m = Number(mes);
+  if (!Number.isFinite(y) || y < 2000 || y > 2100) {
+    throw new Error('anio inválido');
+  }
+  if (!Number.isFinite(m) || m < 1 || m > 12) {
+    throw new Error('mes requerido (1-12)');
+  }
+  const cacheKey = `rep-mensual|${y}|${m}`;
+  if (!opts.bypassCache) {
+    const hit = cacheReporteMensualLibrillos.get(cacheKey);
+    if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_REPORTE_MENSUAL_MS) {
+      return hit.data;
+    }
+  }
+  const t0 = Date.now();
+  const rango = rangoMesReporteLibrillos(y, m);
+  const registros = await obtenerLibrillosPorRangoFechas(
+    rango.consulta_desde,
+    rango.consulta_hasta
+  );
+  const payload = {
+    ...armarReporteLibrillosMensual(registros, y, m),
+    generado_en: new Date().toISOString(),
+    ms_consulta: Date.now() - t0,
+  };
+  cacheReporteMensualLibrillos.set(cacheKey, { ts: Date.now(), data: payload });
+  return payload;
 }
 
 export const obtenerObservacionesPorFecha = async (fecha) => {

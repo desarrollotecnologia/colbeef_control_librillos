@@ -458,6 +458,7 @@
         <div class="rep-lib-brand">
           <div class="rep-lib-logo">Colbeef</div>
           <h2 class="rep-lib-title">REPORTE DE LIBRILLOS</h2>
+          <p class="rep-lib-periodo" id="rep-lib-periodo-label">Seleccione año y mes</p>
         </div>
         <div class="rep-lib-kpis">
           <div class="rep-lib-kpi rep-lib-kpi-total">
@@ -478,9 +479,7 @@
         </div>
         <div>
           <label class="fl" for="rep-lib-mes">MES</label>
-          <select class="fs" id="rep-lib-mes">
-            <option value="">Todos</option>
-          </select>
+          <select class="fs" id="rep-lib-mes" required></select>
         </div>
         <button type="button" class="btn-gen btn-gen-sec" id="rep-lib-refrescar">Actualizar reporte</button>
         <button type="button" class="btn-gen btn-gen-sec" id="rep-lib-descargar-pdf">Descargar PDF</button>
@@ -532,7 +531,7 @@
 
       <div class="panel rep-lib-chart-panel">
         <div class="ph">
-          <span class="pt">Cantidad de librillos por mes y canal</span>
+          <span class="pt">Totales del mes por canal (suma de días)</span>
         </div>
         <div id="rep-lib-chart" class="rep-lib-chart"></div>
         <div id="rep-lib-legend" class="rep-lib-legend"></div>
