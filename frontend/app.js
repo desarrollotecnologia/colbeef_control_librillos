@@ -3684,6 +3684,21 @@ void (async () => {
   }
 })();
 
+function descargarArchivoBlob(blob, filename) {
+  if (!blob || !(blob instanceof Blob)) throw new Error('BLOB_INVALID');
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 400);
+}
+
 function descargarExcel(nombre, html) {
   const blob = new Blob([`\ufeff${html}`], { type: 'application/vnd.ms-excel;charset=utf-8' });
   const a = document.createElement('a');
@@ -9132,30 +9147,33 @@ function repLibHtmlParaPdf(st) {
   `;
 }
 
-function repLibImprimirPdfFallback(htmlInner) {
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=1200,height=900');
-  if (!w) {
-    mostrarToast('Permita ventanas emergentes para imprimir / guardar PDF.', 'err');
-    return;
-  }
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reporte librillos</title>
-  <style>
-    body{font-family:Barlow,Arial,sans-serif;margin:12px;color:#1a2e22}
-    table{border-collapse:collapse;width:100%;font-size:11px}
-    th,td{border:1px solid #c5d4c8;padding:4px 6px}
-    th{background:#1f5f3b;color:#fff}
-    .rep-lib-logo{font-size:28px;font-weight:800;color:#2daa41}
-    .rep-lib-title{font-size:20px;margin:8px 0}
-  </style></head><body>${htmlInner}</body></html>`);
-  w.document.close();
-  setTimeout(() => {
-    try {
-      w.focus();
-      w.print();
-    } catch {
-      // ignore
-    }
-  }, 400);
+function repLibCrearNodoPdf(st) {
+  const host = document.createElement('div');
+  host.id = 'rep-lib-pdf-clone';
+  host.className = 'rep-lib-pdf-root pdf-export-root';
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  host.style.width = '1100px';
+  host.style.background = '#fff';
+  host.style.zIndex = '-1';
+  host.style.pointerEvents = 'none';
+  host.innerHTML = repLibHtmlParaPdf(st);
+  const style = document.createElement('style');
+  style.textContent = `
+    .rep-lib-pdf-root{font-family:Barlow,Arial,sans-serif;color:#1a2e22;padding:12px}
+    .rep-lib-pdf-root .tw{overflow:visible!important;max-height:none!important}
+    .rep-lib-pdf-root table{border-collapse:collapse;width:100%;font-size:11px}
+    .rep-lib-pdf-root th,.rep-lib-pdf-root td{border:1px solid #c5d4c8;padding:4px 6px}
+    .rep-lib-pdf-root thead th,.rep-lib-pdf-root tfoot th{background:#1f5f3b;color:#fff}
+    .rep-lib-pdf-root .rep-lib-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+    .rep-lib-pdf-root .rep-lib-kpis{display:flex;gap:10px}
+    .rep-lib-pdf-root .rep-lib-logo{font-size:26px;font-weight:800;color:#2daa41}
+    .rep-lib-pdf-root .rep-lib-chart{display:flex;gap:12px;align-items:flex-end;min-height:180px}
+    .rep-lib-pdf-root .rep-lib-bar{display:inline-block;width:26px;min-height:2px;border-radius:2px 2px 0 0}
+  `;
+  host.appendChild(style);
+  return host;
 }
 
 async function descargarReporteLibrillosPDF() {
@@ -9181,60 +9199,47 @@ async function descargarReporteLibrillosPDF() {
   let wrap = null;
   try {
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    mostrarToast('Generando PDF (20–40 s). Puede usar otras vistas al terminar.', 'warn');
+    mostrarToast('Generando PDF… puede tardar 20–40 s. No se abrirá otra pestaña.', 'warn');
 
     const h2p = await ensureHtml2PdfDisponible();
     if (typeof h2p !== 'function') throw new Error('html2pdf no disponible');
 
-    wrap = document.createElement('div');
-    wrap.id = 'rep-lib-pdf-clone';
-    wrap.className = 'rep-lib-pdf-root';
-    wrap.style.padding = '16px';
-    wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
-    wrap.style.background = '#ffffff';
-    wrap.style.width = '1100px';
-    wrap.style.maxWidth = '1100px';
-    wrap.style.position = 'fixed';
-    wrap.style.left = '-12000px';
-    wrap.style.top = '0';
-    wrap.style.pointerEvents = 'none';
-    wrap.style.zIndex = '1';
-    wrap.innerHTML = repLibHtmlParaPdf(st);
+    wrap = repLibCrearNodoPdf(st);
     document.body.appendChild(wrap);
+    await new Promise((r) => setTimeout(r, 120));
 
-    await new Promise((r) => setTimeout(r, 80));
-
+    const filename = repLibNombreArchivo('pdf');
     const opt = {
       margin: [6, 6, 6, 6],
-      filename: repLibNombreArchivo('pdf'),
-      image: { type: 'jpeg', quality: 0.88 },
+      filename,
+      image: { type: 'jpeg', quality: 0.9 },
       html2canvas: {
-        scale: 1.05,
+        scale: 1.1,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        scrollX: 0,
-        scrollY: 0,
+        windowWidth: 1100,
       },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr'] },
+      pagebreak: { mode: ['css', 'legacy'] },
     };
-    const job = h2p().set(opt).from(wrap).save();
-    await Promise.race([
-      job,
+    const worker = h2p().set(opt).from(wrap);
+    const blob = await Promise.race([
+      worker.outputPdf('blob'),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('PDF_TIMEOUT')), 90000)
+        setTimeout(() => reject(new Error('PDF_TIMEOUT')), 120000)
       ),
     ]);
+    descargarArchivoBlob(blob, filename);
     mostrarToast('PDF descargado', 'ok');
   } catch (e) {
     const msg = String(e?.message || e);
+    console.error('PDF reporte librillos:', e);
     if (msg === 'PDF_TIMEOUT') {
-      mostrarToast('PDF tardó demasiado. Abriendo vista para Imprimir → Guardar como PDF.', 'warn');
+      mostrarToast('El PDF tardó demasiado. Espere a que termine de cargar el reporte e intente de nuevo.', 'err');
     } else {
-      mostrarToast('PDF automático falló. Abriendo Imprimir…', 'warn');
+      mostrarToast('No se pudo generar el PDF. Intente de nuevo en unos segundos.', 'err');
     }
-    repLibImprimirPdfFallback(repLibHtmlParaPdf(st));
   } finally {
     repLibrillosState.generandoPdf = false;
     if (wrap) {
