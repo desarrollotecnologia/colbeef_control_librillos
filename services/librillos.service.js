@@ -1784,19 +1784,12 @@ export async function obtenerResumenMacroPorFecha(fecha) {
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
   // Resumen / categorías solo cuentan lo que sigue vigente en plan de faena
-  // y fue insensibilizado (estrictamente plan ∩ insens, sin sumar emergencia
-  // fuera de plan). Si retiran un ID del plan, deja de contar; mientras avanza
-  // el plan/insens del día el conteo crece en tiempo real.
+  // y fue insensibilizado (+ emergencia insensibilizada). Si retiran un ID del
+  // plan, deja de contar; mientras avanza el plan/insens del día crece en vivo.
   let rowsResumen = rowsAll;
   try {
-    const [planSet, insensSet] = await Promise.all([
-      idsPlanFaenaPorFecha(fecha),
-      idsInsensibilizacionPorFecha(fecha),
-    ]);
-    const setFiltro = new Set();
-    for (const id of planSet) {
-      if (insensSet.has(id)) setFiltro.add(String(id).trim());
-    }
+    const idsFiltro = await idsUniversoPlanInsensListado(fecha);
+    const setFiltro = new Set((idsFiltro || []).map((id) => String(id).trim()));
     rowsResumen = setFiltro.size
       ? rowsAll.filter((d) => setFiltro.has(String(d?.id_producto ?? '').trim()))
       : [];
