@@ -416,16 +416,7 @@
             <select class="fs" id="sel-rep-cliente">
               <option value="">Todas las agrupaciones</option>
             </select>
-            <div class="rep-mini-fechas">
-              <div>
-                <label class="fl">Desde</label>
-                <input type="date" class="fi" id="fecha-rep-cli-desde">
-              </div>
-              <div>
-                <label class="fl">Hasta</label>
-                <input type="date" class="fi" id="fecha-rep-cli-hasta">
-              </div>
-            </div>
+            <p class="rep-mini-fecha-hint" id="rep-mini-fecha-hint">Fecha del reporte: la de la barra superior.</p>
             <div class="rep-mini-actions">
               <button type="button" class="btn-gen" onclick="generarReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 4v10M6 10l4 4 4-4"/></svg></span>Vista previa</button>
               <button type="button" class="btn-gen btn-gen-sec" onclick="descargarExcelReporteCliente()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="2.5" width="14" height="15" rx="1.8"/><path d="M3 7.5h14M8 2.5v15M13 10l2 2m0-2l-2 2"/></svg></span>Descargar Excel</button>
@@ -762,6 +753,6 @@
   <script src="./vendor/jspdf.umd.min.js"></script>
   <script src="./vendor/jspdf.plugin.autotable.min.js"></script>
   <script src="./colbeef-logo-data.js?v=20260417"></script>
-  <script src="./app.js?v=20260521-pdf2"></script>
+  <script src="./app.js?v=20260522-fecha"></script>
 </body>
 </html>

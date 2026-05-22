@@ -1526,18 +1526,33 @@ if (fechaGlobalEl) {
   fechaGlobalEl.title =
     'Hasta las 13:00 (Hora Colombia) se abre en el día anterior; desde las 13:00, en el día actual. Puede cambiar la fecha manualmente.';
 }
-const fechaRepCliDesdeEl = document.getElementById('fecha-rep-cli-desde');
-const fechaRepCliHastaEl = document.getElementById('fecha-rep-cli-hasta');
-if (fechaRepCliDesdeEl) fechaRepCliDesdeEl.value = fechaDefectoOperacion;
-if (fechaRepCliHastaEl) fechaRepCliHastaEl.value = fechaDefectoOperacion;
 const fechaGuiaEl = document.getElementById('inp-guia-fecha');
 if (fechaGuiaEl) fechaGuiaEl.value = fechaDefectoOperacion;
+
+/** Fecha operativa del turno (barra superior). Reportes y totales usan solo este día. */
+function fechaOperativaISO() {
+  return String(document.getElementById('fecha-global')?.value || '').trim()
+    || fechaOperativaDefectoISO()
+    || hoyISO();
+}
+
+function rangoReporteOperativo() {
+  const f = fechaOperativaISO();
+  return { desde: f, hasta: f };
+}
+
+function actualizarHintFechaReportes() {
+  const el = document.getElementById('rep-mini-fecha-hint');
+  if (!el) return;
+  el.textContent = `Fecha del reporte: ${labelFecha(fechaOperativaISO())} (barra superior).`;
+}
 
 function sincronizarFechaGuiaConFechaGlobal() {
   const fg = String(document.getElementById('fecha-global')?.value || '').trim();
   const operativa = fg || fechaOperativaDefectoISO();
   const inp = document.getElementById('inp-guia-fecha');
   if (inp) inp.value = operativa;
+  actualizarHintFechaReportes();
   return operativa;
 }
 
@@ -1721,20 +1736,8 @@ function irVista(nombre, btn, opts = {}) {
   let sub = '';
   if (['historial', 'inventario', 'clientes'].includes(nombre)) {
     sub = labelFecha(document.getElementById('fecha-global').value);
-  } else if (nombre === 'totales') {
-    const d = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim();
-    const h = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim();
-    sub =
-      d && h && d !== h
-        ? `${labelFecha(d)} — ${labelFecha(h)}`
-        : labelFecha(document.getElementById('fecha-global')?.value || hoyISO());
-  } else if (nombre === 'reportes') {
-    const d = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim();
-    const h = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim();
-    sub =
-      d && h
-        ? `${labelFecha(d)} — ${labelFecha(h)}`
-        : labelFecha(document.getElementById('fecha-global')?.value || hoyISO());
+  } else if (nombre === 'totales' || nombre === 'reportes') {
+    sub = labelFecha(fechaOperativaISO());
   }
   document.getElementById('pg-sub').textContent = sub;
   const fg = document.getElementById('fecha-global');
@@ -1751,8 +1754,9 @@ function irVista(nombre, btn, opts = {}) {
       filtrarHistorialCrud();
     }
     refrescarPanelPlanInsens();
-  } else if (nombre === 'clientes') filtrarCli();
+  }   else if (nombre === 'clientes') filtrarCli();
   else if (nombre === 'totales') void actualizarVistaTotales();
+  else if (nombre === 'reportes') actualizarHintFechaReportes();
   else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
     actualizarUsuarioReimpresionVisible();
@@ -2472,13 +2476,10 @@ function validarRangoReportes(desde, hasta) {
   return true;
 }
 
-/** Alinea «Desde / Hasta» del reporte por agrupación y del histórico de auditoría con la fecha de la barra superior. */
+/** Alinea fechas del histórico de auditoría con la barra superior; reportes usan solo fechaOperativaISO(). */
 function sincronizarFechasSecundariasConFechaGlobal() {
-  const fg = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  const de = document.getElementById('fecha-rep-cli-desde');
-  const ha = document.getElementById('fecha-rep-cli-hasta');
-  if (de) de.value = fg;
-  if (ha) ha.value = fg;
+  const fg = fechaOperativaISO();
+  actualizarHintFechaReportes();
   const hd = document.getElementById('fecha-historico-desde');
   const hh = document.getElementById('fecha-historico-hasta');
   if (hd) hd.value = diaAnteriorISO(fg);
@@ -2490,12 +2491,10 @@ function vistaReporteCliente() {
   return 'resumen';
 }
 
-/** Resumen del día (vista Totales): usa el mismo rango «Desde / Hasta» que el reporte por agrupación (alineado con la fecha de la barra al actualizar). */
+/** Resumen del día (vista Totales): fecha = barra superior del sistema. */
 async function actualizarVistaTotales() {
   return runWithAppLoader('Cargando resumen...', async () => {
-    const fg = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-    const desde = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim() || fg;
-    const hasta = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim() || fg;
+    const { desde, hasta } = rangoReporteOperativo();
     if (!validarRangoReportes(desde, hasta)) return false;
 
     const unDia = desde === hasta;
@@ -2581,9 +2580,7 @@ async function actualizarVistaTotales() {
 }
 
 async function descargarExcelTotales() {
-  const fg = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  const desde = String(document.getElementById('fecha-rep-cli-desde')?.value || '').trim() || fg;
-  const hasta = String(document.getElementById('fecha-rep-cli-hasta')?.value || '').trim() || fg;
+  const { desde, hasta } = rangoReporteOperativo();
   if (!validarRangoReportes(desde, hasta)) return;
   let datos;
   try {
@@ -2703,8 +2700,7 @@ function buildOptsReporteEstiloTotales(ctx) {
 }
 
 async function obtenerContextoReporteCliente() {
-  const desde = document.getElementById('fecha-rep-cli-desde')?.value;
-  const hasta = document.getElementById('fecha-rep-cli-hasta')?.value;
+  const { desde, hasta } = rangoReporteOperativo();
   const agrupacionCodigo = document.getElementById('sel-rep-cliente')?.value || '';
   if (!validarRangoReportes(desde, hasta)) return null;
   const dias = rangoFechasISO(desde, hasta).length;
@@ -4076,8 +4072,7 @@ function descargarExcelMultiHojaXml(nombreBase, sheets) {
 
 async function descargarExcelAsurEspecial(modo = 'resumen') {
   return runWithAppLoader('Generando Excel especial de Asurcarnes...', async () => {
-    const desde = document.getElementById('fecha-rep-cli-desde')?.value;
-    const hasta = document.getElementById('fecha-rep-cli-hasta')?.value;
+    const { desde, hasta } = rangoReporteOperativo();
     if (!validarRangoReportes(desde, hasta)) return;
     const dias = rangoFechasISO(desde, hasta).length;
     if (dias > 95) {
