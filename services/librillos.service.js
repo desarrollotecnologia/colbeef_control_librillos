@@ -118,6 +118,12 @@ const RANGE_CONCURRENCY = (() => {
   if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
   return 3;
 })();
+/** Más paralelismo al armar un mes (~22–32 días) para el reporte mensual. */
+const REPORTE_MENSUAL_RANGE_CONCURRENCY = (() => {
+  const n = parseInt(String(process.env.REPORTE_MENSUAL_RANGE_CONCURRENCY || ''), 10);
+  if (Number.isFinite(n) && n >= 2 && n <= 10) return n;
+  return 6;
+})();
 /** API completa: incluir todos los registros del día. */
 function rowIncluidoColbeef(observacionesRaw, observacionParsed, cliente_destino) {
   return true;
@@ -1818,7 +1824,7 @@ function listaFechasDesdeHasta(desde, hasta) {
  * Un solo resultado para un rango: evita N peticiones HTTP desde el cliente.
  * Días en serie (sin Promise.all) para no disparar muchas consultas pesadas a la vez en la réplica.
  */
-export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
+export async function obtenerLibrillosPorRangoFechas(desde, hasta, opts = {}) {
   const hit = leerCacheRango(desde, hasta);
   if (hit) return hit;
   const fechas = listaFechasDesdeHasta(desde, hasta);
@@ -1829,9 +1835,16 @@ export async function obtenerLibrillosPorRangoFechas(desde, hasta) {
   }
   if (!fechas.length) return [];
 
+  const conc =
+    Number(opts.concurrency) > 0
+      ? Number(opts.concurrency)
+      : fechas.length <= 35
+        ? REPORTE_MENSUAL_RANGE_CONCURRENCY
+        : RANGE_CONCURRENCY;
+
   const merged = [];
-  for (let i = 0; i < fechas.length; i += RANGE_CONCURRENCY) {
-    const tramo = fechas.slice(i, i + RANGE_CONCURRENCY);
+  for (let i = 0; i < fechas.length; i += conc) {
+    const tramo = fechas.slice(i, i + conc);
     const partes = await Promise.all(tramo.map((f) => consultarLibrillosConCache(f)));
     partes.forEach((p) => merged.push(...p));
   }
@@ -1867,9 +1880,18 @@ export async function obtenerReporteLibrillosMensual(anio, mes, opts = {}) {
   }
   const t0 = Date.now();
   const rango = rangoMesReporteLibrillos(y, m);
+  if (COLBEEF_DEBUG) {
+    log.debug('Reporte mensual: consulta rango', {
+      anio: y,
+      mes: m,
+      desde: rango.consulta_desde,
+      hasta: rango.consulta_hasta,
+    });
+  }
   const registros = await obtenerLibrillosPorRangoFechas(
     rango.consulta_desde,
-    rango.consulta_hasta
+    rango.consulta_hasta,
+    { concurrency: REPORTE_MENSUAL_RANGE_CONCURRENCY }
   );
   const payload = {
     ...armarReporteLibrillosMensual(registros, y, m),

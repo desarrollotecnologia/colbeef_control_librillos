@@ -8925,12 +8925,10 @@ function repLibPintarTabla(filas, totales) {
   set('rep-lib-total-asurcarnes-glo', totales.asurcarnes_glo);
 }
 
-function repLibPintarChart(filas) {
-  const el = document.getElementById('rep-lib-chart');
-  const legend = document.getElementById('rep-lib-legend');
-  if (!el || !legend) return;
+/** Totales del mes por canal (barras) — misma salida en pantalla y en PDF. */
+function repLibChartMarkup(filas) {
   const porMes = new Map();
-  filas.forEach((f) => {
+  (filas || []).forEach((f) => {
     const mes = Number(String(f.fecha).slice(5, 7));
     if (!Number.isFinite(mes) || mes < 1 || mes > 12) return;
     if (!porMes.has(mes)) porMes.set(mes, repLibFilaBase(`m-${mes}`));
@@ -8939,12 +8937,13 @@ function repLibPintarChart(filas) {
   });
   const meses = [...porMes.entries()].sort((a, b) => a[0] - b[0]).map(([m, v]) => ({ mes: m, ...v }));
   if (!meses.length) {
-    el.innerHTML = '<div class="chart-empty">Sin datos para graficar.</div>';
-    legend.innerHTML = '';
-    return;
+    return {
+      chartHtml: '<div class="chart-empty">Sin datos para graficar.</div>',
+      legendHtml: '',
+    };
   }
   const max = Math.max(1, ...meses.flatMap((r) => REP_LIB_CANALES.map((c) => Number(r[c.key] || 0))));
-  el.innerHTML = meses.map((m) => `
+  const chartHtml = meses.map((m) => `
     <div class="rep-lib-group">
       <div class="rep-lib-bars">
         ${REP_LIB_CANALES.map((c) => {
@@ -8961,9 +8960,19 @@ function repLibPintarChart(filas) {
       <div class="rep-lib-month">${REP_LIB_MESES[m.mes - 1]}</div>
     </div>
   `).join('');
-  legend.innerHTML = REP_LIB_CANALES
+  const legendHtml = REP_LIB_CANALES
     .map((c) => `<span class="rep-lib-legend-item"><span class="rep-lib-legend-swatch" style="background:${c.color}"></span>${c.label}</span>`)
     .join('');
+  return { chartHtml, legendHtml };
+}
+
+function repLibPintarChart(filas) {
+  const el = document.getElementById('rep-lib-chart');
+  const legend = document.getElementById('rep-lib-legend');
+  if (!el || !legend) return;
+  const { chartHtml, legendHtml } = repLibChartMarkup(filas);
+  el.innerHTML = chartHtml;
+  legend.innerHTML = legendHtml;
 }
 
 function repLibPintarFacturacion(data) {
@@ -9003,7 +9012,7 @@ function repLibNombreArchivo(ext) {
   const s = repLibrillosState.lastRender || {};
   const anio = String(s.anio || 'reporte');
   const mes = Number(s.mes || 0);
-  const mesTxt = mes ? String(mes).padStart(2, '0') : 'todos';
+  const mesTxt = mes ? String(mes).padStart(2, '0') : '00';
   return `reporte_librillos_${anio}_${mesTxt}.${ext}`;
 }
 
@@ -9020,6 +9029,7 @@ function descargarReporteLibrillosPDF() {
   }
   const wrap = document.createElement('div');
   wrap.id = 'rep-lib-pdf-clone';
+  wrap.className = 'rep-lib-pdf-root';
   wrap.style.padding = '16px';
   wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
   wrap.style.background = '#ffffff';
@@ -9032,8 +9042,7 @@ function descargarReporteLibrillosPDF() {
   wrap.style.pointerEvents = 'none';
   wrap.style.zIndex = '-1';
 
-  const chartHtml = document.getElementById('rep-lib-chart')?.innerHTML || '';
-  const legendHtml = document.getElementById('rep-lib-legend')?.innerHTML || '';
+  const { chartHtml, legendHtml } = repLibChartMarkup(st.filas);
   const fact = st.facturacion || {};
   const factRows = Array.isArray(fact.detalle) ? fact.detalle : [];
   const factLabel = (cod) => {
@@ -9041,15 +9050,15 @@ function descargarReporteLibrillosPDF() {
     if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
     return String(ETIQUETA_MACRO_EXCEL[cod] || cod || '').replace(' SAS', '');
   };
+  const mesNombre = st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : '';
+  const periodoTxt = st.meta?.mes_nombre
+    ? `${st.meta.mes_nombre} ${st.anio}: ${repLibFmtFecha(st.meta.desde)} — ${repLibFmtFecha(st.meta.hasta)}`
+    : `${mesNombre} ${st.anio || ''}`.trim();
 
-  const meta = document.createElement('div');
-  meta.style.fontSize = '12px';
-  meta.style.color = '#4b5b50';
-  meta.style.margin = '0 0 10px 2px';
-  meta.textContent = `Año: ${String(st.anio || '—')} · Mes: ${st.mes ? REP_LIB_MESES[Number(st.mes) - 1] : 'Todos'} · Generado: ${new Date().toLocaleString('es-CO')}`;
-  wrap.appendChild(meta);
-
-  wrap.innerHTML += `
+  wrap.innerHTML = `
+    <div style="font-size:12px;color:#4b5b50;margin:0 0 10px 2px">
+      ${escapeHtml(periodoTxt)} · Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}
+    </div>
     <div class="panel rep-lib-header" style="margin-bottom:12px">
       <div class="rep-lib-brand">
         <div class="rep-lib-logo">Colbeef</div>
@@ -9136,9 +9145,9 @@ function descargarReporteLibrillosPDF() {
       <div class="rep-lib-fact-note">NOTA: CAT Y COCIDOS NO SE FACTURAN</div>
     </div>
     <div class="panel rep-lib-chart-panel">
-      <div class="ph"><span class="pt">Cantidad de librillos por mes y canal</span></div>
-      <div class="rep-lib-chart" style="min-height:240px">${chartHtml}</div>
-      <div class="rep-lib-legend">${legendHtml}</div>
+      <div class="ph"><span class="pt">Totales del mes por canal (suma de días)</span></div>
+      <div class="rep-lib-chart" style="display:flex;gap:14px;align-items:flex-end;min-height:240px;padding:16px">${chartHtml}</div>
+      <div class="rep-lib-legend" style="display:flex;gap:10px;flex-wrap:wrap;padding:0 16px 14px">${legendHtml}</div>
     </div>
   `;
 
@@ -9190,18 +9199,37 @@ async function cargarReporteLibrillosVista(forzar = false) {
     mostrarToast('Seleccione un mes para el reporte mensual', 'err');
     return;
   }
-  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte del mes...</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte del mes (consulta BD, 1–4 min)...</td></tr>';
   setLoading(true);
+  const loaderTitle = document.querySelector('#rep-lib-inline-loader .rep-lib-inline-loader-title');
+  const loaderText = document.querySelector('#rep-lib-inline-loader .rep-lib-inline-loader-text');
   const t0 = Date.now();
+  const tickLoader = setInterval(() => {
+    if (reqId !== repLibrillosState.reqSeq) return;
+    const seg = Math.round((Date.now() - t0) / 1000);
+    if (loaderTitle) {
+      loaderTitle.textContent = `Cargando reporte… (${seg}s)`;
+    }
+    if (loaderText) {
+      loaderText.textContent =
+        'Consultando cada día del mes en la base de datos. Si supera 5 min, pulse Actualizar o reinicie Node en el servidor.';
+    }
+  }, 1000);
   try {
     const q = new URLSearchParams({
       anio,
       mes: String(mes),
     });
     if (forzar) q.set('refresh', '1');
-    const res = await fetch(`${API_URL}/reporte-mensual?${q.toString()}`);
+    const url = `${API_URL}/reporte-mensual?${q.toString()}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(300000) });
     const payload = await res.json().catch(() => ({}));
     if (reqId !== repLibrillosState.reqSeq) return;
+    if (res.status === 404) {
+      throw new Error(
+        'Ruta /api/librillos/reporte-mensual no existe en el servidor. Haga git pull y reinicie Node.'
+      );
+    }
     if (!res.ok) {
       throw new Error(payload?.error || `HTTP ${res.status}`);
     }
@@ -9223,12 +9251,23 @@ async function cargarReporteLibrillosVista(forzar = false) {
     });
   } catch (e) {
     if (reqId !== repLibrillosState.reqSeq) return;
+    const msg =
+      e?.name === 'TimeoutError' || e?.name === 'AbortError'
+        ? 'Tiempo agotado (5 min). El servidor sigue consultando la BD; intente de nuevo o reinicie Node.'
+        : String(e?.message || e);
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty">No se pudo cargar: ${escapeHtml(String(e?.message || e))}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="empty">No se pudo cargar: ${escapeHtml(msg)}</td></tr>`;
     }
-    mostrarToast(`Reporte mensual: ${e?.message || e}`, 'err');
+    mostrarToast(`Reporte mensual: ${msg}`, 'err');
   } finally {
-    if (reqId === repLibrillosState.reqSeq) setLoading(false);
+    clearInterval(tickLoader);
+    if (reqId === repLibrillosState.reqSeq) {
+      setLoading(false);
+      if (loaderTitle) loaderTitle.textContent = 'Cargando reporte...';
+      if (loaderText) {
+        loaderText.textContent = 'Puedes navegar a otra vista mientras termina.';
+      }
+    }
   }
 }
 
