@@ -118,11 +118,14 @@ const RANGE_CONCURRENCY = (() => {
   if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
   return 3;
 })();
-/** Más paralelismo al armar un mes (~22–32 días) para el reporte mensual. */
-const REPORTE_MENSUAL_RANGE_CONCURRENCY = (() => {
-  const n = parseInt(String(process.env.REPORTE_MENSUAL_RANGE_CONCURRENCY || ''), 10);
-  if (Number.isFinite(n) && n >= 2 && n <= 10) return n;
-  return 6;
+/** Días del mes consultados en paralelo (reporte mensual). */
+const REPORTE_MENSUAL_DIA_CONCURRENCY = (() => {
+  const n = parseInt(
+    String(process.env.REPORTE_MENSUAL_DIA_CONCURRENCY || process.env.REPORTE_MENSUAL_RANGE_CONCURRENCY || ''),
+    10
+  );
+  if (Number.isFinite(n) && n >= 2 && n <= 12) return n;
+  return 8;
 })();
 /** API completa: incluir todos los registros del día. */
 function rowIncluidoColbeef(observacionesRaw, observacionParsed, cliente_destino) {
@@ -1446,6 +1449,106 @@ function textoNoVacio(...vals) {
 }
 
 // ── CONSULTA PRINCIPAL ────────────────────────────────────────────────────────
+/**
+ * Solo universo + clasificación (sin metaRaiz/cava). ~5–15× más rápido; uso: reporte mensual.
+ */
+async function consultarLibrillosClasificacionDia(fechaISO) {
+  const fecha = String(fechaISO || '').trim() || hoyBogotaISO();
+  let librillos = [];
+  let idsConParte = null;
+
+  if (USE_PLAN_FAENA_UNIVERSE) {
+    try {
+      const idsOrdenados = await idsUniversoReporteDia(fecha);
+      if (idsOrdenados.length > 0) {
+        const { map: parteMap } = await filasParteProductoPorIdsYFecha(fecha, idsOrdenados);
+        const idsFaltantes = idsOrdenados.filter((id) => !parteMap.has(String(id)));
+        const ultObsMap = await observacionesUltimasPorIds(idsFaltantes);
+        idsConParte = new Set(parteMap.keys());
+        librillos = idsOrdenados.map((id) => {
+          const row = parteMap.get(id);
+          if (row) return row;
+          const back = ultObsMap.get(String(id));
+          if (back) {
+            return {
+              id_producto: id,
+              identificacion: back.identificacion || null,
+              observaciones: back.observaciones || null,
+              fecha,
+              observacion_origen: 'respaldo_ultima_observacion',
+            };
+          }
+          return {
+            id_producto: id,
+            identificacion: null,
+            observaciones: null,
+            fecha,
+            observacion_origen: 'sin_observacion',
+          };
+        });
+      } else if (PLAN_FAENA_FALLBACK_ON_EMPTY) {
+        librillos = await filasParteProductoDia(fecha);
+      }
+    } catch (err) {
+      if (!PLAN_FAENA_FALLBACK_ON_EMPTY) throw err;
+      librillos = await filasParteProductoDia(fecha);
+    }
+  } else {
+    librillos = await filasParteProductoDia(fecha);
+  }
+
+  if (!librillos.length) return [];
+
+  let planObsMap = await mapaTextoPlanFaenaPorFecha(fecha);
+  if (!planObsMap.size) {
+    planObsMap = mapaTextoPlanFaenaLocalPorFecha(fecha);
+  }
+  const retiroObsMap = mapaTextoRetiroLocalPorFecha(fecha);
+
+  return librillos
+    .map((l) => {
+      const obsParte = String(l.observaciones || '');
+      const textoRetiro = retiroObsMap.get(String(l.id_producto)) || '';
+      const textoPlan = planObsMap.get(String(l.id_producto)) || '';
+      const { obsFuente } = fusionarObservacionClasificacion(textoPlan, obsParte, textoRetiro);
+      const { observacion, cliente_destino } = parsearObservacion(obsFuente);
+      const ovGutCarv = reglaOverrideGutierrezCarviscol(null, obsFuente);
+      let clienteClasificacion;
+      let ag;
+      if (ovGutCarv) {
+        clienteClasificacion = ovGutCarv.cliente_destino;
+        ag = { codigo: ovGutCarv.codigo, etiqueta: ovGutCarv.etiqueta };
+      } else {
+        clienteClasificacion = textoNoVacio(cliente_destino, null);
+        const planTxt = textoPlan.trim();
+        const parteConRetiro = textoIndicaRetiroLibrillos(obsFuente);
+        if (planTxt && !parteConRetiro) {
+          ag = agrupacionDesdeTextoPlanFaena(planTxt, clienteClasificacion);
+        } else {
+          ag = agrupacionDesdeObservacionCompleta(obsFuente || planTxt, clienteClasificacion);
+        }
+      }
+      return {
+        id_producto: l.id_producto,
+        fecha: l.fecha || fecha,
+        observaciones: obsFuente,
+        agrupacion_codigo: ag.codigo,
+        agrupacion: ag.etiqueta,
+        pendiente_registro_parte:
+          idsConParte != null && !idsConParte.has(String(l.id_producto)),
+      };
+    })
+    .filter((row) => rowIncluidoColbeef(row.observaciones, row.observacion, row.cliente_destino));
+}
+
+async function filasClasificacionParaReporteMensual(fechaISO) {
+  const f = String(fechaISO || '').trim();
+  const hit = leerCacheFecha(f);
+  if (hit?.length) return hit;
+  // No guardar en cachePorFecha: filas ligeras no deben reemplazar la consulta completa del turno.
+  return consultarLibrillosClasificacionDia(f);
+}
+
 const consultarLibrillos = async (fecha = null) => {
   try {
     // Día calendario completo (Bogotá).
@@ -1838,9 +1941,7 @@ export async function obtenerLibrillosPorRangoFechas(desde, hasta, opts = {}) {
   const conc =
     Number(opts.concurrency) > 0
       ? Number(opts.concurrency)
-      : fechas.length <= 35
-        ? REPORTE_MENSUAL_RANGE_CONCURRENCY
-        : RANGE_CONCURRENCY;
+      : RANGE_CONCURRENCY;
 
   const merged = [];
   for (let i = 0; i < fechas.length; i += conc) {
@@ -1880,23 +1981,23 @@ export async function obtenerReporteLibrillosMensual(anio, mes, opts = {}) {
   }
   const t0 = Date.now();
   const rango = rangoMesReporteLibrillos(y, m);
-  if (COLBEEF_DEBUG) {
-    log.debug('Reporte mensual: consulta rango', {
-      anio: y,
-      mes: m,
-      desde: rango.consulta_desde,
-      hasta: rango.consulta_hasta,
-    });
-  }
-  const registros = await obtenerLibrillosPorRangoFechas(
-    rango.consulta_desde,
-    rango.consulta_hasta,
-    { concurrency: REPORTE_MENSUAL_RANGE_CONCURRENCY }
+  const fechas = listaFechasDesdeHasta(rango.consulta_desde, rango.consulta_hasta);
+  const registros = [];
+  const gruposDias = chunks(fechas, 1);
+  await procesarGruposConLimite(
+    gruposDias,
+    async ([fecha]) => {
+      const rows = await filasClasificacionParaReporteMensual(fecha);
+      if (rows?.length) registros.push(...rows);
+    },
+    REPORTE_MENSUAL_DIA_CONCURRENCY
   );
   const payload = {
     ...armarReporteLibrillosMensual(registros, y, m),
     generado_en: new Date().toISOString(),
     ms_consulta: Date.now() - t0,
+    dias_consultados: fechas.length,
+    modo_consulta: 'clasificacion_ligera_paralela',
   };
   cacheReporteMensualLibrillos.set(cacheKey, { ts: Date.now(), data: payload });
   return payload;

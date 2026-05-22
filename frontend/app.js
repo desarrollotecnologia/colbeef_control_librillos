@@ -8796,6 +8796,7 @@ const repLibrillosState = {
   init: false,
   lastRender: null,
   reqSeq: 0,
+  generandoPdf: false,
 };
 
 function repLibFmtFecha(iso) {
@@ -8826,9 +8827,13 @@ function repLibArmarMesesSelect() {
   selMes.value = String(mesActual);
 }
 
-function repLibFacturacionDesdeApi(f) {
-  const mesNombre = String(f?.mes_nombre || REP_LIB_MESES[Number(f?.mes || 1) - 1] || 'MES');
-  const dPrev = f?.corte_anterior ? new Date(`${f.corte_anterior}T00:00:00-05:00`) : null;
+function repLibFacturacionDesdeApi(f, payload = {}) {
+  const mesNum = Number(payload?.mes ?? f?.mes ?? 0);
+  const mesNombre = String(
+    payload?.mes_nombre || f?.mes_nombre || REP_LIB_MESES[mesNum - 1] || 'MES'
+  );
+  const corteIso = f?.corte_anterior || payload?.corte_anterior || '';
+  const dPrev = corteIso ? new Date(`${corteIso}T00:00:00-05:00`) : null;
   return {
     periodoTexto: String(f?.periodo_texto || ''),
     detalle: Array.isArray(f?.detalle) ? f.detalle : [],
@@ -8857,7 +8862,7 @@ function repLibAplicarPayloadMensual(payload) {
   const filas = Array.isArray(payload?.filas) ? payload.filas : [];
   const totales = payload?.totales || repLibFilaBase('tot');
   const totalLibros = Number(payload?.total_libros || 0);
-  const fact = repLibFacturacionDesdeApi(payload?.facturacion || {});
+  const fact = repLibFacturacionDesdeApi(payload?.facturacion || {}, payload);
   repLibActualizarPeriodoLabel(payload);
   const k1 = document.getElementById('rep-lib-total-libros');
   const k2 = document.getElementById('rep-lib-total-facturar');
@@ -9016,32 +9021,7 @@ function repLibNombreArchivo(ext) {
   return `reporte_librillos_${anio}_${mesTxt}.${ext}`;
 }
 
-function descargarReporteLibrillosPDF() {
-  const st = repLibrillosState.lastRender;
-  const cargando = document.getElementById('rep-lib-inline-loader')?.classList.contains('show');
-  if (cargando) {
-    mostrarToast('El reporte aún está cargando. Intenta de nuevo en unos segundos.', 'err');
-    return;
-  }
-  if (!st || !Array.isArray(st.filas) || !st.filas.length) {
-    mostrarToast('Primero genera el reporte para descargar.', 'err');
-    return;
-  }
-  const wrap = document.createElement('div');
-  wrap.id = 'rep-lib-pdf-clone';
-  wrap.className = 'rep-lib-pdf-root';
-  wrap.style.padding = '16px';
-  wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
-  wrap.style.background = '#ffffff';
-  wrap.style.width = '1280px';
-  wrap.style.maxWidth = '1280px';
-  wrap.style.position = 'fixed';
-  wrap.style.left = '0';
-  wrap.style.top = '0';
-  wrap.style.opacity = '0.01';
-  wrap.style.pointerEvents = 'none';
-  wrap.style.zIndex = '-1';
-
+function repLibHtmlParaPdf(st) {
   const { chartHtml, legendHtml } = repLibChartMarkup(st.filas);
   const fact = st.facturacion || {};
   const factRows = Array.isArray(fact.detalle) ? fact.detalle : [];
@@ -9055,7 +9035,7 @@ function descargarReporteLibrillosPDF() {
     ? `${st.meta.mes_nombre} ${st.anio}: ${repLibFmtFecha(st.meta.desde)} — ${repLibFmtFecha(st.meta.hasta)}`
     : `${mesNombre} ${st.anio || ''}`.trim();
 
-  wrap.innerHTML = `
+  return `
     <div style="font-size:12px;color:#4b5b50;margin:0 0 10px 2px">
       ${escapeHtml(periodoTxt)} · Generado: ${escapeHtml(new Date().toLocaleString('es-CO'))}
     </div>
@@ -9150,22 +9130,125 @@ function descargarReporteLibrillosPDF() {
       <div class="rep-lib-legend" style="display:flex;gap:10px;flex-wrap:wrap;padding:0 16px 14px">${legendHtml}</div>
     </div>
   `;
+}
 
-  document.body.appendChild(wrap);
-  const opt = {
-    margin: [8, 8, 8, 8],
-    filename: repLibNombreArchivo('pdf'),
-    image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { scale: PDF_HTML2CANVAS_SCALE, useCORS: true, backgroundColor: '#ffffff' },
-    jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-  };
-  html2pdf()
-    .set(opt)
-    .from(wrap)
-    .save()
-    .finally(() => {
-      wrap.remove();
-    });
+function repLibImprimirPdfFallback(htmlInner) {
+  const w = window.open('', '_blank', 'noopener,noreferrer,width=1200,height=900');
+  if (!w) {
+    mostrarToast('Permita ventanas emergentes para imprimir / guardar PDF.', 'err');
+    return;
+  }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reporte librillos</title>
+  <style>
+    body{font-family:Barlow,Arial,sans-serif;margin:12px;color:#1a2e22}
+    table{border-collapse:collapse;width:100%;font-size:11px}
+    th,td{border:1px solid #c5d4c8;padding:4px 6px}
+    th{background:#1f5f3b;color:#fff}
+    .rep-lib-logo{font-size:28px;font-weight:800;color:#2daa41}
+    .rep-lib-title{font-size:20px;margin:8px 0}
+  </style></head><body>${htmlInner}</body></html>`);
+  w.document.close();
+  setTimeout(() => {
+    try {
+      w.focus();
+      w.print();
+    } catch {
+      // ignore
+    }
+  }, 400);
+}
+
+async function descargarReporteLibrillosPDF() {
+  const st = repLibrillosState.lastRender;
+  const cargando = document.getElementById('rep-lib-inline-loader')?.classList.contains('show');
+  if (cargando) {
+    mostrarToast('El reporte aún está cargando. Intenta de nuevo en unos segundos.', 'err');
+    return;
+  }
+  if (!st || !Array.isArray(st.filas) || !st.filas.length) {
+    mostrarToast('Primero genera el reporte para descargar.', 'err');
+    return;
+  }
+  if (repLibrillosState.generandoPdf) return;
+  repLibrillosState.generandoPdf = true;
+  const btnPdf = document.getElementById('rep-lib-descargar-pdf');
+  const btnLabel = btnPdf?.textContent || '';
+  if (btnPdf) {
+    btnPdf.disabled = true;
+    btnPdf.textContent = 'Generando PDF…';
+  }
+
+  let wrap = null;
+  try {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    mostrarToast('Generando PDF (20–40 s). Puede usar otras vistas al terminar.', 'warn');
+
+    const h2p = await ensureHtml2PdfDisponible();
+    if (typeof h2p !== 'function') throw new Error('html2pdf no disponible');
+
+    wrap = document.createElement('div');
+    wrap.id = 'rep-lib-pdf-clone';
+    wrap.className = 'rep-lib-pdf-root';
+    wrap.style.padding = '16px';
+    wrap.style.fontFamily = "'Barlow', Arial, sans-serif";
+    wrap.style.background = '#ffffff';
+    wrap.style.width = '1100px';
+    wrap.style.maxWidth = '1100px';
+    wrap.style.position = 'fixed';
+    wrap.style.left = '-12000px';
+    wrap.style.top = '0';
+    wrap.style.pointerEvents = 'none';
+    wrap.style.zIndex = '1';
+    wrap.innerHTML = repLibHtmlParaPdf(st);
+    document.body.appendChild(wrap);
+
+    await new Promise((r) => setTimeout(r, 80));
+
+    const opt = {
+      margin: [6, 6, 6, 6],
+      filename: repLibNombreArchivo('pdf'),
+      image: { type: 'jpeg', quality: 0.88 },
+      html2canvas: {
+        scale: 1.05,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        scrollX: 0,
+        scrollY: 0,
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr'] },
+    };
+    const job = h2p().set(opt).from(wrap).save();
+    await Promise.race([
+      job,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('PDF_TIMEOUT')), 90000)
+      ),
+    ]);
+    mostrarToast('PDF descargado', 'ok');
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (msg === 'PDF_TIMEOUT') {
+      mostrarToast('PDF tardó demasiado. Abriendo vista para Imprimir → Guardar como PDF.', 'warn');
+    } else {
+      mostrarToast('PDF automático falló. Abriendo Imprimir…', 'warn');
+    }
+    repLibImprimirPdfFallback(repLibHtmlParaPdf(st));
+  } finally {
+    repLibrillosState.generandoPdf = false;
+    if (wrap) {
+      try {
+        wrap.remove();
+      } catch {
+        // ignore
+      }
+    }
+    if (btnPdf) {
+      btnPdf.disabled = false;
+      btnPdf.textContent = btnLabel || 'Descargar PDF';
+    }
+  }
 }
 
 async function cargarReporteLibrillosVista(forzar = false) {
@@ -9199,7 +9282,7 @@ async function cargarReporteLibrillosVista(forzar = false) {
     mostrarToast('Seleccione un mes para el reporte mensual', 'err');
     return;
   }
-  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte del mes (consulta BD, 1–4 min)...</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="empty">Cargando reporte del mes (30–90 s)...</td></tr>';
   setLoading(true);
   const loaderTitle = document.querySelector('#rep-lib-inline-loader .rep-lib-inline-loader-title');
   const loaderText = document.querySelector('#rep-lib-inline-loader .rep-lib-inline-loader-text');
@@ -9212,7 +9295,7 @@ async function cargarReporteLibrillosVista(forzar = false) {
     }
     if (loaderText) {
       loaderText.textContent =
-        'Consultando cada día del mes en la base de datos. Si supera 5 min, pulse Actualizar o reinicie Node en el servidor.';
+        'Consultando días del mes (versión rápida). Si supera 2 min sin datos, Actualizar o reinicie Node con el último código.';
     }
   }, 1000);
   try {
