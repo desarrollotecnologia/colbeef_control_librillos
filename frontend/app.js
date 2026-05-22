@@ -9042,31 +9042,57 @@ function repLibFactLabelPdf(cod) {
 }
 
 function repLibJsPdfListo() {
-  return !!(
-    window.jspdf?.jsPDF &&
-    typeof window.jspdf.jsPDF.prototype.autoTable === 'function'
-  );
+  try {
+    const JsPDF = window.jspdf?.jsPDF;
+    if (!JsPDF) return false;
+    const probe = new JsPDF();
+    return typeof probe.autoTable === 'function';
+  } catch {
+    return false;
+  }
 }
 
-function ensureJsPdfDisponible() {
-  if (repLibJsPdfListo()) return Promise.resolve(window.jspdf.jsPDF);
-  const urls = [
-    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
-  ];
-  const loadOne = (src) => new Promise((resolve, reject) => {
+function repLibCargarScriptPdf(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[data-rep-lib-pdf="${src}"]`)) {
+      resolve();
+      return;
+    }
     const s = document.createElement('script');
     s.src = src;
-    s.async = true;
+    s.async = false;
+    s.dataset.repLibPdf = '1';
+    s.setAttribute('data-rep-lib-pdf', src);
     s.onload = () => resolve();
     s.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
     document.head.appendChild(s);
   });
-  return urls.reduce((p, src) => p.then(() => loadOne(src)), Promise.resolve())
+}
+
+function ensureJsPdfDisponible() {
+  if (repLibJsPdfListo()) return Promise.resolve(window.jspdf.jsPDF);
+  const base = new URL('./vendor/', window.location.href).href;
+  const urls = [
+    `${base}jspdf.umd.min.js`,
+    `${base}jspdf.plugin.autotable.min.js`,
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
+  ];
+  return urls
+    .reduce((p, src) => p.then(() => {
+      if (repLibJsPdfListo()) return;
+      return repLibCargarScriptPdf(src);
+    }), Promise.resolve())
     .then(() => {
       if (!repLibJsPdfListo()) throw new Error('jspdf no cargado');
       return window.jspdf.jsPDF;
     });
+}
+
+/** Números ASCII para PDF (evita caracteres raros de toLocaleString). */
+function repLibNumPdf(n) {
+  const v = Math.round(Number(n || 0));
+  return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
 function repLibLimpiarResiduosPdf() {
@@ -9075,8 +9101,42 @@ function repLibLimpiarResiduosPdf() {
   });
 }
 
+function repLibGenerarPdfBasico(JsPDF, st) {
+  const doc = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const mesNombre = String(st.meta?.mes_nombre || REP_LIB_MESES[Number(st.mes) - 1] || '');
+  let y = 14;
+  const line = (txt, size = 9, bold = false) => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.setFontSize(size);
+    doc.text(String(txt), 12, y);
+    y += size * 0.45 + 2;
+  };
+  line('Colbeef - REPORTE DE LIBRILLOS', 14, true);
+  line(`${mesNombre} ${st.anio || ''}`, 10, true);
+  line(`Total libros: ${repLibNumPdf(st.totalLibros)}  |  A facturar: ${repLibNumPdf(st.totalFacturar)}`, 9);
+  line('FECHA | DERIV | ASUR | ASUR COL | CAT | G.HIDES | ASUR GLO', 8, true);
+  (st.filas || []).forEach((f) => {
+    if (y > 190) { doc.addPage(); y = 14; }
+    line(
+      `${repLibFmtFecha(f.fecha)} | ${repLibNumPdf(f.derivados_carnicos)} | ${repLibNumPdf(f.asurcarnes)} | ${repLibNumPdf(f.asurcarnescol)} | ${repLibNumPdf(f.cat)} | ${repLibNumPdf(f.global_hides)} | ${repLibNumPdf(f.asurcarnes_glo)}`,
+      7,
+    );
+  });
+  const t = st.totales || {};
+  line(
+    `TOTAL | ${repLibNumPdf(t.derivados_carnicos)} | ${repLibNumPdf(t.asurcarnes)} | ${repLibNumPdf(t.asurcarnescol)} | ${repLibNumPdf(t.cat)} | ${repLibNumPdf(t.global_hides)} | ${repLibNumPdf(t.asurcarnes_glo)}`,
+    8,
+    true,
+  );
+  doc.save(repLibNombreArchivo('pdf'));
+}
+
 async function repLibGenerarPdfTabular(st) {
   const JsPDF = await ensureJsPdfDisponible();
+  if (!repLibJsPdfListo()) {
+    repLibGenerarPdfBasico(JsPDF, st);
+    return;
+  }
   const doc = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const green = [31, 95, 59];
@@ -9100,8 +9160,8 @@ async function repLibGenerarPdfTabular(st) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(26, 46, 34);
-  doc.text(`Total libros: ${fmtNum(st.totalLibros || 0)}`, pageW - 12, 14, { align: 'right' });
-  doc.text(`A facturar: ${fmtNum(st.totalFacturar || 0)}`, pageW - 12, 20, { align: 'right' });
+  doc.text(`Total libros: ${repLibNumPdf(st.totalLibros || 0)}`, pageW - 12, 14, { align: 'right' });
+  doc.text(`A facturar: ${repLibNumPdf(st.totalFacturar || 0)}`, pageW - 12, 20, { align: 'right' });
 
   const head = [[
     'FECHA DE BENEFICIO',
@@ -9114,94 +9174,99 @@ async function repLibGenerarPdfTabular(st) {
   ]];
   const body = (st.filas || []).map((f) => [
     repLibFmtFecha(f.fecha),
-    fmtNum(f.derivados_carnicos),
-    fmtNum(f.asurcarnes),
-    fmtNum(f.asurcarnescol),
-    fmtNum(f.cat),
-    fmtNum(f.global_hides),
-    fmtNum(f.asurcarnes_glo),
+    repLibNumPdf(f.derivados_carnicos),
+    repLibNumPdf(f.asurcarnes),
+    repLibNumPdf(f.asurcarnescol),
+    repLibNumPdf(f.cat),
+    repLibNumPdf(f.global_hides),
+    repLibNumPdf(f.asurcarnes_glo),
   ]);
   const t = st.totales || {};
   const foot = [[
     'Total',
-    fmtNum(t.derivados_carnicos),
-    fmtNum(t.asurcarnes),
-    fmtNum(t.asurcarnescol),
-    fmtNum(t.cat),
-    fmtNum(t.global_hides),
-    fmtNum(t.asurcarnes_glo),
+    repLibNumPdf(t.derivados_carnicos),
+    repLibNumPdf(t.asurcarnes),
+    repLibNumPdf(t.asurcarnescol),
+    repLibNumPdf(t.cat),
+    repLibNumPdf(t.global_hides),
+    repLibNumPdf(t.asurcarnes_glo),
   ]];
 
-  doc.autoTable({
-    head,
-    body,
-    foot,
-    startY: 36,
-    margin: { left: 10, right: 10 },
-    styles: { fontSize: 8, halign: 'right', cellPadding: 1.8 },
-    headStyles: { fillColor: green, textColor: 255, halign: 'center', fontStyle: 'bold' },
-    footStyles: { fillColor: green, textColor: 255, fontStyle: 'bold' },
-    columnStyles: { 0: { halign: 'left' } },
-  });
+  try {
+    doc.autoTable({
+      head,
+      body,
+      foot,
+      startY: 36,
+      margin: { left: 10, right: 10 },
+      styles: { fontSize: 8, halign: 'right', cellPadding: 1.8 },
+      headStyles: { fillColor: green, textColor: 255, halign: 'center', fontStyle: 'bold' },
+      footStyles: { fillColor: green, textColor: 255, fontStyle: 'bold' },
+      columnStyles: { 0: { halign: 'left' } },
+    });
 
-  let y = doc.lastAutoTable.finalY + 8;
-  const fact = st.facturacion || {};
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  const factTxt = doc.splitTextToSize(String(fact.periodoTexto || ''), pageW - 24);
-  doc.text(factTxt, 12, y);
-  y += factTxt.length * 4.5 + 2;
+    let y = doc.lastAutoTable.finalY + 8;
+    const fact = st.facturacion || {};
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const factTxt = doc.splitTextToSize(String(fact.periodoTexto || ''), pageW - 24);
+    doc.text(factTxt, 12, y);
+    y += factTxt.length * 4.5 + 2;
 
-  const factRows = (fact.detalle || []).map((d) => [
-    repLibFactLabelPdf(d.codigo),
-    fmtNum(d.total),
-  ]);
-  factRows.push(
-    [`TOTAL ${fact.mesNombre || mesNombre}`, fmtNum(fact.totalMes || 0)],
-    [`TOTAL ${fact.corteAnteriorLabel || '—'}`, fmtNum(fact.totalCorteAnterior || 0)],
-    ['TOTAL A FACTURAR', fmtNum(fact.totalFacturar || 0)],
-  );
+    const factRows = (fact.detalle || []).map((d) => [
+      repLibFactLabelPdf(d.codigo),
+      repLibNumPdf(d.total),
+    ]);
+    factRows.push(
+      [`TOTAL ${fact.mesNombre || mesNombre}`, repLibNumPdf(fact.totalMes || 0)],
+      [`TOTAL ${fact.corteAnteriorLabel || '—'}`, repLibNumPdf(fact.totalCorteAnterior || 0)],
+      ['TOTAL A FACTURAR', repLibNumPdf(fact.totalFacturar || 0)],
+    );
 
-  doc.autoTable({
-    body: factRows,
-    startY: y,
-    margin: { left: 10, right: 10 },
-    theme: 'grid',
-    styles: { fontSize: 9 },
-    columnStyles: {
-      0: { cellWidth: 120, fontStyle: 'bold' },
-      1: { halign: 'right' },
-    },
-    didParseCell: (data) => {
-      const raw = String(data.cell.raw ?? '');
-      if (raw.startsWith('TOTAL ') && (raw.includes('FACTURAR') || raw.includes(mesNombre))) {
-        data.cell.styles.fillColor = green;
-        data.cell.styles.textColor = 255;
-        data.cell.styles.fontStyle = 'bold';
-      }
-    },
-  });
+    doc.autoTable({
+      body: factRows,
+      startY: y,
+      margin: { left: 10, right: 10 },
+      theme: 'grid',
+      styles: { fontSize: 9 },
+      columnStyles: {
+        0: { cellWidth: 120, fontStyle: 'bold' },
+        1: { halign: 'right' },
+      },
+      didParseCell: (data) => {
+        const raw = String(data.cell.raw ?? '');
+        if (raw.startsWith('TOTAL ') && (raw.includes('FACTURAR') || raw.includes(mesNombre))) {
+          data.cell.styles.fillColor = green;
+          data.cell.styles.textColor = 255;
+          data.cell.styles.fontStyle = 'bold';
+        }
+      },
+    });
 
-  y = doc.lastAutoTable.finalY + 5;
-  doc.setFontSize(8);
-  doc.setTextColor(75, 91, 80);
-  doc.text('NOTA: CAT Y COCIDOS NO SE FACTURAN', 12, y);
-  y += 8;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(26, 46, 34);
-  doc.text('Totales del mes por canal', 12, y);
-  doc.autoTable({
-    head: [['Canal', 'Total']],
-    body: REP_LIB_CANALES.map((c) => [c.label, fmtNum(st.totales?.[c.key] || 0)]),
-    startY: y + 3,
-    margin: { left: 10, right: 10 },
-    styles: { fontSize: 9 },
-    headStyles: { fillColor: green, textColor: 255 },
-    columnStyles: { 1: { halign: 'right' } },
-  });
+    y = doc.lastAutoTable.finalY + 5;
+    doc.setFontSize(8);
+    doc.setTextColor(75, 91, 80);
+    doc.text('NOTA: CAT Y COCIDOS NO SE FACTURAN', 12, y);
+    y += 8;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(26, 46, 34);
+    doc.text('Totales del mes por canal', 12, y);
+    doc.autoTable({
+      head: [['Canal', 'Total']],
+      body: REP_LIB_CANALES.map((c) => [c.label, repLibNumPdf(st.totales?.[c.key] || 0)]),
+      startY: y + 3,
+      margin: { left: 10, right: 10 },
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: green, textColor: 255 },
+      columnStyles: { 1: { halign: 'right' } },
+    });
 
-  doc.save(repLibNombreArchivo('pdf'));
+    doc.save(repLibNombreArchivo('pdf'));
+  } catch (err) {
+    console.warn('PDF tabular falló, usando PDF básico:', err);
+    repLibGenerarPdfBasico(JsPDF, st);
+  }
 }
 
 async function descargarReporteLibrillosPDF() {
@@ -9229,7 +9294,7 @@ async function descargarReporteLibrillosPDF() {
     mostrarToast('PDF descargado', 'ok');
   } catch (e) {
     console.error('PDF reporte librillos:', e);
-    mostrarToast('No se pudo generar el PDF. Verifique conexión a internet e intente de nuevo.', 'err');
+    mostrarToast('No se pudo generar el PDF. Recargue la página (Ctrl+F5) e intente de nuevo.', 'err');
   } finally {
     repLibrillosState.generandoPdf = false;
     repLibLimpiarResiduosPdf();
