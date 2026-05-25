@@ -74,6 +74,16 @@ export function listaDiasIso(desde, hasta) {
   return out;
 }
 
+export function esDomingoIso(fechaISO) {
+  const d = new Date(`${fechaISO}T00:00:00-05:00`);
+  return !Number.isNaN(d.getTime()) && d.getUTCDay() === 0;
+}
+
+/** Días con proceso para reporte de librillos: se excluyen domingos. */
+export function listaDiasProcesoIso(desde, hasta) {
+  return listaDiasIso(desde, hasta).filter((fecha) => !esDomingoIso(fecha));
+}
+
 /**
  * Rango operativo del mes: hasta hoy si es el mes en curso; si no, fin de mes.
  * Incluye día de corte anterior (último del mes previo) para facturación.
@@ -129,6 +139,7 @@ function calcularFacturacion(lista, anio, mes, rango) {
   for (const r of lista || []) {
     const f = fechaIsoRow(r?.fecha);
     if (!f) continue;
+    if (esDomingoIso(f)) continue;
     const cod = codigoAgrupacionReporte(r);
     if (!REP_LIB_FACTURABLE.has(cod)) continue;
     const yy = Number(f.slice(0, 4));
@@ -164,17 +175,20 @@ export function armarReporteLibrillosMensual(registros, anio, mes) {
   const m = Number(mes);
   const rango = rangoMesReporteLibrillos(anio, m);
   const porDia = new Map();
+  let totalRegistrosProceso = 0;
 
   for (const r of registros || []) {
     const f = fechaIsoRow(r?.fecha);
     if (!f || f < rango.desde || f > rango.hasta) continue;
+    if (esDomingoIso(f)) continue;
+    totalRegistrosProceso += 1;
     const cod = codigoAgrupacionReporte(r);
     if (!REP_LIB_CANAL_KEYS.has(cod)) continue;
     if (!porDia.has(f)) porDia.set(f, filaBase(f));
     porDia.get(f)[cod] += 1;
   }
 
-  const filas = listaDiasIso(rango.desde, rango.hasta).map((fecha) => {
+  const filas = listaDiasProcesoIso(rango.desde, rango.hasta).map((fecha) => {
     const row = porDia.get(fecha) || filaBase(fecha);
     return { ...row };
   });
@@ -203,7 +217,7 @@ export function armarReporteLibrillosMensual(registros, anio, mes) {
     ...rango,
     dias_con_datos: diasConDatos,
     dias_en_tabla: filas.length,
-    total_registros: (registros || []).length,
+    total_registros: totalRegistrosProceso,
     filas,
     totales,
     total_libros: totalLibros,

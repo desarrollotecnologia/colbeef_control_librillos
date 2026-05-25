@@ -4604,6 +4604,7 @@ function normalizarCambioHistoricoCruce(c, meta) {
   const momento = fechaRev
     ? `Revisión ${labelFecha(fechaRev)} (plan ${labelFecha(fechaPlan)})`
     : 'Revisión BD';
+  const fuenteGuardada = String(c?.fuente || '').trim() === 'sucursal_guardada';
   return {
     id: `cruce_${String(c?.id || '')}_${fechaPlan}_${fechaRev}`,
     fecha: String(meta?.generado_en || '').trim(),
@@ -4619,8 +4620,8 @@ function normalizarCambioHistoricoCruce(c, meta) {
     esCambioSucursalRevision: true,
     tipo,
     tipoLabel: tipo === 'cruda' ? 'CRUDAS' : (tipo === 'vacia' ? 'VACIA' : 'SUCURSAL'),
-    fuenteHistorico: 'cruce_plan_revision',
-    fuenteLabel: 'Cruce plan',
+    fuenteHistorico: fuenteGuardada ? 'sucursal_guardada' : 'cruce_plan_revision',
+    fuenteLabel: fuenteGuardada ? 'Sucursal guardada' : 'Cruce plan',
     elegibleReimpresionBd: c.elegible_reimpresion !== false,
     elegibleReimpresion: c.elegible_reimpresion !== false,
     fechaSalidaCava: c.fecha_salida_cava || null,
@@ -4854,32 +4855,16 @@ function aplicarHistoricoDesdeCache(hit, fechaPlan, fechaRevision) {
   })();
 }
 
-/** Cruza cruce BD con planilla del día revisión + salidas Colbeef (solo pendientes de despacho). */
-async function enriquecerElegibilidadReimpresionCrudas(fechaRevision) {
-  const fechaRev = String(fechaRevision || document.getElementById('fecha-historico-hasta')?.value || '').trim();
-  if (!fechaRev) return;
-  try {
-    const [datos, salidas] = await Promise.all([fetchPorFecha(fechaRev), fetchSalidas()]);
-    const map = new Map((datos || []).map((d) => [String(d.id_producto), d]));
-    for (const r of historicoCambios) {
-      if (!r.esCambioSucursalRevision) continue;
-      if (!tieneCambioSucursalHistorico(r)) {
-        r.elegibleReimpresion = false;
-        continue;
-      }
-      const d = map.get(String(r.idProducto || '').trim());
-      const enPlanilla = d && esVistaHistorialCrudasSolo(d);
-      const sinSalida =
-        d && !productoYaSalidaColbeefOTraz(d, salidas || salidasRegistradas);
-      const baseBd = r.elegibleReimpresionBd !== false;
-      r.elegibleReimpresion = baseBd && Boolean(enPlanilla && sinSalida);
+/** La elegibilidad de reimpresión ya llega calculada desde el backend; evitar recargar días completos. */
+async function enriquecerElegibilidadReimpresionCrudas() {
+  for (const r of historicoCambios) {
+    if (!r.esCambioSucursalRevision) continue;
+    if (!tieneCambioSucursalHistorico(r)) {
+      r.elegibleReimpresion = false;
+      continue;
     }
-  } catch {
-    for (const r of historicoCambios) {
-      if (!r.esCambioSucursalRevision) continue;
-      if (r.elegibleReimpresion == null) {
-        r.elegibleReimpresion = r.elegibleReimpresionBd !== false;
-      }
+    if (r.elegibleReimpresion == null) {
+      r.elegibleReimpresion = r.elegibleReimpresionBd !== false;
     }
   }
 }
@@ -4954,40 +4939,6 @@ async function cargarHistoricoCambios(opts = {}) {
     let filasCruce = resCruce.ok
       ? listaCruceRaw.map((c) => normalizarCambioHistoricoCruce(c, payloadCruce))
       : [];
-    const nCambioApi = Number(payloadCruce?.total_cambios_sucursal || filasCruce.length);
-    if (
-      resCruce.ok &&
-      nCambioApi === 0 &&
-      Number(payloadCruce?.total_crudas_plan || 0) > 0
-    ) {
-      try {
-        const [prev, next] = await Promise.all([
-          fetchPorFecha(fechaPlan),
-          fetchPorFecha(fechaRevision),
-        ]);
-        const extra = obtenerCambiosObservacion(prev, next).filter(
-          (c) => c.tipo === 'CRUDA_SUCURSAL'
-        );
-        if (extra.length) {
-          filasCruce = extra.map((c) =>
-            normalizarCambioHistoricoCruce(
-              {
-                id: c.id,
-                sucursal_antes: c.sucursal_antes || c.antes,
-                sucursal_despues: c.sucursal_despues || c.despues,
-                observacion_antes: c.antes,
-                observacion_despues: c.despues || c.observacion_texto,
-                observacion_texto: c.observacion_texto || c.despues,
-                elegible_reimpresion: true,
-              },
-              { fecha_plan: fechaPlan, fecha_revision: fechaRevision, generado_en: new Date().toISOString() }
-            )
-          );
-        }
-      } catch {
-        // respaldo opcional
-      }
-    }
     if (!resAud.ok) {
       mostrarToast('Auditoría no disponible; mostrando solo cruce plan → revisión', 'warn');
     }

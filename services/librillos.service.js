@@ -14,7 +14,10 @@ import {
   reglaOverrideGutierrezCarviscol,
 } from './agrupaciones.service.js';
 import { obtenerCambiosSucursalCrudasAuditoria, registrarCambioHistorico } from './auditoria.service.js';
-import { persistirSucursalesCrudasDesdeSnapshot } from './crudas-sucursal.store.js';
+import {
+  obtenerCambiosSucursalCrudasGuardadas,
+  persistirSucursalesCrudasDesdeSnapshot,
+} from './crudas-sucursal.store.js';
 import {
   SQL_EXPR_FECHA_PARTE_BOGOTA,
   SQL_WHERE_PARTE_DIA_BOGOTA_P1,
@@ -26,6 +29,7 @@ import {
   columnasNombrePuestoTrabajo,
 } from '../config/sacrificio-emergencia.js';
 import { parsearObservacion } from './librillos/observacion.parser.js';
+import { ajusteClasificacionPorFechaId } from './librillos/ajustes-clasificacion.js';
 import {
   hoyBogotaISO,
   fechaTurnoOperativoBogotaISO,
@@ -54,6 +58,7 @@ import {
 import { calcularResumenMacro } from './librillos/resumen-macro.js';
 import {
   armarReporteLibrillosMensual,
+  esDomingoIso,
   rangoMesReporteLibrillos,
 } from './librillos/reporte-mensual.js';
 import { clasificarMovimiento } from './clasificacion-movimiento.service.js';
@@ -194,25 +199,9 @@ function puestoDesdeFilaConsulta(d) {
 }
 
 function detectarCambioPuestoCrudaPlanRevision(dPlan, dRev, obsAnt, obsNue) {
-  const pAnt = puestoOperativoDesdeFila(dPlan, obsAnt);
-  const pNue = puestoOperativoDesdeFila(dRev, obsNue);
-  if (pAnt !== pNue) {
-    return { sucursal_antes: pAnt, sucursal_despues: pNue };
-  }
-  const cAnt = String(dPlan?.agrupacion_codigo || '').trim().toLowerCase();
-  const cNue = String(dRev?.agrupacion_codigo || '').trim().toLowerCase();
-  if (
-    cAnt &&
-    cNue &&
-    cAnt !== cNue &&
-    cAnt !== 'asurcarnes' &&
-    cNue !== 'asurcarnes'
-  ) {
-    return {
-      sucursal_antes: String(dPlan?.agrupacion || cAnt).trim(),
-      sucursal_despues: String(dRev?.agrupacion || cNue).trim(),
-    };
-  }
+  const pAnt = sucursalNormLibrilloRow(dPlan);
+  const pNue = sucursalNormLibrilloRow(dRev);
+  if (pAnt !== pNue && (pAnt || pNue)) return { sucursal_antes: pAnt, sucursal_despues: pNue };
   return null;
 }
 
@@ -628,9 +617,10 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     };
   }
 
+  const idsCrudasSet = new Set(idsCrudasPlan);
   const cambiosFilaDirecto = listarCambiosSucursalEntreFilas(filasPlan, filasRev, fechaPlan, fechaRevision, {
     soloCrudas: true,
-    idsPermitidos: new Set(idsCrudasPlan),
+    idsPermitidos: idsCrudasSet,
   });
 
   const cambios = [];
@@ -694,7 +684,35 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     pushCambio(id, diff, obsAnt, obsNue, 'bd_servidor');
   }
 
-  const idsCrudasSet = new Set(idsCrudasPlan);
+  let cambiosGuardados = [];
+  try {
+    const sucursalActualRevision = await mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsCrudasPlan);
+    cambiosGuardados = await obtenerCambiosSucursalCrudasGuardadas(
+      fechaPlan,
+      fechaRevision,
+      sucursalActualRevision,
+      idsCrudasSet
+    );
+  } catch (e) {
+    log.warn('Cruce sucursal: historico local crudas', { error: e.message });
+  }
+
+  for (const c of cambiosGuardados) {
+    const id = String(c?.id || '').trim();
+    if (!id || cambios_todos_sucursal.some((x) => x.id === id)) continue;
+    pushCambio(
+      id,
+      {
+        sucursal_antes: c.sucursal_antes,
+        sucursal_despues: c.sucursal_despues,
+      },
+      '',
+      '',
+      'sucursal_guardada',
+      c.actualizado_en || c.guardado_en || null
+    );
+  }
+
   let cambiosAud = [];
   try {
     cambiosAud = await obtenerCambiosSucursalCrudasAuditoria(
@@ -741,6 +759,7 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     cambios,
     cambios_todos_sucursal,
     total_cambios_sucursal: cambios_todos_sucursal.length,
+    total_cambios_guardados: cambiosGuardados.length,
     total_cambios_auditoria: cambiosAud.length,
     total_elegibles_reimpresion: cambios.length,
     generado_en: generado,
@@ -1717,11 +1736,16 @@ const consultarLibrillos = async (fecha = null) => {
         const obsParte = String(l.observaciones || '');
         const textoRetiro = retiroObsMap.get(String(l.id_producto)) || '';
         const textoPlan = planObsMap.get(String(l.id_producto)) || '';
-        const { obsFuente, observacion_fuente } = fusionarObservacionClasificacion(
+        let { obsFuente, observacion_fuente } = fusionarObservacionClasificacion(
           textoPlan,
           obsParte,
           textoRetiro
         );
+        const ajusteClasificacion = ajusteClasificacionPorFechaId(fechaISO, l.id_producto);
+        if (ajusteClasificacion?.observacion) {
+          obsFuente = ajusteClasificacion.observacion;
+          observacion_fuente = 'ajuste_clasificacion_historica';
+        }
         const { observacion, cliente_destino, plaza } = parsearObservacion(obsFuente);
         const ovGutCarv = reglaOverrideGutierrezCarviscol(v.nombre_propietario, obsFuente);
         let clienteClasificacion;
@@ -1756,6 +1780,7 @@ const consultarLibrillos = async (fecha = null) => {
           observaciones: obsFuente,
           observaciones_parte: obsParteTrim || null,
           texto_retiro_obs: textoRetiroTrim || null,
+          ajuste_clasificacion: ajusteClasificacion || null,
           observacion_origen: l.observacion_origen || null,
           observacion_plan: textoPlan.trim() ? textoPlan : null,
           observacion,
@@ -1981,7 +2006,8 @@ export async function obtenerReporteLibrillosMensual(anio, mes, opts = {}) {
   }
   const t0 = Date.now();
   const rango = rangoMesReporteLibrillos(y, m);
-  const fechas = listaFechasDesdeHasta(rango.consulta_desde, rango.consulta_hasta);
+  const fechas = listaFechasDesdeHasta(rango.consulta_desde, rango.consulta_hasta)
+    .filter((fecha) => !esDomingoIso(fecha));
   const registros = [];
   const gruposDias = chunks(fechas, 1);
   await procesarGruposConLimite(
