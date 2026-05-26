@@ -603,6 +603,16 @@ function fechaBogotaDeValor(valor) {
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
+function esCambioSucursalOperativoCruda(row) {
+  const antes = String(row?.sucursal_antes || '').trim().toUpperCase();
+  const despues = String(row?.sucursal_despues || '').trim().toUpperCase();
+  if (!antes || !despues || antes === despues) return false;
+  // Excluir reasignaciones comerciales que la operación no considera etiqueta nueva de cruda.
+  if (antes.includes('VICTOR HUGO Y CIA')) return false;
+  if (despues === '8262') return false;
+  return true;
+}
+
 function horaAuditoriaMs(row) {
   const fecha = fechaBogotaDeValor(row?.audit_fecha || row?.fecha) || '1970-01-01';
   const hora = String(row?.audit_hora || row?.hora || '00:00:00').split('-')[0].split('+')[0];
@@ -663,7 +673,10 @@ async function mapaAuditoriaSucursalDespachoPorIds(fechaPlan, fechaDespacho, ids
       accion: despues.accion || null,
       fecha: despues.audit_fecha || null,
       hora: despues.audit_hora || null,
-      cambio: Boolean(sucAntes && sucDespues && sucAntes !== sucDespues),
+      cambio: esCambioSucursalOperativoCruda({
+        sucursal_antes: sucAntes,
+        sucursal_despues: sucDespues,
+      }),
     });
   }
   return out;
@@ -710,7 +723,10 @@ function rowCrudaRetenidaEtiqueta({
     sucursal_actual: puestoActual || null,
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
-    cambio_sucursal_despacho: Boolean(puestoOriginal && puestoActual && puestoOriginal !== puestoActual),
+    cambio_sucursal_despacho: esCambioSucursalOperativoCruda({
+      sucursal_antes: puestoOriginal,
+      sucursal_despues: puestoActual,
+    }),
     cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
