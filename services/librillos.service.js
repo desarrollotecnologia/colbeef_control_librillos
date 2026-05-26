@@ -1388,6 +1388,24 @@ async function idsPlanFaenaPorFecha(fechaISO) {
   return new Set((res.rows || []).map((r) => String(r.id_producto).trim()).filter(Boolean));
 }
 
+async function idsConPlanFaenaActivoEnOtraFecha(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Set();
+  const res = await pool.query(
+    `
+    SELECT DISTINCT pfp.id_producto::text AS id_producto
+    FROM trazabilidad_proceso.plan_faena pf
+    JOIN trazabilidad_proceso.plan_faena_producto pfp
+      ON pfp.id_plan_faena = pf.id
+    WHERE pfp.id_producto::text = ANY($2::text[])
+      AND pfp.fecha_fin_vigencia = pf.fecha_plan
+      AND DATE(timezone('America/Bogota', pf.fecha_plan)) <> $1::date
+    `,
+    [fechaISO, ids]
+  );
+  return new Set((res.rows || []).map((r) => String(r.id_producto).trim()).filter(Boolean));
+}
+
 /** Animales insensibilizados (sacrificados) según fecha calendario en trazabilidad_proceso.insensibilizacion. */
 async function idsInsensibilizacionPorFecha(fechaISO) {
   try {
@@ -1501,8 +1519,8 @@ async function idsParteProductoColbeefDia(fechaISO) {
 }
 
 /**
- * Universo operativo del día: todo el plan de faena (+ parte del día opcional + emergencia fuera de plan).
- * No se limita a insensibilizados: el resumen por agrupación debe reflejar el plan planteado.
+ * Universo operativo del día: todo el plan de faena.
+ * Registros del día fuera del plan solo se agregan si no pertenecen a un plan activo de otra fecha.
  */
 async function idsUniversoReporteDia(fechaISO) {
   const merged = new Set();
@@ -1510,12 +1528,18 @@ async function idsUniversoReporteDia(fechaISO) {
   plan.forEach((id) => merged.add(id));
   if (USE_UNION_PARTE_PLAN_DIA) {
     const parte = await idsParteProductoColbeefDia(fechaISO);
-    parte.forEach((id) => merged.add(id));
+    const extrasParte = [...parte].filter((id) => !plan.has(id));
+    const planOtroDia = await idsConPlanFaenaActivoEnOtraFecha(fechaISO, extrasParte);
+    extrasParte.forEach((id) => {
+      if (!planOtroDia.has(String(id))) merged.add(id);
+    });
   }
   if (INCLUIR_SACRIFICIO_EMERGENCIA) {
     const emerg = await idsSacrificioEmergenciaPorFecha(fechaISO);
+    const extrasEmerg = [...emerg].filter((id) => !plan.has(id));
+    const planOtroDia = await idsConPlanFaenaActivoEnOtraFecha(fechaISO, extrasEmerg);
     for (const id of emerg) {
-      if (!plan.has(id)) merged.add(String(id).trim());
+      if (!plan.has(id) && !planOtroDia.has(String(id).trim())) merged.add(String(id).trim());
     }
   }
   return [...merged].sort((a, b) =>
