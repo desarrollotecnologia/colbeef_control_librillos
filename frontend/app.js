@@ -1936,7 +1936,13 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
   const detallePendientes = opts.interactivo && nSinInsens > 0
     ? `
       <div class="plan-sin-insens-box" style="margin-top:12px;max-width:760px">
-        <button type="button" class="btn-gen btn-gen-sec" onclick="cargarPlanSinInsensibilizarDetalle()">
+        <button
+          type="button"
+          class="btn-gen btn-gen-sec"
+          id="btn-plan-sin-insens-toggle"
+          data-count="${nSinInsens}"
+          onclick="togglePlanSinInsensibilizarDetalle()"
+        >
           Ver trazabilidad de códigos (${nSinInsens})
         </button>
         <div id="plan-sin-insens-detalle" style="margin-top:10px"></div>
@@ -1997,15 +2003,34 @@ function htmlPlanSinInsensibilizarDetalle(data) {
 
 async function cargarPlanSinInsensibilizarDetalle() {
   const host = document.getElementById('plan-sin-insens-detalle');
+  const btn = document.getElementById('btn-plan-sin-insens-toggle');
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
   if (!host) return;
   host.innerHTML = '<p style="font-size:12px;color:var(--tx2);margin:0">Consultando códigos...</p>';
   try {
     const data = await fetchPlanSinInsensibilizar(fecha, { bypassCache: true });
     host.innerHTML = htmlPlanSinInsensibilizarDetalle(data);
+    host.dataset.open = '1';
+    if (btn) btn.textContent = `Ocultar trazabilidad de códigos (${btn.dataset.count || data?.items?.length || 0})`;
   } catch (e) {
     host.innerHTML = `<p style="font-size:12px;color:var(--rojo);font-weight:600;margin:0">No se pudo cargar el detalle: ${escapeHtml(e?.message || e)}</p>`;
+    host.dataset.open = '1';
+    if (btn) btn.textContent = `Ocultar trazabilidad de códigos (${btn.dataset.count || 0})`;
   }
+}
+
+function togglePlanSinInsensibilizarDetalle() {
+  const host = document.getElementById('plan-sin-insens-detalle');
+  const btn = document.getElementById('btn-plan-sin-insens-toggle');
+  if (!host) return;
+  const count = btn?.dataset?.count || '0';
+  if (host.dataset.open === '1') {
+    host.innerHTML = '';
+    host.dataset.open = '0';
+    if (btn) btn.textContent = `Ver trazabilidad de códigos (${count})`;
+    return;
+  }
+  void cargarPlanSinInsensibilizarDetalle();
 }
 
 function refrescarPanelPlanInsens() {
