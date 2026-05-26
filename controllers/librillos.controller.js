@@ -9,6 +9,7 @@ import {
   obtenerCambiosSucursalRevisionPlanFaena,
   fechaTurnoOperativoBogotaISO,
   obtenerMetaUniversoPorFecha,
+  obtenerPlanSinInsensibilizarDetalle,
   obtenerReporteLibrillosMensual,
   obtenerCrudasRetenidasEtiqueta,
 } from '../services/librillos.service.js';
@@ -77,6 +78,23 @@ export const getUniversoMeta = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: error.message || 'Error al obtener meta del universo' });
+  }
+};
+
+// GET /api/librillos/plan-sin-insensibilizar?fecha=YYYY-MM-DD — IDs activos en plan sin insensibilización
+export const getPlanSinInsensibilizar = async (req, res) => {
+  try {
+    const { fecha } = req.query;
+    if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ error: 'Parámetro fecha requerido (YYYY-MM-DD)' });
+    }
+    const data = await obtenerPlanSinInsensibilizarDetalle(fecha);
+    return res.json(data);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      error: error.message || 'Error al obtener plan sin insensibilizar',
+    });
   }
 };
 

@@ -1171,6 +1171,7 @@ let CACHE_HISTORICO_MS = 120000;
 let STALE_WHILE_REVALIDATE = true;
 /** Evita repetir GET /universo-meta para la misma fecha en paralelo al listado/resumen (respuesta liviana pero suelta en grupo). */
 const cacheMetaUniversoFront = new Map();
+const cachePlanSinInsensFront = new Map();
 /** Caché más larga para rangos (reporte de librillos): evita repetir consultas pesadas al cambiar de vista. */
 const CACHE_RANGO_DATOS_MS = 5 * 60 * 1000;
 let inventarioSubtab = 'lib'; // 'lib' | 'crud'
@@ -1903,6 +1904,22 @@ async function fetchMetaUniverso(fecha, opts = {}) {
   }
 }
 
+async function fetchPlanSinInsensibilizar(fecha, opts = {}) {
+  const bypass = opts && opts.bypassCache === true;
+  const f = String(fecha || '').trim() || hoyISO();
+  if (!bypass) {
+    const hit = cachePlanSinInsensFront.get(f);
+    if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS) {
+      return hit.data;
+    }
+  }
+  const res = await fetch(`${API_URL}/plan-sin-insensibilizar?fecha=${encodeURIComponent(f)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  if (!bypass) cachePlanSinInsensFront.set(f, { ts: Date.now(), data });
+  return data;
+}
+
 async function refrescarMetaUniversoTurno() {
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
   metaUniversoTurno = await fetchMetaUniverso(fecha, { bypassCache: true });
@@ -1910,12 +1927,21 @@ async function refrescarMetaUniversoTurno() {
   refrescarPanelPlanInsens();
 }
 
-function htmlCuadroPlanVsInsens(meta) {
+function htmlCuadroPlanVsInsens(meta, opts = {}) {
   if (!meta || !Number(meta.total_plan_faena)) return '';
   const nPlan = Number(meta.total_plan_faena) || 0;
   const nInsens = Number(meta.plan_con_insensibilizacion) || 0;
   const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
   const nListado = Number(meta.total_en_listado) || 0;
+  const detallePendientes = opts.interactivo && nSinInsens > 0
+    ? `
+      <div class="plan-sin-insens-box" style="margin-top:12px;max-width:760px">
+        <button type="button" class="btn-gen btn-gen-sec" onclick="cargarPlanSinInsensibilizarDetalle()">
+          Ver códigos sin insensibilizar (${nSinInsens})
+        </button>
+        <div id="plan-sin-insens-detalle" style="margin-top:10px"></div>
+      </div>`
+    : '';
   return `
     <div class="plan-insens-cuadro">
       <div class="tw rep-table-wrap">
@@ -1929,7 +1955,49 @@ function htmlCuadroPlanVsInsens(meta) {
           </tbody>
         </table>
       </div>
+      ${detallePendientes}
     </div>`;
+}
+
+function htmlPlanSinInsensibilizarDetalle(data) {
+  const rows = Array.isArray(data?.items) ? data.items : [];
+  if (!rows.length) {
+    return '<p style="font-size:12px;color:var(--ok);font-weight:600;margin:0">No hay códigos pendientes de insensibilización para esta fecha.</p>';
+  }
+  const trs = rows.map((r) => `
+    <tr>
+      <td><strong>${escapeHtml(r.id_producto || '—')}</strong></td>
+      <td>${escapeHtml(r.identificacion || '—')}</td>
+      <td>${escapeHtml(r.usuario_plan || '—')}</td>
+      <td>${escapeHtml(r.id_plan_faena || '—')}</td>
+      <td>${escapeHtml(r.observaciones || '—')}</td>
+    </tr>
+  `).join('');
+  return `
+    <p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">
+      ${rows.length} código(s) activos en plan sin registro en insensibilización.
+    </p>
+    <div class="tw">
+      <table class="dt" style="max-width:920px">
+        <thead>
+          <tr><th>ID producto</th><th>Identificación</th><th>Usuario plan</th><th>Plan</th><th>Observación</th></tr>
+        </thead>
+        <tbody>${trs}</tbody>
+      </table>
+    </div>`;
+}
+
+async function cargarPlanSinInsensibilizarDetalle() {
+  const host = document.getElementById('plan-sin-insens-detalle');
+  const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
+  if (!host) return;
+  host.innerHTML = '<p style="font-size:12px;color:var(--tx2);margin:0">Consultando códigos...</p>';
+  try {
+    const data = await fetchPlanSinInsensibilizar(fecha, { bypassCache: true });
+    host.innerHTML = htmlPlanSinInsensibilizarDetalle(data);
+  } catch (e) {
+    host.innerHTML = `<p style="font-size:12px;color:var(--rojo);font-weight:600;margin:0">No se pudo cargar el detalle: ${escapeHtml(e?.message || e)}</p>`;
+  }
 }
 
 function refrescarPanelPlanInsens() {
@@ -1946,7 +2014,7 @@ function refrescarPanelPlanInsens() {
   }
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
   if (lblFecha) lblFecha.textContent = labelFecha(fecha);
-  body.innerHTML = htmlCuadroPlanVsInsens(meta);
+  body.innerHTML = htmlCuadroPlanVsInsens(meta, { interactivo: true });
   panel.style.display = 'block';
 }
 

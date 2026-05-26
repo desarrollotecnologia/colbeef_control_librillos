@@ -14,6 +14,7 @@ import {
   getCrudasSucursalGuardadas,
   getCrudasRetenidasEtiqueta,
   getUniversoMeta,
+  getPlanSinInsensibilizar,
   getReporteMensualLibrillos,
 } from '../controllers/librillos.controller.js';
 
@@ -31,6 +32,7 @@ router.get('/crudas-retenidas-etiqueta', getCrudasRetenidasEtiqueta); // ?fecha_
 router.get('/crudas-sucursal-guardadas', getCrudasSucursalGuardadas);
 router.get('/observaciones', getObservaciones); // ?fecha=YYYY-MM-DD
 router.get('/universo-meta', getUniversoMeta); // ?fecha=YYYY-MM-DD
+router.get('/plan-sin-insensibilizar', getPlanSinInsensibilizar); // ?fecha=YYYY-MM-DD
 router.get('/', getLibrillos);            // ?fecha=YYYY-MM-DD opcional
 router.get('/estado', getEstadoCache);    // Info del cache
 router.get('/stats', getStats);           // Producción últimos 7 días

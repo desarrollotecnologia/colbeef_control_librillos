@@ -1484,6 +1484,86 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
   };
 }
 
+async function mapaPlanFaenaInfoPorIds(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const res = await pool.query(
+    `
+    SELECT DISTINCT ON (pfp.id_producto::text)
+      pfp.id_producto::text AS id_producto,
+      pfp.id_plan_faena,
+      pfp.secuencia,
+      pfp.fecha_inicio_vigencia,
+      pfp.fecha_fin_vigencia,
+      pfp.fecha_registro,
+      pfp.user_name,
+      pf.fecha_plan,
+      pf.cerrado
+    FROM trazabilidad_proceso.plan_faena pf
+    JOIN trazabilidad_proceso.plan_faena_producto pfp
+      ON pfp.id_plan_faena = pf.id
+    WHERE DATE(timezone('America/Bogota', pf.fecha_plan)) = $1::date
+      AND pfp.id_producto::text = ANY($2::text[])
+    ORDER BY pfp.id_producto::text,
+      CASE WHEN pfp.fecha_fin_vigencia = pf.fecha_plan THEN 0 ELSE 1 END,
+      pfp.fecha_registro DESC NULLS LAST,
+      pfp.id_plan_faena DESC
+    `,
+    [fechaISO, ids]
+  );
+  (res.rows || []).forEach((r) => {
+    const id = String(r.id_producto || '').trim();
+    if (id) out.set(id, r);
+  });
+  return out;
+}
+
+/** IDs que están activos en plan de faena pero aún no tienen insensibilización del día. */
+export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
+  const fecha = String(fechaISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw new Error('fecha debe ser YYYY-MM-DD');
+  }
+  const [plan, insens] = await Promise.all([
+    idsPlanFaenaPorFecha(fecha),
+    idsInsensibilizacionPorFecha(fecha),
+  ]);
+  const ids = [...plan]
+    .filter((id) => !insens.has(id))
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+  const [{ map: parteMap }, planInfoMap] = await Promise.all([
+    filasParteProductoPorIdsYFecha(fecha, ids),
+    mapaPlanFaenaInfoPorIds(fecha, ids),
+  ]);
+  const items = ids.map((id) => {
+    const parte = parteMap.get(String(id)) || {};
+    const planInfo = planInfoMap.get(String(id)) || {};
+    return {
+      id_producto: id,
+      identificacion: parte.identificacion || null,
+      observaciones: parte.observaciones || null,
+      usuario_planillaje: parte.usuario_planillaje || null,
+      id_plan_faena: planInfo.id_plan_faena || null,
+      secuencia: planInfo.secuencia ?? null,
+      usuario_plan: planInfo.user_name || null,
+      fecha_plan: planInfo.fecha_plan || fecha,
+      fecha_registro_plan: planInfo.fecha_registro || null,
+      fecha_fin_vigencia: planInfo.fecha_fin_vigencia || null,
+      plan_cerrado: Boolean(planInfo.cerrado),
+      estado: 'SIN_INSENSIBILIZACION',
+    };
+  });
+  return {
+    fecha,
+    total_plan_faena: plan.size,
+    total_insensibilizados_en_plan: plan.size - ids.length,
+    total_sin_insensibilizar: ids.length,
+    items,
+    generado_en: new Date().toISOString(),
+  };
+}
+
 /** Última fila del día (tipo Colbeef) por id; solo esos IDs. */
 async function filasParteProductoPorIdsYFecha(fechaISO, idsTexto) {
   if (!idsTexto.length) return { rows: [], map: new Map() };
