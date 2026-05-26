@@ -5365,6 +5365,7 @@ async function imprimirEtiquetasCrudasRetenidasSeleccion() {
     const rows = ids.map((id) => porId.get(String(id))).filter(Boolean);
     const lista = rows
       .filter((r) => r.requiere_etiqueta !== false && !r.ya_reimpresa)
+      .filter((r) => r.cambio_sucursal_despacho)
       .map((r) => ({
         id_producto: r.id_producto,
         identificacion: r.identificacion || r.id_producto,

@@ -825,7 +825,7 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     total_sin_puesto: items.filter((x) => !x.puesto_etiqueta).length,
     total_con_cambio_sucursal: items.filter((x) => x.cambio_sucursal_despacho).length,
     total_reimpresas: items.filter((x) => x.ya_reimpresa).length,
-    total_pendientes_etiqueta: items.filter((x) => x.requiere_etiqueta && !x.ya_reimpresa).length,
+    total_pendientes_etiqueta: items.filter((x) => x.cambio_sucursal_despacho && x.requiere_etiqueta && !x.ya_reimpresa).length,
     por_sucursal: porSucursal,
     items,
     generado_en: generado,
