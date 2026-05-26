@@ -1937,7 +1937,7 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
     ? `
       <div class="plan-sin-insens-box" style="margin-top:12px;max-width:760px">
         <button type="button" class="btn-gen btn-gen-sec" onclick="cargarPlanSinInsensibilizarDetalle()">
-          Ver códigos sin insensibilizar (${nSinInsens})
+          Ver trazabilidad de códigos (${nSinInsens})
         </button>
         <div id="plan-sin-insens-detalle" style="margin-top:10px"></div>
       </div>`
@@ -1964,10 +1964,17 @@ function htmlPlanSinInsensibilizarDetalle(data) {
   if (!rows.length) {
     return '<p style="font-size:12px;color:var(--ok);font-weight:600;margin:0">No hay códigos pendientes de insensibilización para esta fecha.</p>';
   }
+  const totalPosterior = Number(data?.total_insensibilizados_posterior || 0);
+  const totalPendActual = Number(data?.total_pendientes_actuales || 0);
   const trs = rows.map((r) => `
     <tr>
       <td><strong>${escapeHtml(r.id_producto || '—')}</strong></td>
       <td>${escapeHtml(r.identificacion || '—')}</td>
+      <td>${r.estado === 'INSENSIBILIZADO_POSTERIOR'
+        ? '<span class="hist-badge hist-badge-ok">Insensibilizado posterior</span>'
+        : '<span class="hist-badge hist-badge-pend">Pendiente</span>'}</td>
+      <td>${escapeHtml(r.fecha_insensibilizacion_real ? labelFecha(String(r.fecha_insensibilizacion_real).slice(0, 10)) : '—')}</td>
+      <td>${escapeHtml(r.usuario_insensibilizacion || '—')}</td>
       <td>${escapeHtml(r.usuario_plan || '—')}</td>
       <td>${escapeHtml(r.id_plan_faena || '—')}</td>
       <td>${escapeHtml(r.observaciones || '—')}</td>
@@ -1975,12 +1982,13 @@ function htmlPlanSinInsensibilizarDetalle(data) {
   `).join('');
   return `
     <p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">
-      ${rows.length} código(s) activos en plan sin registro en insensibilización.
+      ${rows.length} código(s) no tuvieron insensibilización en la fecha plan.
+      ${totalPosterior} ya aparecen insensibilizados después · ${totalPendActual} siguen pendientes.
     </p>
     <div class="tw">
       <table class="dt" style="max-width:920px">
         <thead>
-          <tr><th>ID producto</th><th>Identificación</th><th>Usuario plan</th><th>Plan</th><th>Observación</th></tr>
+          <tr><th>ID producto</th><th>Identificación</th><th>Estado actual</th><th>Fecha real insens.</th><th>Usuario insens.</th><th>Usuario plan</th><th>Plan</th><th>Observación</th></tr>
         </thead>
         <tbody>${trs}</tbody>
       </table>

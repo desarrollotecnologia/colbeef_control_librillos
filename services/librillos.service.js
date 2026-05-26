@@ -1519,6 +1519,32 @@ async function mapaPlanFaenaInfoPorIds(fechaISO, idsTexto) {
   return out;
 }
 
+async function mapaPrimeraInsensibilizacionDesdeFecha(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const res = await pool.query(
+    `
+    SELECT DISTINCT ON (id_producto::text)
+      id_producto::text AS id_producto,
+      fecha_registro,
+      hora_registro,
+      id_puesto_trabajo,
+      user_name
+    FROM trazabilidad_proceso.insensibilizacion
+    WHERE id_producto::text = ANY($1::text[])
+      AND fecha_registro >= $2::date
+    ORDER BY id_producto::text, fecha_registro ASC NULLS LAST, hora_registro ASC NULLS LAST
+    `,
+    [ids, fechaISO]
+  );
+  (res.rows || []).forEach((r) => {
+    const id = String(r.id_producto || '').trim();
+    if (id) out.set(id, r);
+  });
+  return out;
+}
+
 /** IDs que están activos en plan de faena pero aún no tienen insensibilización del día. */
 export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
   const fecha = String(fechaISO || '').trim();
@@ -1532,13 +1558,17 @@ export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
   const ids = [...plan]
     .filter((id) => !insens.has(id))
     .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
-  const [{ map: parteMap }, planInfoMap] = await Promise.all([
+  const [{ map: parteMap }, planInfoMap, insensPosteriorMap] = await Promise.all([
     filasParteProductoPorIdsYFecha(fecha, ids),
     mapaPlanFaenaInfoPorIds(fecha, ids),
+    mapaPrimeraInsensibilizacionDesdeFecha(fecha, ids),
   ]);
   const items = ids.map((id) => {
     const parte = parteMap.get(String(id)) || {};
     const planInfo = planInfoMap.get(String(id)) || {};
+    const insensPosterior = insensPosteriorMap.get(String(id)) || null;
+    const fechaInsens = insensPosterior?.fecha_registro || null;
+    const estadoActual = fechaInsens ? 'INSENSIBILIZADO_POSTERIOR' : 'PENDIENTE_INSENSIBILIZACION';
     return {
       id_producto: id,
       identificacion: parte.identificacion || null,
@@ -1551,14 +1581,21 @@ export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
       fecha_registro_plan: planInfo.fecha_registro || null,
       fecha_fin_vigencia: planInfo.fecha_fin_vigencia || null,
       plan_cerrado: Boolean(planInfo.cerrado),
-      estado: 'SIN_INSENSIBILIZACION',
+      fecha_insensibilizacion_real: fechaInsens,
+      hora_insensibilizacion_real: insensPosterior?.hora_registro || null,
+      usuario_insensibilizacion: insensPosterior?.user_name || null,
+      id_puesto_trabajo_insensibilizacion: insensPosterior?.id_puesto_trabajo || null,
+      estado: estadoActual,
     };
   });
+  const totalPosterior = items.filter((x) => x.estado === 'INSENSIBILIZADO_POSTERIOR').length;
   return {
     fecha,
     total_plan_faena: plan.size,
     total_insensibilizados_en_plan: plan.size - ids.length,
     total_sin_insensibilizar: ids.length,
+    total_insensibilizados_posterior: totalPosterior,
+    total_pendientes_actuales: items.length - totalPosterior,
     items,
     generado_en: new Date().toISOString(),
   };
