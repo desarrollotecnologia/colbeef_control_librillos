@@ -10,6 +10,7 @@ import {
   fechaTurnoOperativoBogotaISO,
   obtenerMetaUniversoPorFecha,
   obtenerReporteLibrillosMensual,
+  obtenerCrudasRetenidasEtiqueta,
 } from '../services/librillos.service.js';
 import { leerSucursalesCrudas } from '../services/crudas-sucursal.store.js';
 import {
@@ -210,6 +211,29 @@ export const getCrudasSucursalGuardadas = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: 'Error al leer sucursales de crudas guardadas' });
+  }
+};
+
+// GET /api/librillos/crudas-retenidas-etiqueta?fecha_plan=&fecha_despacho=
+export const getCrudasRetenidasEtiqueta = async (req, res) => {
+  try {
+    const fechaPlan = String(req.query?.fecha_plan || '').trim();
+    const fechaDespacho = String(req.query?.fecha_despacho || req.query?.fecha_revision || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaDespacho)) {
+      return res.status(400).json({
+        error: 'Parámetros fecha_plan y fecha_despacho requeridos (YYYY-MM-DD)',
+      });
+    }
+    if (fechaPlan > fechaDespacho) {
+      return res.status(400).json({ error: 'fecha_plan no puede ser posterior a fecha_despacho' });
+    }
+    const datos = await obtenerCrudasRetenidasEtiqueta(fechaPlan, fechaDespacho);
+    return res.json(datos);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      error: error.message || 'Error al obtener crudas retenidas para etiqueta',
+    });
   }
 };
 

@@ -689,6 +689,33 @@
           </table>
         </div>
       </div>
+
+      <div class="panel panel-ret-crudas" style="margin-top:20px">
+        <div class="ph">
+          <span class="pt">Crudas retenidas en cava — etiqueta para despacho</span>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn-gen btn-gen-sec" onclick="cargarCrudasRetenidasEtiqueta()">Buscar retenidas</button>
+            <button type="button" class="btn-sel-all" onclick="seleccionarTodasCrudasRetenidas()">Seleccionar pendientes</button>
+            <button type="button" class="btn-gen" onclick="imprimirEtiquetasCrudasRetenidasSeleccion()">Abrir etiquetas (<span id="n-ret-crudas-sel">0</span>)</button>
+          </div>
+        </div>
+        <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
+          Para crudas que entraron a cava en el <strong>plan</strong> y se despachan días después. Usa la fecha plan como F.B./F.V. y el puesto/sucursal vigente en la fecha de despacho para la etiqueta nueva.
+        </p>
+        <p id="ret-crudas-rango-label" style="margin:0 0 6px;font-size:12px;color:var(--tx2)">Plan → despacho: —</p>
+        <p id="ret-crudas-resumen" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--azul);font-weight:600"></p>
+        <div class="tw">
+          <table class="dt">
+            <thead>
+              <tr>
+                <th style="width:36px"><input type="checkbox" id="chk-ret-crudas" onchange="toggleTodasCrudasRetenidas(this)"></th>
+                <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-ret-crudas"><tr><td colspan="8" class="empty">Seleccione plan y despacho, luego Buscar retenidas</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- Modal editar salida (solo admin/usuario propio) -->

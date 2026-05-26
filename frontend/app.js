@@ -1187,6 +1187,8 @@ let _toastOnClick = null;
 let historicoCambios = [];
 let historicoCambiosFiltrados = [];
 let historicoCrudasSeleccionadas = new Set();
+let crudasRetenidasEtiqueta = [];
+let crudasRetenidasSeleccionadas = new Set();
 /** IDs ya reimpresos para el par plan→revisión cargado (Map id → { fecha, usuario, ... }). */
 let reimpresosCrudasMap = new Map();
 /** Cancelación incremental: tablas principal y crudas usan contadores distintos (evita cruce al marcar checkboxes). */
@@ -5081,6 +5083,219 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
         ids: lista.map((d) => d.id_producto),
       },
     });
+  });
+}
+
+function filasCrudasRetenidasPendientes() {
+  return (crudasRetenidasEtiqueta || []).filter(
+    (r) => r?.requiere_etiqueta !== false && !r?.ya_reimpresa
+  );
+}
+
+function actualizarContadorCrudasRetenidas() {
+  const el = document.getElementById('n-ret-crudas-sel');
+  if (el) el.textContent = String(crudasRetenidasSeleccionadas.size);
+}
+
+function htmlFilaCrudaRetenida(r, seleccionable = false) {
+  const id = String(r?.id_producto || '').trim();
+  const checked = crudasRetenidasSeleccionadas.has(id) ? 'checked' : '';
+  const estado = r?.ya_reimpresa
+    ? `<span class="hist-badge hist-badge-ok">Reimpresa</span>`
+    : r?.salida_en_fecha_despacho
+      ? `<span class="hist-badge hist-badge-ok">Salida despacho</span>`
+    : r?.requiere_etiqueta === false
+      ? `<span class="hist-badge hist-badge-otro">No aplica</span>`
+      : `<span class="hist-badge hist-badge-pend">Pendiente</span>`;
+  const chk = seleccionable
+    ? `<input type="checkbox" ${checked} onchange="toggleSeleccionCrudaRetenida('${escapeHtml(id)}', this)">`
+    : '<input type="checkbox" disabled title="Ya reimpresa o sin puesto">';
+  const original = r?.sucursal_original || 'Sin snapshot';
+  return `<tr class="${r?.ya_reimpresa ? 'row-hist-reimp-hecha' : ''}">
+    <td>${chk}</td>
+    <td>${estado}</td>
+    <td>${escapeHtml(id || '—')}</td>
+    <td>${escapeHtml(r?.propietario || '—')}</td>
+    <td>${escapeHtml(original)}</td>
+    <td><strong>${escapeHtml(r?.puesto_etiqueta || r?.sucursal_actual || '—')}</strong></td>
+    <td>${escapeHtml(formatFecha(r?.fecha_ingreso_cava) || '—')}</td>
+    <td>${escapeHtml(r?.reimpreso_en ? formatFecha(r.reimpreso_en) : '—')}</td>
+  </tr>`;
+}
+
+function pintarCrudasRetenidasEtiqueta() {
+  const tbody = document.getElementById('tbody-ret-crudas');
+  const resumen = document.getElementById('ret-crudas-resumen');
+  const chkAll = document.getElementById('chk-ret-crudas');
+  if (!tbody) return;
+  const rows = crudasRetenidasEtiqueta || [];
+  const pendientes = filasCrudasRetenidasPendientes();
+  const valid = new Set(pendientes.map((r) => String(r.id_producto || '').trim()));
+  crudasRetenidasSeleccionadas = new Set(
+    [...crudasRetenidasSeleccionadas].filter((id) => valid.has(id))
+  );
+  if (chkAll) chkAll.checked = pendientes.length > 0 && pendientes.every((r) => crudasRetenidasSeleccionadas.has(String(r.id_producto)));
+  actualizarContadorCrudasRetenidas();
+  if (resumen) {
+    const total = rows.length;
+    const reimp = rows.filter((r) => r.ya_reimpresa).length;
+    const sinPuesto = rows.filter((r) => !r.puesto_etiqueta).length;
+    resumen.textContent = total
+      ? `${total} retenidas en cava · ${pendientes.length} pendientes de etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
+      : '';
+  }
+  if (!rows.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="8" class="empty">Sin crudas retenidas pendientes para el plan/despacho seleccionado</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows
+    .map((r) => htmlFilaCrudaRetenida(r, valid.has(String(r.id_producto || '').trim())))
+    .join('');
+}
+
+async function cargarCrudasRetenidasEtiqueta(opts = {}) {
+  const { fechaPlan, fechaRevision } = fechasReimpresionHistorico();
+  const fechaDespacho = fechaRevision;
+  if (!fechaPlan || !fechaDespacho) {
+    mostrarToast('Selecciona fecha plan y fecha despacho/revisión', 'err');
+    return;
+  }
+  if (fechaPlan > fechaDespacho) {
+    mostrarToast('La fecha plan no puede ser posterior al despacho', 'err');
+    return;
+  }
+  const run = async () => {
+    const q = new URLSearchParams({
+      fecha_plan: fechaPlan,
+      fecha_despacho: fechaDespacho,
+    });
+    const res = await fetch(`${API_URL}/crudas-retenidas-etiqueta?${q.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    crudasRetenidasEtiqueta = Array.isArray(data?.items) ? data.items : [];
+    crudasRetenidasSeleccionadas.clear();
+    const lbl = document.getElementById('ret-crudas-rango-label');
+    if (lbl) {
+      lbl.textContent =
+        `Plan ${labelFecha(fechaPlan)} → despacho ${labelFecha(fechaDespacho)} · ` +
+        `${data.total_crudas_plan || 0} crudas plan · ${data.total_retenidas || 0} retenidas · ` +
+        `${data.total_pendientes_etiqueta || 0} pendientes etiqueta`;
+    }
+    pintarCrudasRetenidasEtiqueta();
+    return data;
+  };
+  if (opts.silencioso) {
+    try { await run(); } catch { /* ignore */ }
+    return;
+  }
+  return runWithAppLoader('Buscando crudas retenidas...', async () => {
+    try {
+      await run();
+    } catch (e) {
+      mostrarToast(`Crudas retenidas: ${e?.message || e}`, 'err');
+    }
+  });
+}
+
+function toggleSeleccionCrudaRetenida(id, chk) {
+  const k = String(id || '').trim();
+  if (!k) return;
+  if (chk?.checked) crudasRetenidasSeleccionadas.add(k);
+  else crudasRetenidasSeleccionadas.delete(k);
+  actualizarContadorCrudasRetenidas();
+  const pendientes = filasCrudasRetenidasPendientes();
+  const chkAll = document.getElementById('chk-ret-crudas');
+  if (chkAll) chkAll.checked = pendientes.length > 0 && pendientes.every((r) => crudasRetenidasSeleccionadas.has(String(r.id_producto)));
+}
+
+function toggleTodasCrudasRetenidas(chkAll) {
+  const pendientes = filasCrudasRetenidasPendientes();
+  if (chkAll?.checked) {
+    pendientes.forEach((r) => crudasRetenidasSeleccionadas.add(String(r.id_producto || '').trim()));
+  } else {
+    pendientes.forEach((r) => crudasRetenidasSeleccionadas.delete(String(r.id_producto || '').trim()));
+  }
+  pintarCrudasRetenidasEtiqueta();
+}
+
+function seleccionarTodasCrudasRetenidas() {
+  const chkAll = document.getElementById('chk-ret-crudas');
+  if (chkAll) chkAll.checked = true;
+  toggleTodasCrudasRetenidas(chkAll);
+}
+
+async function imprimirEtiquetasCrudasRetenidasSeleccion() {
+  const ids = [...crudasRetenidasSeleccionadas];
+  if (!ids.length) {
+    mostrarToast('Selecciona crudas retenidas pendientes de etiqueta', 'err');
+    return;
+  }
+  return runWithAppLoader('Preparando etiquetas de crudas retenidas...', async () => {
+    const { fechaPlan, fechaRevision } = fechasReimpresionHistorico();
+    const fechaDespacho = fechaRevision;
+    const porId = new Map((crudasRetenidasEtiqueta || []).map((r) => [String(r.id_producto || '').trim(), r]));
+    const rows = ids.map((id) => porId.get(String(id))).filter(Boolean);
+    const lista = rows
+      .filter((r) => r.requiere_etiqueta !== false && !r.ya_reimpresa)
+      .map((r) => ({
+        id_producto: r.id_producto,
+        identificacion: r.identificacion || r.id_producto,
+        propietario: r.propietario || 'Sin asignar',
+        observacion: r.observacion || 'CRUDAS',
+        observaciones: r.observaciones || r.observacion || 'CRUDAS',
+        sucursal: r.puesto_etiqueta || r.sucursal_actual,
+        plaza: null,
+        empresa_destino: r.empresa_destino || '',
+        fecha_ingreso_cava: r.fecha_ingreso_cava || null,
+        fecha_salida_cava: null,
+      }))
+      .filter((d) => d.id_producto && d.sucursal);
+    if (!lista.length) {
+      mostrarToast('No hay retenidas imprimibles: revise puesto o reimpresión previa.', 'err');
+      return;
+    }
+    const ventanaOk = abrirVentanaEtiquetasCrudas(lista, { fechaPlanEtiqueta: fechaPlan });
+    if (!ventanaOk) {
+      mostrarToast('No se abrió la ventana de impresión. No se marcó nada como reimpresa.', 'err');
+      return;
+    }
+    const quien = nombreUsuarioVisible(usuarioOperacionActual());
+    const okMarcar = confirm(
+      `Se abrió la ventana con ${lista.length} etiqueta(s) de crudas retenidas.\n\n` +
+        `¿Marcar como REIMPRESAS en el sistema?\n` +
+        `Aceptar solo si ya imprimió o va a imprimir ahora.\n\n` +
+        `Usuario: ${quien}`
+    );
+    if (!okMarcar) {
+      mostrarToast('Sin cambios: las crudas retenidas siguen pendientes de etiqueta.', 'ok');
+      return;
+    }
+    try {
+      const filasHistorico = rows.map((r) => ({
+        idProducto: r.id_producto,
+        sucursalAntes: r.sucursal_original || null,
+        sucursalDespues: r.puesto_etiqueta || r.sucursal_actual || null,
+      }));
+      await registrarReimpresionCrudasApi(fechaPlan, fechaDespacho, lista, filasHistorico);
+      await cargarCrudasRetenidasEtiqueta({ silencioso: true });
+      mostrarToast(`${lista.length} etiqueta(s) de crudas retenidas marcadas como reimpresas`, 'ok');
+      enviarEventoAnalytics({
+        eventName: 'print_labels_crudas',
+        viewName: 'historico',
+        meta: {
+          modo: 'retenidas_cava',
+          fecha_plan: fechaPlan,
+          fecha_despacho: fechaDespacho,
+          total: lista.length,
+          ids: lista.map((d) => d.id_producto),
+        },
+      });
+    } catch (e) {
+      mostrarToast(`Error al registrar reimpresión: ${e?.message || e}`, 'err');
+    }
   });
 }
 

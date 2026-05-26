@@ -12,6 +12,7 @@ import {
   getCrudasCambioSucursal,
   getCambiosSucursalRevisionPlan,
   getCrudasSucursalGuardadas,
+  getCrudasRetenidasEtiqueta,
   getUniversoMeta,
   getReporteMensualLibrillos,
 } from '../controllers/librillos.controller.js';
@@ -26,6 +27,7 @@ router.get('/reporte-mensual', getReporteMensualLibrillos); // ?anio=YYYY&mes=1-
 router.get('/resumen', getResumenMacro); // ?fecha=YYYY-MM-DD
 router.get('/crudas-cambio-sucursal', getCrudasCambioSucursal); // ?fecha=YYYY-MM-DD
 router.get('/cambios-sucursal-revision', getCambiosSucursalRevisionPlan); // ?fecha_plan=&fecha_revision=
+router.get('/crudas-retenidas-etiqueta', getCrudasRetenidasEtiqueta); // ?fecha_plan=&fecha_despacho=
 router.get('/crudas-sucursal-guardadas', getCrudasSucursalGuardadas);
 router.get('/observaciones', getObservaciones); // ?fecha=YYYY-MM-DD
 router.get('/universo-meta', getUniversoMeta); // ?fecha=YYYY-MM-DD

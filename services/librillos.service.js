@@ -13,8 +13,13 @@ import {
   agrupacionDesdeTextoPlanFaena,
   reglaOverrideGutierrezCarviscol,
 } from './agrupaciones.service.js';
-import { obtenerCambiosSucursalCrudasAuditoria, registrarCambioHistorico } from './auditoria.service.js';
 import {
+  obtenerCambiosSucursalCrudasAuditoria,
+  obtenerReimpresionesCrudasMap,
+  registrarCambioHistorico,
+} from './auditoria.service.js';
+import {
+  leerSucursalesCrudas,
   obtenerCambiosSucursalCrudasGuardadas,
   persistirSucursalesCrudasDesdeSnapshot,
 } from './crudas-sucursal.store.js';
@@ -521,6 +526,212 @@ async function mapaPendienteSalidaCavaPorIds(idsTexto) {
     });
   }
   return out;
+}
+
+async function mapaSalidasColbeefPorIds(idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const wanted = new Set(ids);
+  const addRow = (row) => {
+    const id = String(row?.id_producto || '').trim();
+    if (!id || !wanted.has(id)) return;
+    const prev = out.get(id);
+    const fecha = row?.fecha_salida || null;
+    if (!prev || (fecha && new Date(fecha) > new Date(prev.fecha_salida || 0))) {
+      out.set(id, {
+        id: row?.id || null,
+        id_producto: id,
+        fecha_salida: fecha,
+        registrado_por: row?.registrado_por || null,
+      });
+    }
+  };
+
+  const useFile =
+    process.env.SALIDAS_USE_FILE === '1' ||
+    process.env.SALIDAS_USE_FILE === 'true';
+  if (!useFile) {
+    try {
+      const grupos = chunks(ids, META_RAIZ_BATCH);
+      for (const grupo of grupos) {
+        const res = await pool.query(
+          `
+          SELECT id, id_producto, fecha_salida, registrado_por
+          FROM colbeef.salidas_cava
+          WHERE id_producto = ANY($1::text[])
+          ORDER BY fecha_salida DESC NULLS LAST, fecha_registro DESC NULLS LAST
+          `,
+          [grupo]
+        );
+        (res.rows || []).forEach(addRow);
+      }
+      return out;
+    } catch {
+      // Si la tabla no existe o no hay permisos, cae al archivo local.
+    }
+  }
+
+  try {
+    const file = path.resolve(process.cwd(), 'data', 'salidas.json');
+    const rows = JSON.parse(fs.readFileSync(file, 'utf8') || '[]');
+    if (Array.isArray(rows)) rows.forEach(addRow);
+  } catch {
+    // Sin salidas locales.
+  }
+  return out;
+}
+
+async function obtenerReimpresionesCrudasMapSeguro(fechaPlan, fechaDespacho) {
+  try {
+    return await obtenerReimpresionesCrudasMap(fechaPlan, fechaDespacho);
+  } catch (e) {
+    console.warn(
+      `⚠️ No se pudo leer reimpresiones de crudas (${fechaPlan} → ${fechaDespacho}): ${e?.message || e}`
+    );
+    return new Map();
+  }
+}
+
+function fechaBogotaDeValor(valor) {
+  if (!valor) return '';
+  const d = new Date(valor);
+  if (Number.isNaN(d.getTime())) {
+    const s = String(valor || '').trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+  }
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
+function rowCrudaRetenidaEtiqueta({
+  rowPlan,
+  sucursalOriginal,
+  sucursalActual,
+  salidaCava,
+  salidaColbeef,
+  reimpresa,
+  fechaPlan,
+  fechaDespacho,
+  generado,
+}) {
+  const id = String(rowPlan?.id_producto || '').trim();
+  const puestoActual = sucursalNormLibrilloRow({ sucursal: sucursalActual || rowPlan?.sucursal });
+  const puestoOriginal = sucursalNormLibrilloRow({ sucursal: sucursalOriginal });
+  const fechaSalidaCava = salidaCava?.fecha_salida_cava || rowPlan?.fecha_salida_cava || null;
+  const fechaSalidaColbeef = salidaColbeef?.fecha_salida || null;
+  const pendiente = !fechaSalidaCava && !fechaSalidaColbeef;
+  const diaSalida = fechaBogotaDeValor(fechaSalidaCava || fechaSalidaColbeef);
+  const retenidaParaDespacho = pendiente || diaSalida === fechaDespacho;
+  return {
+    id_producto: id,
+    identificacion: rowPlan?.identificacion || null,
+    propietario: rowPlan?.propietario || rowPlan?.nombre_propietario || null,
+    nombre_propietario: rowPlan?.nombre_propietario || rowPlan?.propietario || null,
+    observacion: rowPlan?.observacion || rowPlan?.observaciones || 'CRUDAS',
+    observaciones: rowPlan?.observaciones || rowPlan?.observacion || 'CRUDAS',
+    empresa_destino: rowPlan?.empresa_destino || null,
+    destino: rowPlan?.destino || null,
+    plaza: rowPlan?.plaza || null,
+    sucursal_original: puestoOriginal || null,
+    sucursal_original_fuente: puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot',
+    sucursal_actual: puestoActual || null,
+    puesto_etiqueta: puestoActual || puestoOriginal || null,
+    sucursal: puestoActual || rowPlan?.sucursal || null,
+    fecha_plan: fechaPlan,
+    fecha_despacho: fechaDespacho,
+    fecha_ingreso_cava: rowPlan?.fecha_ingreso_cava || null,
+    fecha_salida_cava: fechaSalidaCava,
+    fecha_salida_colbeef: fechaSalidaColbeef,
+    dia_salida: diaSalida || null,
+    pendiente_despacho: pendiente,
+    salida_en_fecha_despacho: diaSalida === fechaDespacho,
+    retenida_para_despacho: retenidaParaDespacho,
+    requiere_etiqueta: retenidaParaDespacho && Boolean(puestoActual || puestoOriginal),
+    ya_reimpresa: Boolean(reimpresa),
+    reimpreso_en: reimpresa?.fecha || null,
+    reimpreso_por: reimpresa?.usuario || null,
+    generado_en: generado,
+  };
+}
+
+/**
+ * Crudas de un plan anterior que quedaron en cava y se despachan en una fecha posterior.
+ * Devuelve la sucursal/puesto vigente al día de despacho para imprimir etiqueta nueva.
+ */
+export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespachoISO) {
+  const fechaPlan = String(fechaPlanISO || '').trim();
+  const fechaDespacho = String(fechaDespachoISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaDespacho)) {
+    throw new Error('fecha_plan y fecha_despacho deben ser YYYY-MM-DD');
+  }
+  if (fechaPlan > fechaDespacho) {
+    throw new Error('fecha_plan no puede ser posterior a fecha_despacho');
+  }
+
+  const generado = new Date().toISOString();
+  const filasPlan = await obtenerLibrillosConsultaBdDirecta(fechaPlan);
+  const crudasPlan = (filasPlan || []).filter(esCrudaHistorialLibrillosRow);
+  const ids = crudasPlan.map((d) => String(d?.id_producto || '').trim()).filter(Boolean);
+  const [
+    mapaCava,
+    mapaSalidas,
+    sucursalActualDespacho,
+    sucursalesGuardadas,
+    reimpresosMap,
+  ] = await Promise.all([
+    mapaPendienteSalidaCavaPorIds(ids),
+    mapaSalidasColbeefPorIds(ids),
+    mapaSucursalPorIdsHastaFechaDia(fechaDespacho, ids),
+    leerSucursalesCrudas(),
+    obtenerReimpresionesCrudasMapSeguro(fechaPlan, fechaDespacho),
+  ]);
+  const snapshotPlan = sucursalesGuardadas?.fechas?.[fechaPlan]?.ids || {};
+
+  const items = crudasPlan
+    .map((rowPlan) => {
+      const id = String(rowPlan?.id_producto || '').trim();
+      const salidaCava = mapaCava.get(id) || null;
+      const salidaColbeef = mapaSalidas.get(id) || null;
+      const sucOriginal = snapshotPlan?.[id]?.original?.sucursal || null;
+      const sucActual = sucursalActualDespacho.get(id) || rowPlan?.sucursal || null;
+      return rowCrudaRetenidaEtiqueta({
+        rowPlan,
+        sucursalOriginal: sucOriginal,
+        sucursalActual: sucActual,
+        salidaCava,
+        salidaColbeef,
+        reimpresa: reimpresosMap.get(id),
+        fechaPlan,
+        fechaDespacho,
+        generado,
+      });
+    })
+    .filter((row) => row.retenida_para_despacho)
+    .sort((a, b) => {
+      const s = String(a.puesto_etiqueta || '').localeCompare(String(b.puesto_etiqueta || ''));
+      if (s !== 0) return s;
+      return String(a.id_producto || '').localeCompare(String(b.id_producto || ''), undefined, { numeric: true });
+    });
+
+  const porSucursal = {};
+  for (const row of items) {
+    const k = String(row.puesto_etiqueta || '(sin puesto)');
+    porSucursal[k] = (porSucursal[k] || 0) + 1;
+  }
+
+  return {
+    fecha_plan: fechaPlan,
+    fecha_despacho: fechaDespacho,
+    total_crudas_plan: crudasPlan.length,
+    total_retenidas: items.length,
+    total_con_puesto: items.filter((x) => x.puesto_etiqueta).length,
+    total_sin_puesto: items.filter((x) => !x.puesto_etiqueta).length,
+    total_reimpresas: items.filter((x) => x.ya_reimpresa).length,
+    total_pendientes_etiqueta: items.filter((x) => x.requiere_etiqueta && !x.ya_reimpresa).length,
+    por_sucursal: porSucursal,
+    items,
+    generado_en: generado,
+  };
 }
 
 /**
