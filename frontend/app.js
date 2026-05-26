@@ -5189,7 +5189,7 @@ async function imprimirEtiquetasHistoricoCrudasSeleccion() {
 
 function filasCrudasRetenidasPendientes() {
   return (crudasRetenidasEtiqueta || []).filter(
-    (r) => r?.requiere_etiqueta !== false && !r?.ya_reimpresa
+    (r) => r?.requiere_etiqueta !== false && r?.cambio_sucursal_despacho && !r?.ya_reimpresa
   );
 }
 
@@ -5227,11 +5227,14 @@ function htmlFilaCrudaRetenida(r, seleccionable = false) {
 }
 
 function pintarCrudasRetenidasEtiqueta() {
-  const tbody = document.getElementById('tbody-ret-crudas');
+  const tbodyCambio = document.getElementById('tbody-ret-crudas-cambio') || document.getElementById('tbody-ret-crudas');
+  const tbodyPendientes = document.getElementById('tbody-ret-crudas-pendientes');
   const resumen = document.getElementById('ret-crudas-resumen');
   const chkAll = document.getElementById('chk-ret-crudas');
-  if (!tbody) return;
+  if (!tbodyCambio) return;
   const rows = crudasRetenidasEtiqueta || [];
+  const rowsCambio = rows.filter((r) => r.cambio_sucursal_despacho);
+  const rowsSinCambio = rows.filter((r) => !r.cambio_sucursal_despacho);
   const pendientes = filasCrudasRetenidasPendientes();
   const valid = new Set(pendientes.map((r) => String(r.id_producto || '').trim()));
   crudasRetenidasSeleccionadas = new Set(
@@ -5245,17 +5248,33 @@ function pintarCrudasRetenidasEtiqueta() {
     const reimp = rows.filter((r) => r.ya_reimpresa).length;
     const sinPuesto = rows.filter((r) => !r.puesto_etiqueta).length;
     resumen.textContent = total
-      ? `${total} retenidas en cava · ${conCambio} con cambio sucursal · ${pendientes.length} pendientes de etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
+      ? `${total} retenidas en cava · ${conCambio} con cambio sucursal para imprimir · ${rowsSinCambio.length} sin cambio · ${pendientes.length} pendientes etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
       : '';
   }
   if (!rows.length) {
-    tbody.innerHTML =
+    tbodyCambio.innerHTML =
       '<tr><td colspan="8" class="empty">Sin crudas retenidas pendientes para el plan/despacho seleccionado</td></tr>';
+    if (tbodyPendientes) {
+      tbodyPendientes.innerHTML = '<tr><td colspan="8" class="empty">Sin datos cargados</td></tr>';
+    }
     return;
   }
-  tbody.innerHTML = rows
+  tbodyCambio.innerHTML = rowsCambio.length
+    ? rowsCambio
+      .map((r) => htmlFilaCrudaRetenida(r, valid.has(String(r.id_producto || '').trim())))
+      .join('')
+    : '<tr><td colspan="8" class="empty">No hay crudas retenidas con cambio de sucursal para imprimir</td></tr>';
+  if (tbodyPendientes) {
+    tbodyPendientes.innerHTML = rowsSinCambio.length
+      ? rowsSinCambio
+        .map((r) => htmlFilaCrudaRetenida(r, false))
+        .join('')
+      : '<tr><td colspan="8" class="empty">No hay retenidas sin cambio de sucursal</td></tr>';
+  } else if (!rowsCambio.length) {
+    tbodyCambio.innerHTML = rows
     .map((r) => htmlFilaCrudaRetenida(r, valid.has(String(r.id_producto || '').trim())))
     .join('');
+  }
 }
 
 async function cargarCrudasRetenidasEtiqueta(opts = {}) {

@@ -695,7 +695,7 @@
           <span class="pt">Crudas retenidas en cava — etiqueta para despacho</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <button type="button" class="btn-gen btn-gen-sec" onclick="cargarCrudasRetenidasEtiqueta()">Buscar retenidas</button>
-            <button type="button" class="btn-sel-all" onclick="seleccionarTodasCrudasRetenidas()">Seleccionar pendientes</button>
+            <button type="button" class="btn-sel-all" onclick="seleccionarTodasCrudasRetenidas()">Seleccionar con cambio</button>
             <button type="button" class="btn-gen" onclick="imprimirEtiquetasCrudasRetenidasSeleccion()">Abrir etiquetas (<span id="n-ret-crudas-sel">0</span>)</button>
           </div>
         </div>
@@ -704,6 +704,7 @@
         </p>
         <p id="ret-crudas-rango-label" style="margin:0 0 6px;font-size:12px;color:var(--tx2)">Plan → despacho: —</p>
         <p id="ret-crudas-resumen" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--azul);font-weight:600"></p>
+        <p style="margin:0 0 8px;font-size:12px;color:var(--ok);font-weight:700">Con cambio de sucursal — imprimir etiqueta nueva</p>
         <div class="tw">
           <table class="dt">
             <thead>
@@ -712,7 +713,19 @@
                 <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
               </tr>
             </thead>
-            <tbody id="tbody-ret-crudas"><tr><td colspan="8" class="empty">Seleccione plan y despacho, luego Buscar retenidas</td></tr></tbody>
+            <tbody id="tbody-ret-crudas-cambio"><tr><td colspan="8" class="empty">Seleccione plan y despacho, luego Buscar retenidas</td></tr></tbody>
+          </table>
+        </div>
+        <p style="margin:14px 0 8px;font-size:12px;color:var(--tx2);font-weight:700">Retenidas sin cambio de sucursal — seguimiento</p>
+        <div class="tw">
+          <table class="dt">
+            <thead>
+              <tr>
+                <th style="width:36px"></th>
+                <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-ret-crudas-pendientes"><tr><td colspan="8" class="empty">Sin datos cargados</td></tr></tbody>
           </table>
         </div>
       </div>
