@@ -5203,6 +5203,8 @@ function htmlFilaCrudaRetenida(r, seleccionable = false) {
   const checked = crudasRetenidasSeleccionadas.has(id) ? 'checked' : '';
   const estado = r?.ya_reimpresa
     ? `<span class="hist-badge hist-badge-ok">Reimpresa</span>`
+    : r?.cambio_sucursal_despacho
+      ? `<span class="hist-badge hist-badge-ok">Con cambio</span>`
     : r?.salida_en_fecha_despacho
       ? `<span class="hist-badge hist-badge-ok">Salida despacho</span>`
     : r?.requiere_etiqueta === false
@@ -5239,10 +5241,11 @@ function pintarCrudasRetenidasEtiqueta() {
   actualizarContadorCrudasRetenidas();
   if (resumen) {
     const total = rows.length;
+    const conCambio = rows.filter((r) => r.cambio_sucursal_despacho).length;
     const reimp = rows.filter((r) => r.ya_reimpresa).length;
     const sinPuesto = rows.filter((r) => !r.puesto_etiqueta).length;
     resumen.textContent = total
-      ? `${total} retenidas en cava · ${pendientes.length} pendientes de etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
+      ? `${total} retenidas en cava · ${conCambio} con cambio sucursal · ${pendientes.length} pendientes de etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
       : '';
   }
   if (!rows.length) {
@@ -5283,7 +5286,7 @@ async function cargarCrudasRetenidasEtiqueta(opts = {}) {
       lbl.textContent =
         `Plan ${labelFecha(fechaPlan)} → despacho ${labelFecha(fechaDespacho)} · ` +
         `${data.total_crudas_plan || 0} crudas plan · ${data.total_retenidas || 0} retenidas · ` +
-        `${data.total_pendientes_etiqueta || 0} pendientes etiqueta`;
+        `${data.total_con_cambio_sucursal || 0} con cambio · ${data.total_pendientes_etiqueta || 0} pendientes etiqueta`;
     }
     pintarCrudasRetenidasEtiqueta();
     return data;
@@ -5314,8 +5317,10 @@ function toggleSeleccionCrudaRetenida(id, chk) {
 
 function toggleTodasCrudasRetenidas(chkAll) {
   const pendientes = filasCrudasRetenidasPendientes();
+  const conCambio = pendientes.filter((r) => r.cambio_sucursal_despacho);
+  const objetivo = conCambio.length ? conCambio : pendientes;
   if (chkAll?.checked) {
-    pendientes.forEach((r) => crudasRetenidasSeleccionadas.add(String(r.id_producto || '').trim()));
+    objetivo.forEach((r) => crudasRetenidasSeleccionadas.add(String(r.id_producto || '').trim()));
   } else {
     pendientes.forEach((r) => crudasRetenidasSeleccionadas.delete(String(r.id_producto || '').trim()));
   }

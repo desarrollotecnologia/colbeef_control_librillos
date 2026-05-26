@@ -603,10 +603,77 @@ function fechaBogotaDeValor(valor) {
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
+function horaAuditoriaMs(row) {
+  const fecha = fechaBogotaDeValor(row?.audit_fecha || row?.fecha) || '1970-01-01';
+  const hora = String(row?.audit_hora || row?.hora || '00:00:00').split('-')[0].split('+')[0];
+  const d = new Date(`${fecha}T${hora || '00:00:00'}-05:00`);
+  const base = Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  return base + Number(row?.id_a || 0) / 1000000;
+}
+
+async function mapaAuditoriaSucursalDespachoPorIds(fechaPlan, fechaDespacho, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const res = await pool.query(
+    `
+    SELECT
+      ppe.id_producto::text AS id_producto,
+      apel.id_local,
+      s.nombre AS sucursal,
+      apel.activo,
+      apel.user_name,
+      apel.fecha AS audit_fecha,
+      apel.hora AS audit_hora,
+      apel.accion,
+      apel.id_a
+    FROM a_trazabilidad_proceso.a_parte_producto_empresa_local apel
+    JOIN trazabilidad_proceso.parte_producto_empresa ppe
+      ON ppe.id = apel.id_parte_producto_empresa
+    LEFT JOIN organizaciones.sucursal s ON s.id = apel.id_local
+    WHERE ppe.id_producto::text = ANY($1::text[])
+      AND apel.fecha >= $2::date
+      AND apel.fecha <= $3::date
+    ORDER BY ppe.id_producto::text, apel.fecha ASC NULLS LAST, apel.hora ASC NULLS LAST, apel.id_a ASC NULLS LAST
+    `,
+    [ids, fechaPlan, fechaDespacho]
+  );
+  const porId = new Map();
+  for (const row of res.rows || []) {
+    const id = String(row.id_producto || '').trim();
+    const sucursal = sucursalNormLibrilloRow({ sucursal: row.sucursal });
+    if (!id || !sucursal) continue;
+    if (!porId.has(id)) porId.set(id, []);
+    porId.get(id).push({ ...row, sucursal });
+  }
+
+  for (const [id, rows] of porId.entries()) {
+    const ordenadas = rows.sort((a, b) => horaAuditoriaMs(a) - horaAuditoriaMs(b));
+    const anteriores = ordenadas.filter((r) => fechaBogotaDeValor(r.audit_fecha) < fechaDespacho);
+    const despacho = ordenadas.filter((r) => fechaBogotaDeValor(r.audit_fecha) >= fechaDespacho);
+    const antes = anteriores[anteriores.length - 1] || null;
+    const despues = despacho[despacho.length - 1] || null;
+    if (!despues) continue;
+    const sucAntes = sucursalNormLibrilloRow({ sucursal: antes?.sucursal });
+    const sucDespues = sucursalNormLibrilloRow({ sucursal: despues?.sucursal });
+    out.set(id, {
+      sucursal_antes: sucAntes || null,
+      sucursal_despues: sucDespues || null,
+      usuario: despues.user_name || null,
+      accion: despues.accion || null,
+      fecha: despues.audit_fecha || null,
+      hora: despues.audit_hora || null,
+      cambio: Boolean(sucAntes && sucDespues && sucAntes !== sucDespues),
+    });
+  }
+  return out;
+}
+
 function rowCrudaRetenidaEtiqueta({
   rowPlan,
   sucursalOriginal,
   sucursalActual,
+  auditoriaSucursal,
   salidaCava,
   salidaColbeef,
   reimpresa,
@@ -615,8 +682,12 @@ function rowCrudaRetenidaEtiqueta({
   generado,
 }) {
   const id = String(rowPlan?.id_producto || '').trim();
-  const puestoActual = sucursalNormLibrilloRow({ sucursal: sucursalActual || rowPlan?.sucursal });
-  const puestoOriginal = sucursalNormLibrilloRow({ sucursal: sucursalOriginal });
+  const puestoActual = sucursalNormLibrilloRow({
+    sucursal: auditoriaSucursal?.sucursal_despues || sucursalActual || rowPlan?.sucursal,
+  });
+  const puestoOriginal = sucursalNormLibrilloRow({
+    sucursal: auditoriaSucursal?.sucursal_antes || sucursalOriginal,
+  });
   const fechaSalidaCava = salidaCava?.fecha_salida_cava || rowPlan?.fecha_salida_cava || null;
   const fechaSalidaColbeef = salidaColbeef?.fecha_salida || null;
   const pendiente = !fechaSalidaCava && !fechaSalidaColbeef;
@@ -633,10 +704,17 @@ function rowCrudaRetenidaEtiqueta({
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
     sucursal_original: puestoOriginal || null,
-    sucursal_original_fuente: puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot',
+    sucursal_original_fuente: auditoriaSucursal?.sucursal_antes
+      ? 'auditoria_local'
+      : (puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot'),
     sucursal_actual: puestoActual || null,
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
+    cambio_sucursal_despacho: Boolean(puestoOriginal && puestoActual && puestoOriginal !== puestoActual),
+    cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
+    cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
+    cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
+    cambio_sucursal_hora: auditoriaSucursal?.hora || null,
     fecha_plan: fechaPlan,
     fecha_despacho: fechaDespacho,
     fecha_ingreso_cava: rowPlan?.fecha_ingreso_cava || null,
@@ -677,12 +755,14 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     mapaSalidas,
     sucursalActualDespacho,
     sucursalesGuardadas,
+    auditoriaSucursalDespacho,
     reimpresosMap,
   ] = await Promise.all([
     mapaPendienteSalidaCavaPorIds(ids),
     mapaSalidasColbeefPorIds(ids),
     mapaSucursalPorIdsHastaFechaDia(fechaDespacho, ids),
     leerSucursalesCrudas(),
+    mapaAuditoriaSucursalDespachoPorIds(fechaPlan, fechaDespacho, ids),
     obtenerReimpresionesCrudasMapSeguro(fechaPlan, fechaDespacho),
   ]);
   const snapshotPlan = sucursalesGuardadas?.fechas?.[fechaPlan]?.ids || {};
@@ -698,6 +778,7 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
         rowPlan,
         sucursalOriginal: sucOriginal,
         sucursalActual: sucActual,
+        auditoriaSucursal: auditoriaSucursalDespacho.get(id) || null,
         salidaCava,
         salidaColbeef,
         reimpresa: reimpresosMap.get(id),
@@ -726,6 +807,7 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     total_retenidas: items.length,
     total_con_puesto: items.filter((x) => x.puesto_etiqueta).length,
     total_sin_puesto: items.filter((x) => !x.puesto_etiqueta).length,
+    total_con_cambio_sucursal: items.filter((x) => x.cambio_sucursal_despacho).length,
     total_reimpresas: items.filter((x) => x.ya_reimpresa).length,
     total_pendientes_etiqueta: items.filter((x) => x.requiere_etiqueta && !x.ya_reimpresa).length,
     por_sucursal: porSucursal,
