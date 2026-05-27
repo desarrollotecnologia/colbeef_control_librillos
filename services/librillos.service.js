@@ -604,13 +604,19 @@ function fechaBogotaDeValor(valor) {
 }
 
 function esCambioSucursalOperativoCruda(row) {
-  const antes = String(row?.sucursal_antes || '').trim().toUpperCase();
-  const despues = String(row?.sucursal_despues || '').trim().toUpperCase();
+  const antes = sucursalNormLibrilloRow({ sucursal: row?.sucursal_antes });
+  const despues = sucursalNormLibrilloRow({ sucursal: row?.sucursal_despues });
   if (!antes || !despues || antes === despues) return false;
   // Excluir reasignaciones comerciales que la operación no considera etiqueta nueva de cruda.
   if (antes.includes('VICTOR HUGO Y CIA')) return false;
   if (despues === '8262') return false;
   return true;
+}
+
+function esCambioEtiquetaCrudaOperativa(row) {
+  const antes = sucursalNormLibrilloRow({ sucursal: row?.sucursal_original });
+  const despues = sucursalNormLibrilloRow({ sucursal: row?.sucursal_actual });
+  return esCambioSucursalOperativoCruda({ sucursal_antes: antes, sucursal_despues: despues });
 }
 
 function horaAuditoriaMs(row) {
@@ -696,10 +702,10 @@ function rowCrudaRetenidaEtiqueta({
 }) {
   const id = String(rowPlan?.id_producto || '').trim();
   const puestoActual = sucursalNormLibrilloRow({
-    sucursal: auditoriaSucursal?.sucursal_despues || sucursalActual || rowPlan?.sucursal,
+    sucursal: sucursalActual || rowPlan?.sucursal,
   });
   const puestoOriginal = sucursalNormLibrilloRow({
-    sucursal: auditoriaSucursal?.sucursal_antes || sucursalOriginal,
+    sucursal: sucursalOriginal,
   });
   const fechaSalidaCava = salidaCava?.fecha_salida_cava || rowPlan?.fecha_salida_cava || null;
   const fechaSalidaColbeef = salidaColbeef?.fecha_salida || null;
@@ -717,20 +723,22 @@ function rowCrudaRetenidaEtiqueta({
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
     sucursal_original: puestoOriginal || null,
-    sucursal_original_fuente: auditoriaSucursal?.sucursal_antes
-      ? 'auditoria_local'
-      : (puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot'),
+    sucursal_original_fuente: puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot',
     sucursal_actual: puestoActual || null,
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
-    cambio_sucursal_despacho: esCambioSucursalOperativoCruda({
-      sucursal_antes: puestoOriginal,
-      sucursal_despues: puestoActual,
-    }),
+    cambio_sucursal_despacho: auditoriaSucursal
+      ? Boolean(auditoriaSucursal.cambio)
+      : esCambioEtiquetaCrudaOperativa({
+          sucursal_original: puestoOriginal,
+          sucursal_actual: puestoActual,
+        }),
     cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
+    auditoria_sucursal_antes: auditoriaSucursal?.sucursal_antes || null,
+    auditoria_sucursal_despues: auditoriaSucursal?.sucursal_despues || null,
     fecha_plan: fechaPlan,
     fecha_despacho: fechaDespacho,
     fecha_ingreso_cava: rowPlan?.fecha_ingreso_cava || null,
@@ -788,13 +796,16 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
       const id = String(rowPlan?.id_producto || '').trim();
       const salidaCava = mapaCava.get(id) || null;
       const salidaColbeef = mapaSalidas.get(id) || null;
-      const sucOriginal = snapshotPlan?.[id]?.original?.sucursal || null;
+      const sucOriginal = snapshotPlan?.[id]?.original?.sucursal || rowPlan?.sucursal || null;
       const sucActual = sucursalActualDespacho.get(id) || rowPlan?.sucursal || null;
+      const puestoOriginalEtiqueta = sucursalNormLibrilloRow({ sucursal: sucOriginal });
+      const puestoActualEtiqueta = sucursalNormLibrilloRow({ sucursal: sucActual });
+      const auditoriaSucursal = auditoriaSucursalDespacho.get(id) || null;
       return rowCrudaRetenidaEtiqueta({
         rowPlan,
-        sucursalOriginal: sucOriginal,
-        sucursalActual: sucActual,
-        auditoriaSucursal: auditoriaSucursalDespacho.get(id) || null,
+        sucursalOriginal: puestoOriginalEtiqueta,
+        sucursalActual: puestoActualEtiqueta,
+        auditoriaSucursal,
         salidaCava,
         salidaColbeef,
         reimpresa: reimpresosMap.get(id),

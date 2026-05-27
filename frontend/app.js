@@ -5248,7 +5248,7 @@ function pintarCrudasRetenidasEtiqueta() {
     const reimp = rows.filter((r) => r.ya_reimpresa).length;
     const sinPuesto = rows.filter((r) => !r.puesto_etiqueta).length;
     resumen.textContent = total
-      ? `${total} retenidas en cava · ${conCambio} con cambio sucursal para imprimir · ${rowsSinCambio.length} sin cambio · ${pendientes.length} pendientes etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
+      ? `${total} retenidas en cava · ${conCambio} con cambio operativo para imprimir · ${rowsSinCambio.length} sin cambio · ${pendientes.length} pendientes etiqueta · ${reimp} reimpresas · ${sinPuesto} sin puesto`
       : '';
   }
   if (!rows.length) {
