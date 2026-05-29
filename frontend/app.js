@@ -7676,6 +7676,15 @@ function clientePivotMacro(d, nombreGrupo = '') {
       /\bLARROTA\s*EDINISON\b/.test(src) ||
       /\bLARROTA\s*EDIN(?:SON|ISON)\b/i.test(src);
     if (hasRuthCacua || hasRutCacua || hasCacua || hasCarmen || hasLarrota) return 'RUTH CACUA';
+    const esOlimpicaComercial = (s) => /olimpica|super\s*tiendas/i.test(String(s || ''));
+    if (
+      (esOlimpicaComercial(prop) || esOlimpicaComercial(emp)) &&
+      src.includes('DERIVADOS CARNICOS VISCERAS PARA ACONDICIONAMIENTO')
+    ) {
+      // «PARA JUAN RUEDA» al final es nota operativa; cliente comercial = propietario Olimpica.
+      if (prop && !esEtiquetaOperativa(prop)) return prop;
+      if (emp && !esEtiquetaOperativa(emp)) return emp;
+    }
     if (
       src.includes('JUAN CARLOS RUEDA') ||
       src.includes('JUAN RUEDA') ||
