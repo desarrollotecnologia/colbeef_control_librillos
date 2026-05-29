@@ -39,6 +39,8 @@ import {
   hoyBogotaISO,
   fechaTurnoOperativoBogotaISO,
   diaAnteriorIsoBogota,
+  diaSiguienteIsoBogota,
+  HORA_CORTE_TURNO_BOGOTA,
 } from './librillos/fecha-bogota.js';
 import {
   cachePorFecha,
@@ -727,12 +729,11 @@ function rowCrudaRetenidaEtiqueta({
     sucursal_actual: puestoActual || null,
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
-    cambio_sucursal_despacho: auditoriaSucursal
-      ? Boolean(auditoriaSucursal.cambio)
-      : esCambioEtiquetaCrudaOperativa({
-          sucursal_original: puestoOriginal,
-          sucursal_actual: puestoActual,
-        }),
+    cambio_sucursal_despacho:
+      esCambioEtiquetaCrudaOperativa({
+        sucursal_original: puestoOriginal,
+        sucursal_actual: puestoActual,
+      }) && Boolean(auditoriaSucursal?.sucursal_despues),
     cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
@@ -1435,6 +1436,37 @@ async function idsInsensibilizacionPorFecha(fechaISO) {
   }
 }
 
+/**
+ * Insensibilización asignada al turno del plan (fecha plan):
+ * - todo el día calendario del plan, y
+ * - madrugada del día siguiente hasta HORA_CORTE_TURNO (p. ej. 00:00–05:59 → plan anterior).
+ */
+async function idsInsensibilizacionParaTurnoPlan(fechaISO) {
+  const fecha = String(fechaISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return new Set();
+  const fechaSig = diaSiguienteIsoBogota(fecha);
+  if (!fechaSig) return idsInsensibilizacionPorFecha(fecha);
+  const horaCorte = `${String(HORA_CORTE_TURNO_BOGOTA).padStart(2, '0')}:00:00`;
+  try {
+    const res = await pool.query(
+      `
+      SELECT DISTINCT id_producto::text AS id_producto
+      FROM trazabilidad_proceso.insensibilizacion
+      WHERE fecha_registro = $1::date
+         OR (
+           fecha_registro = $2::date
+           AND COALESCE(hora_registro, '00:00:00'::time) < $3::time
+         )
+      `,
+      [fecha, fechaSig, horaCorte]
+    );
+    return new Set((res.rows || []).map((r) => String(r.id_producto).trim()).filter(Boolean));
+  } catch (err) {
+    console.warn(`⚠️ insensibilizacion turno plan (${fecha}): ${err.message}`);
+    return idsInsensibilizacionPorFecha(fecha);
+  }
+}
+
 function interseccionIdsSets(plan, insens) {
   const out = [];
   for (const id of plan) {
@@ -1574,18 +1606,22 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
     throw new Error('fecha debe ser YYYY-MM-DD');
   }
-  const [plan, insens, emerg, idsListado, idsPlanInsens] = await Promise.all([
+  const [plan, insens, insensTurnoPlan, emerg, idsListado, idsPlanInsens] = await Promise.all([
     idsPlanFaenaPorFecha(fecha),
     idsInsensibilizacionPorFecha(fecha),
+    idsInsensibilizacionParaTurnoPlan(fecha),
     idsSacrificioEmergenciaPorFecha(fecha),
     idsUniversoReporteDia(fecha),
     idsUniversoPlanInsensListado(fecha),
   ]);
   let planSinInsens = 0;
   let planConInsens = 0;
+  let insensMadrugadaSiguienteEnPlan = 0;
   plan.forEach((id) => {
-    if (insens.has(id)) planConInsens += 1;
-    else planSinInsens += 1;
+    if (insensTurnoPlan.has(id)) {
+      planConInsens += 1;
+      if (!insens.has(id)) insensMadrugadaSiguienteEnPlan += 1;
+    } else planSinInsens += 1;
   });
   let insensSinPlan = 0;
   let emergenciaFueraPlan = 0;
@@ -1599,6 +1635,7 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
   insens.forEach((id) => {
     if (!plan.has(id) && !emerg.has(id)) insensSinPlanSinEmergencia += 1;
   });
+  const sacrificios_emergencia = await detalleSacrificiosEmergenciaPorFecha(fecha, plan, emerg);
   return {
     fecha,
     filtro_insensibilizacion_activo: false,
@@ -1611,10 +1648,99 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
     total_plan_interseccion_insens: idsPlanInsens.length,
     plan_con_insensibilizacion: planConInsens,
     plan_sin_insensibilizar: planSinInsens,
+    hora_corte_turno_insens_bogota: HORA_CORTE_TURNO_BOGOTA,
+    insens_madrugada_siguiente_en_plan: insensMadrugadaSiguienteEnPlan,
     insens_sin_plan: insensSinPlan,
     emergencia_fuera_plan: emergenciaFueraPlan,
     insens_sin_plan_sin_emergencia: insensSinPlanSinEmergencia,
+    sacrificios_emergencia,
   };
+}
+
+async function mapaInsensibilizacionDiaPorIds(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const res = await pool.query(
+    `
+    SELECT DISTINCT ON (id_producto::text)
+      id_producto::text AS id_producto,
+      fecha_registro,
+      hora_registro,
+      user_name
+    FROM trazabilidad_proceso.insensibilizacion
+    WHERE fecha_registro = $1::date
+      AND id_producto::text = ANY($2::text[])
+    ORDER BY id_producto::text, hora_registro DESC NULLS LAST
+    `,
+    [fechaISO, ids]
+  );
+  (res.rows || []).forEach((r) => {
+    const id = String(r.id_producto || '').trim();
+    if (id) out.set(id, r);
+  });
+  return out;
+}
+
+async function mapaUltimoPlanFaenaPorIds(idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const res = await pool.query(
+    `
+    SELECT DISTINCT ON (pfp.id_producto::text)
+      pfp.id_producto::text AS id_producto,
+      pf.fecha_plan,
+      pfp.user_name AS usuario_plan
+    FROM trazabilidad_proceso.plan_faena pf
+    JOIN trazabilidad_proceso.plan_faena_producto pfp
+      ON pfp.id_plan_faena = pf.id
+    WHERE pfp.id_producto::text = ANY($1::text[])
+    ORDER BY pfp.id_producto::text,
+      pf.fecha_plan DESC NULLS LAST,
+      pfp.fecha_registro DESC NULLS LAST,
+      pfp.id_plan_faena DESC
+    `,
+    [ids]
+  );
+  (res.rows || []).forEach((r) => {
+    const id = String(r.id_producto || '').trim();
+    if (id) out.set(id, r);
+  });
+  return out;
+}
+
+/** Detalle de reses en puesto sacrificio de emergencia (solo si hay alguna ese día). */
+async function detalleSacrificiosEmergenciaPorFecha(fechaISO, plan, emerg) {
+  if (!INCLUIR_SACRIFICIO_EMERGENCIA || !emerg?.size) return [];
+  const ids = [...emerg].sort((a, b) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  );
+  const [insensMap, planUltimoMap, parteDia] = await Promise.all([
+    mapaInsensibilizacionDiaPorIds(fechaISO, ids),
+    mapaUltimoPlanFaenaPorIds(ids),
+    filasParteProductoPorIdsYFecha(fechaISO, ids),
+  ]);
+  return ids.map((id) => {
+    const ins = insensMap.get(id) || null;
+    const planUlt = planUltimoMap.get(id) || null;
+    const parte = parteDia?.map?.get(id) || null;
+    const fechaPlanUlt = planUlt?.fecha_plan
+      ? fechaBogotaDeValor(planUlt.fecha_plan)
+      : null;
+    const enPlanHoy = plan.has(id);
+    return {
+      id_producto: id,
+      identificacion: parte?.identificacion || null,
+      propietario: parte?.nombre_propietario || parte?.propietario || null,
+      observaciones: parte?.observaciones || parte?.observacion || null,
+      en_plan_faena_hoy: enPlanHoy,
+      fuera_plan_hoy: !enPlanHoy,
+      fecha_plan_vigente: fechaPlanUlt,
+      usuario_insensibilizacion: ins?.user_name || null,
+      hora_insensibilizacion: ins?.hora_registro || null,
+    };
+  });
 }
 
 async function mapaPlanFaenaInfoPorIds(fechaISO, idsTexto) {
@@ -1684,12 +1810,12 @@ export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
     throw new Error('fecha debe ser YYYY-MM-DD');
   }
-  const [plan, insens] = await Promise.all([
+  const [plan, insensTurno] = await Promise.all([
     idsPlanFaenaPorFecha(fecha),
-    idsInsensibilizacionPorFecha(fecha),
+    idsInsensibilizacionParaTurnoPlan(fecha),
   ]);
   const ids = [...plan]
-    .filter((id) => !insens.has(id))
+    .filter((id) => !insensTurno.has(id))
     .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
   const [{ map: parteMap }, planInfoMap, insensPosteriorMap] = await Promise.all([
     filasParteProductoPorIdsYFecha(fecha, ids),

@@ -1416,6 +1416,34 @@ function diaAnteriorISO(iso) {
   return dt.toISOString().slice(0, 10);
 }
 
+/** Domingo sin faena (misma regla que reporte mensual de librillos). */
+function esDomingoIso(iso) {
+  const d = new Date(`${String(iso || '').trim()}T00:00:00-05:00`);
+  return !Number.isNaN(d.getTime()) && d.getUTCDay() === 0;
+}
+
+/**
+ * Último día con proceso antes o igual a la fecha dada (retrocede si cae en domingo).
+ */
+function ultimoDiaConProcesoISO(iso) {
+  let f = String(iso || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return f;
+  let guard = 0;
+  while (esDomingoIso(f) && guard < 8) {
+    f = diaAnteriorISO(f);
+    guard += 1;
+  }
+  return f;
+}
+
+/**
+ * Fecha plan para crudas retenidas / histórico: día de despacho menos uno,
+ * saltando domingo (p. ej. despacho lunes → plan sábado).
+ */
+function fechaPlanDesdeFechaDespacho(fechaDespachoISO) {
+  return ultimoDiaConProcesoISO(diaAnteriorISO(String(fechaDespachoISO || '').trim()));
+}
+
 /**
  * Día operativo por defecto al abrir la app: hasta las 13:00 (Bogotá) = día anterior;
  * desde las 13:00 = día actual. Por la mañana revisan cierre del día previo; por la tarde
@@ -1775,7 +1803,7 @@ function irVista(nombre, btn, opts = {}) {
       const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
       const fd = document.getElementById('fecha-historico-desde');
       const fh = document.getElementById('fecha-historico-hasta');
-      const fechaPlan = diaAnteriorISO(fechaRevision);
+      const fechaPlan = fechaPlanDesdeFechaDespacho(fechaRevision);
       if (fd) fd.value = fechaPlan;
       if (fh) fh.value = fechaRevision;
       prefetchDatosHistoricoReimp(fechaPlan, fechaRevision);
@@ -1927,12 +1955,90 @@ async function refrescarMetaUniversoTurno() {
   refrescarPanelPlanInsens();
 }
 
+function metaConSacrificiosEmergenciaEnriquecidos(meta) {
+  if (!meta || !Array.isArray(meta.sacrificios_emergencia) || !meta.sacrificios_emergencia.length) {
+    return meta;
+  }
+  const porId = new Map(
+    (Array.isArray(datosGlobal) ? datosGlobal : []).map((d) => [
+      String(d?.id_producto || '').trim(),
+      d,
+    ])
+  );
+  return {
+    ...meta,
+    sacrificios_emergencia: meta.sacrificios_emergencia.map((r) => {
+      const d = porId.get(String(r?.id_producto || '').trim());
+      if (!d) return r;
+      return {
+        ...r,
+        identificacion: r.identificacion || d.identificacion || null,
+        propietario: r.propietario || d.propietario || d.nombre_propietario || null,
+        observaciones: r.observaciones || d.observaciones || d.observacion || null,
+      };
+    }),
+  };
+}
+
+function htmlSacrificioEmergenciaPlanInsens(meta) {
+  const items = Array.isArray(meta?.sacrificios_emergencia) ? meta.sacrificios_emergencia : [];
+  if (!items.length) return '';
+  const trs = items.map((r) => {
+    const planTxt = r.en_plan_faena_hoy
+      ? 'También en plan de hoy'
+      : r.fecha_plan_vigente
+        ? `Plan vigente: ${labelFecha(String(r.fecha_plan_vigente).slice(0, 10))}`
+        : 'Sin plan de faena registrado';
+    const hora = r.hora_insensibilizacion
+      ? String(r.hora_insensibilizacion).split('-')[0].slice(0, 5)
+      : '';
+    return `<tr>
+      <td><strong>${escapeHtml(r.id_producto || '—')}</strong></td>
+      <td>${escapeHtml(r.identificacion || '—')}</td>
+      <td>${escapeHtml(r.propietario || '—')}</td>
+      <td><span class="hist-badge hist-badge-ok">Emergencia</span></td>
+      <td>${escapeHtml(planTxt)}</td>
+      <td>${escapeHtml(r.usuario_insensibilizacion || '—')}${hora ? ` · ${escapeHtml(hora)}` : ''}</td>
+    </tr>`;
+  }).join('');
+  const nFuera = items.filter((r) => r.fuera_plan_hoy).length;
+  const notaFuera = nFuera
+    ? `<p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">${nFuera} fuera del plan de hoy (explica +${nFuera} en listado/resumen).</p>`
+    : '';
+  return `
+    <div class="plan-emerg-box" style="margin-top:14px;max-width:920px;padding:10px 12px;border:1px solid #f0d9a8;background:#fffaf0;border-radius:8px">
+      <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#9a6700">Sacrificio de emergencia (${items.length})</p>
+      <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
+        Hubo res(es) insensibilizada(s) en puesto de emergencia este día. No forman parte del plan de faena de la fecha (salvo que también estén en plan hoy).
+      </p>
+      ${notaFuera}
+      <div class="tw">
+        <table class="dt" style="max-width:920px">
+          <thead>
+            <tr><th>ID producto</th><th>Identificación</th><th>Propietario</th><th>Tipo</th><th>Plan</th><th>Insensibilización</th></tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function htmlCuadroPlanVsInsens(meta, opts = {}) {
   if (!meta || !Number(meta.total_plan_faena)) return '';
   const nPlan = Number(meta.total_plan_faena) || 0;
   const nInsens = Number(meta.plan_con_insensibilizacion) || 0;
   const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
   const nListado = Number(meta.total_en_listado) || 0;
+  const horaCorte = Number(meta.hora_corte_turno_insens_bogota);
+  const nMadrugada = Number(meta.insens_madrugada_siguiente_en_plan) || 0;
+  const notaTurno = Number.isFinite(horaCorte)
+    ? `<p style="margin:8px 0 0;font-size:11px;color:var(--tx2);line-height:1.45">
+        Corte de turno insensibilización: hasta las <strong>${String(horaCorte).padStart(2, '0')}:00</strong> del día siguiente
+        (madrugada cuenta para el plan del día anterior).
+        ${nMadrugada ? ` Hoy: <strong>${nMadrugada}</strong> del plan se insensibilizaron en esa madrugada.` : ''}
+      </p>`
+    : '';
+  const bloqueEmerg = htmlSacrificioEmergenciaPlanInsens(meta);
   const detallePendientes = opts.interactivo && nSinInsens > 0
     ? `
       <div class="plan-sin-insens-box" style="margin-top:12px;max-width:760px">
@@ -1961,6 +2067,8 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
           </tbody>
         </table>
       </div>
+      ${notaTurno}
+      ${bloqueEmerg}
       ${detallePendientes}
     </div>`;
 }
@@ -2038,7 +2146,7 @@ function refrescarPanelPlanInsens() {
   const body = document.getElementById('panel-plan-insens-body');
   const lblFecha = document.getElementById('panel-plan-insens-fecha');
   if (!panel || !body) return;
-  const meta = metaUniversoTurno;
+  const meta = metaConSacrificiosEmergenciaEnriquecidos(metaUniversoTurno);
   const vistaHistorial = document.getElementById('vista-historial')?.classList.contains('active');
   if (!meta || !Number(meta.total_plan_faena) || !vistaHistorial) {
     panel.style.display = 'none';
@@ -2593,7 +2701,7 @@ function sincronizarFechasSecundariasConFechaGlobal() {
   actualizarHintFechaReportes();
   const hd = document.getElementById('fecha-historico-desde');
   const hh = document.getElementById('fecha-historico-hasta');
-  if (hd) hd.value = diaAnteriorISO(fg);
+  if (hd) hd.value = fechaPlanDesdeFechaDespacho(fg);
   if (hh) hh.value = fg;
 }
 
@@ -4571,7 +4679,7 @@ async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {})
   const btn = document.querySelector('.nav-item[data-vista="historico"]');
   const fechaRevDefault =
     String(opts.fechaRevision || document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
-  const fechaPlanDefault = String(opts.fechaPlan || diaAnteriorISO(fechaRevDefault)).trim();
+  const fechaPlanDefault = String(opts.fechaPlan || fechaPlanDesdeFechaDespacho(fechaRevDefault)).trim();
   const fd = document.getElementById('fecha-historico-desde');
   const fh = document.getElementById('fecha-historico-hasta');
   if (fd) fd.value = fechaPlanDefault;

@@ -33,4 +33,13 @@ export function diaAnteriorIsoBogota(fechaISO) {
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
+export function diaSiguienteIsoBogota(fechaISO) {
+  const s = String(fechaISO || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+  const d = new Date(`${s}T12:00:00-05:00`);
+  if (Number.isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() + 1);
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
 export { HORA_CORTE_TURNO_BOGOTA };

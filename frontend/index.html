@@ -644,8 +644,8 @@
           <span id="historico-rango-label" style="font-size:12px;color:var(--tx2)">Plan → revisión: —</span>
         </div>
         <p style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.4">
-          <strong>Plan (desde)</strong> = estado del día de faena; <strong>Revisión (hasta)</strong> = día del chequeo (p. ej. 14-may).
-          Filas <em>Cruce plan</em> = sucursal en BD entre plan y revisión. Filas <em>Auditoría</em> = cambios en planillaje. La tabla inferior une ambas fuentes (CRUDAS + cambio de sucursal) y muestra solo las <strong>pendientes de despacho</strong> en el día de revisión.
+          <strong>Plan (desde)</strong> = día de faena (no domingo); <strong>Revisión (hasta)</strong> = día del despacho o chequeo.
+          Los lunes, si el plan quedó en domingo, cámbielo a <strong>sábado</strong> (crudas del sábado en cava). Filas <em>Cruce plan</em> = sucursal en BD entre plan y revisión. Filas <em>Auditoría</em> = cambios en planillaje.
         </p>
         <div class="tw">
           <table class="dt">
@@ -701,6 +701,7 @@
         </div>
         <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
           Para crudas que entraron a cava en el <strong>plan</strong> y se despachan días después. Usa la fecha plan como F.B./F.V. y el puesto/sucursal vigente en la fecha de despacho para la etiqueta nueva.
+          <strong>Domingo no hay faena:</strong> si despacha el lunes, ponga plan <strong>sábado</strong> y despacho <strong>lunes</strong> (lo del sábado que quedó en cava).
         </p>
         <p id="ret-crudas-rango-label" style="margin:0 0 6px;font-size:12px;color:var(--tx2)">Plan → despacho: —</p>
         <p id="ret-crudas-resumen" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--azul);font-weight:600"></p>
