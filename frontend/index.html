@@ -28,7 +28,7 @@
       </button>
       <button type="button" class="nav-item" data-vista="inventario" onclick="irVista('inventario',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="5" r="2" fill="currentColor"/><circle cx="16" cy="15" r="2" fill="currentColor"/></svg>
-        <span class="nav-item-label"><span class="nav-item-title">Inventario</span><span class="nav-item-hint">Despacho · etiquetas</span></span>
+        <span class="nav-item-label"><span class="nav-item-title">Etiqueta cruda</span><span class="nav-item-hint">Impresión · reetiquetado</span></span>
       </button>
       <button type="button" class="nav-item" data-vista="clientes" onclick="irVista('clientes',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2 18c0-4 3.6-7 8-7s8 3 8 7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
@@ -58,7 +58,7 @@
       </button>
       <button type="button" class="nav-item" data-vista="historico" onclick="irVista('historico',this)">
         <svg class="ni" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5a6.5 6.5 0 106.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 1.8v3.4M10 10V6.3M10 10l2.7 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        <span class="nav-item-label"><span class="nav-item-title">Histórico cambios</span><span class="nav-item-hint">Reimpresión crudas</span></span>
+        <span class="nav-item-label"><span class="nav-item-title">Histórico cambios</span><span class="nav-item-hint">Auditoría · cruce plan</span></span>
       </button>
     </nav>
     <div class="sidebar-foot">
@@ -201,34 +201,69 @@
       </div>
     </section>
 
-    <!-- ═══ INVENTARIO ═══ -->
+    <!-- ═══ ETIQUETA CRUDA (solo crudas) ═══ -->
     <section class="vista" id="vista-inventario">
+      <div class="panel panel-ret-crudas" style="margin-bottom:16px">
+        <div class="ph">
+          <span class="pt">Reetiquetado — crudas retenidas en cava</span>
+          <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+            <div>
+              <label class="fl" title="Día del plan de faena (F.B./F.V. en etiqueta)">Fecha plan</label>
+              <input type="date" class="fi" id="etq-cruda-fecha-plan" onchange="actualizarEtiquetaCrudaFechasLabel()">
+            </div>
+            <div>
+              <label class="fl" title="Día del despacho (puesto nuevo en etiqueta)">Fecha despacho</label>
+              <input type="date" class="fi" id="etq-cruda-fecha-despacho" onchange="actualizarEtiquetaCrudaFechasLabel()">
+            </div>
+            <button type="button" class="btn-gen btn-gen-sec" onclick="cargarCrudasRetenidasEtiqueta()">Buscar retenidas</button>
+            <button type="button" class="btn-sel-all" onclick="seleccionarTodasCrudasRetenidas()">Seleccionar con cambio</button>
+            <button type="button" class="btn-gen" onclick="imprimirEtiquetasCrudasRetenidasSeleccion()">Abrir etiquetas (<span id="n-ret-crudas-sel">0</span>)</button>
+          </div>
+        </div>
+        <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
+          Crudas del <strong>plan</strong> que siguen en cava y se despachan después (p. ej. plan sábado → despacho lunes).
+          F.B./F.V. = fecha plan · puesto en etiqueta = sucursal vigente al <strong>despacho</strong>.
+          <strong>Domingo sin faena:</strong> despacho lunes → plan sábado.
+        </p>
+        <p id="ret-crudas-rango-label" style="margin:0 0 6px;font-size:12px;color:var(--tx2)">Plan → despacho: —</p>
+        <p id="ret-crudas-resumen" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--azul);font-weight:600"></p>
+        <p style="margin:0 0 8px;font-size:12px;color:var(--ok);font-weight:700">Con cambio de sucursal — imprimir etiqueta nueva</p>
+        <div class="tw">
+          <table class="dt">
+            <thead>
+              <tr>
+                <th style="width:36px"><input type="checkbox" id="chk-ret-crudas" onchange="toggleTodasCrudasRetenidas(this)"></th>
+                <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-ret-crudas-cambio"><tr><td colspan="8" class="empty">Indique plan y despacho, luego Buscar retenidas</td></tr></tbody>
+          </table>
+        </div>
+        <p style="margin:14px 0 8px;font-size:12px;color:var(--tx2);font-weight:700">Retenidas sin cambio de sucursal — seguimiento</p>
+        <div class="tw">
+          <table class="dt">
+            <thead>
+              <tr>
+                <th style="width:36px"></th>
+                <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-ret-crudas-pendientes"><tr><td colspan="8" class="empty">Sin datos cargados</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="ph">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <span class="pt">Inventario pendiente</span>
-            <div class="subtabs subtabs-inline">
-              <button type="button" class="subtab active" id="stab-inv-lib" onclick="cambiarSubtabInventario('lib')">Librillos</button>
-              <button type="button" class="subtab" id="stab-inv-crud" onclick="cambiarSubtabInventario('crud')">Crudas</button>
-            </div>
-          </div>
-          <span class="badge-count" id="inv-corte-turno-label">Gestión de librillos y crudas por despacho · corte turno salida 06:00</span>
+          <span class="pt">Etiquetas crudas — despacho del día</span>
+          <span class="badge-count" id="inv-corte-turno-label">Crudas por despacho · corte turno salida 06:00</span>
         </div>
-        <div class="inv-toolbar" id="inv-toolbar-lib-top">
-          <input class="srch srch-busca-todo" id="srch-inv" type="search" placeholder="Buscar en cualquier columna o dato…" autocomplete="off" oninput="filtrarInventario()">
-          <span class="badge-count" id="inv-count">0</span>
-          <div style="flex:1"></div>
-          <button type="button" class="btn-sel-all" onclick="seleccionarTodos()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 10l2 2 4-4"/></svg></span>Seleccionar todos</button>
-          <button type="button" class="btn-despachar" id="btn-despachar" onclick="despacharSeleccionados()" disabled>
-            <span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 3h5l2 6h4l2-3h6"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="15.5" cy="17" r="1.5"/></svg></span>Despachar seleccionados (<span id="n-seleccionados">0</span>)
-          </button>
-        </div>
-        <div class="inv-toolbar" id="inv-toolbar-crud-top" style="display:none">
+        <div class="inv-toolbar" id="inv-toolbar-crud-top">
           <input class="srch srch-busca-todo" id="srch-inv-crud" type="search" placeholder="Buscar en cualquier columna o dato…" autocomplete="off" oninput="filtrarInventarioCrud()">
           <span class="badge-count" id="inv-crud-count">0</span>
           <div style="flex:1"></div>
-          <button type="button" class="btn-gen btn-gen-sec" onclick="imprimirEtiquetasCrudas()" title="Generar etiquetas de impresión para todas las crudas cargadas en la fecha">Etiquetas (fecha)</button>
-          <button type="button" class="btn-gen btn-gen-sec" onclick="imprimirEtiquetasCrudasSeleccion()" title="Solo las filas marcadas en la tabla de pendientes">Etiquetas selección</button>
+          <button type="button" class="btn-gen btn-gen-sec" onclick="imprimirEtiquetasCrudas()" title="Etiquetas de todas las crudas de la fecha operativa">Etiquetas (fecha)</button>
+          <button type="button" class="btn-gen btn-gen-sec" onclick="imprimirEtiquetasCrudasSeleccion()" title="Solo filas marcadas en pendientes">Etiquetas selección</button>
           <button type="button" class="btn-sel-all" onclick="seleccionarTodosCrud()"><span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 10l2 2 4-4"/></svg></span>Seleccionar todos</button>
           <button type="button" class="btn-despachar" id="btn-despachar-crud" onclick="despacharSeleccionadosCrud()" disabled>
             <span class="btn-ico"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 3h5l2 6h4l2-3h6"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="15.5" cy="17" r="1.5"/></svg></span>Despachar seleccionados (<span id="n-seleccionados-crud">0</span>)
@@ -236,61 +271,7 @@
         </div>
       </div>
 
-      <div id="subtab-inv-lib">
-        <div class="panel">
-          <div class="ph">
-            <span class="pt">Librillos pendientes de despacho</span>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <span id="inv-total-label" style="font-size:12px;color:var(--tx2)">0 pendientes</span>
-              <span id="inv-mov-real-label" style="font-size:12px;color:var(--tx2)">Mov. real: —</span>
-            </div>
-          </div>
-          <div class="tw">
-            <table class="dt">
-              <thead><tr>
-                <th style="width:36px"><input type="checkbox" id="chk-all" onchange="toggleTodos(this)"></th>
-                <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th>
-                <th>Agrupación</th><th>Sucursal</th><th>Empresa destino</th><th>Observación</th><th>Ingreso cava</th><th>Estado</th>
-                <th id="th-acciones-inv" style="display:none">Acciones</th>
-              </tr></thead>
-              <tbody id="tbody-inv"><tr><td colspan="11" class="empty">Cargando...</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel" style="margin-top:20px">
-          <div class="ph">
-            <span class="pt">Despachados hoy (librillos)</span>
-            <span id="desp-count" style="font-size:12px;color:var(--verde)">0 despachos</span>
-          </div>
-          <div class="tw">
-            <table class="dt">
-              <thead><tr>
-                <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th>
-                <th>Sucursal</th><th>Empresa destino</th><th>Fecha Salida</th><th>Registrado por</th>
-                <th id="th-acciones-desp" style="display:none">Acciones</th>
-              </tr></thead>
-              <tbody id="tbody-desp"><tr><td colspan="8" class="empty">Sin despachos hoy</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel" style="margin-top:20px">
-          <div class="ph">
-            <span class="pt">Salió otro día (librillos)</span>
-            <span id="otro-dia-lib-count" style="font-size:12px;color:var(--tx2)">0 registros</span>
-          </div>
-          <div class="tw">
-            <table class="dt">
-              <thead><tr>
-                <th>ID Producto</th><th>Propietario</th><th>Cliente Destino</th>
-                <th>Sucursal</th><th>Empresa destino</th><th>Fecha Salida</th><th>Fuente</th>
-              </tr></thead>
-              <tbody id="tbody-otro-dia-lib"><tr><td colspan="7" class="empty">Sin registros</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div id="subtab-inv-crud" style="display:none">
+      <div id="subtab-inv-crud">
         <div class="panel">
           <div class="ph">
             <span class="pt">Crudas pendientes de despacho</span>
@@ -669,7 +650,7 @@
         </div>
         <p id="historico-reimp-usuario" style="margin:0 0 8px;font-size:12px;color:var(--tx2)"></p>
         <p id="historico-reimp-ayuda" class="hist-reimp-ayuda" style="margin:0 0 10px;font-size:12px;color:var(--tx2);line-height:1.45">
-          Abre la ventana de impresión; solo al confirmar el cuadro «Marcar como reimpresas» salen de pendientes. Si cancela, siguen en la lista. Puesto en etiqueta = día <strong>revisión</strong>. F.B. = plan · F.V. = plan + 1 día.
+          Cruce plan ↔ revisión por auditoría. Para <strong>reetiquetado de crudas retenidas</strong> (fecha plan + fecha despacho) use el menú <strong>Etiqueta cruda</strong>.
         </p>
         <p id="historico-reimp-resumen" class="hist-reimp-fechas" style="margin:0 0 6px;font-size:12px;color:var(--azul);font-weight:600"></p>
         <details id="historico-reimp-hechas-wrap" class="hist-reimp-hechas-wrap" style="display:none;margin:0 0 10px">
@@ -690,46 +671,6 @@
         </div>
       </div>
 
-      <div class="panel panel-ret-crudas" style="margin-top:20px">
-        <div class="ph">
-          <span class="pt">Crudas retenidas en cava — etiqueta para despacho</span>
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <button type="button" class="btn-gen btn-gen-sec" onclick="cargarCrudasRetenidasEtiqueta()">Buscar retenidas</button>
-            <button type="button" class="btn-sel-all" onclick="seleccionarTodasCrudasRetenidas()">Seleccionar con cambio</button>
-            <button type="button" class="btn-gen" onclick="imprimirEtiquetasCrudasRetenidasSeleccion()">Abrir etiquetas (<span id="n-ret-crudas-sel">0</span>)</button>
-          </div>
-        </div>
-        <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
-          Para crudas que entraron a cava en el <strong>plan</strong> y se despachan días después. Usa la fecha plan como F.B./F.V. y el puesto/sucursal vigente en la fecha de despacho para la etiqueta nueva.
-          <strong>Domingo no hay faena:</strong> si despacha el lunes, ponga plan <strong>sábado</strong> y despacho <strong>lunes</strong> (lo del sábado que quedó en cava).
-        </p>
-        <p id="ret-crudas-rango-label" style="margin:0 0 6px;font-size:12px;color:var(--tx2)">Plan → despacho: —</p>
-        <p id="ret-crudas-resumen" class="hist-reimp-fechas" style="margin:0 0 12px;font-size:12px;color:var(--azul);font-weight:600"></p>
-        <p style="margin:0 0 8px;font-size:12px;color:var(--ok);font-weight:700">Con cambio de sucursal — imprimir etiqueta nueva</p>
-        <div class="tw">
-          <table class="dt">
-            <thead>
-              <tr>
-                <th style="width:36px"><input type="checkbox" id="chk-ret-crudas" onchange="toggleTodasCrudasRetenidas(this)"></th>
-                <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
-              </tr>
-            </thead>
-            <tbody id="tbody-ret-crudas-cambio"><tr><td colspan="8" class="empty">Seleccione plan y despacho, luego Buscar retenidas</td></tr></tbody>
-          </table>
-        </div>
-        <p style="margin:14px 0 8px;font-size:12px;color:var(--tx2);font-weight:700">Retenidas sin cambio de sucursal — seguimiento</p>
-        <div class="tw">
-          <table class="dt">
-            <thead>
-              <tr>
-                <th style="width:36px"></th>
-                <th>Estado</th><th>ID producto</th><th>Propietario</th><th>Puesto etiqueta original</th><th>Puesto nuevo</th><th>Ingreso cava</th><th>Reimpresa</th>
-              </tr>
-            </thead>
-            <tbody id="tbody-ret-crudas-pendientes"><tr><td colspan="8" class="empty">Sin datos cargados</td></tr></tbody>
-          </table>
-        </div>
-      </div>
     </section>
 
     <!-- Modal editar salida (solo admin/usuario propio) -->

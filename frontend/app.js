@@ -1174,7 +1174,7 @@ const cacheMetaUniversoFront = new Map();
 const cachePlanSinInsensFront = new Map();
 /** Caché más larga para rangos (reporte de librillos): evita repetir consultas pesadas al cambiar de vista. */
 const CACHE_RANGO_DATOS_MS = 5 * 60 * 1000;
-let inventarioSubtab = 'lib'; // 'lib' | 'crud'
+let inventarioSubtab = 'crud'; // solo crudas en vista etiqueta cruda
 let _autoInvSnapshot = '';
 let _autoGlobalTimer = null;
 let _cuadreDebounceT = null;
@@ -1496,7 +1496,7 @@ function actualizarLabelCorteTurno() {
   const el = document.getElementById('inv-corte-turno-label');
   if (!el) return;
   const hh = String(HORA_CORTE_TURNO_SALIDA_BOGOTA).padStart(2, '0');
-  el.textContent = `Gestión de librillos y crudas por despacho · corte turno salida ${hh}:00`;
+  el.textContent = `Crudas por despacho · corte turno salida ${hh}:00`;
 }
 
 async function cargarConfigOperacion() {
@@ -1762,7 +1762,7 @@ function irVista(nombre, btn, opts = {}) {
   if (btn) btn.classList.add('active');
   const titulos = {
     historial: 'Turno / Detalle',
-    inventario: 'Inventario y despacho',
+    inventario: 'Etiqueta cruda',
     clientes: 'Por cliente',
     totales: 'Resumen del día',
     reportes: 'Reportes',
@@ -1782,7 +1782,12 @@ function irVista(nombre, btn, opts = {}) {
   const ba = document.getElementById('btn-actualizar');
   if (fg) fg.style.display = '';
   if (ba) ba.style.display = '';
-  if (nombre === 'inventario') renderInventario();
+  if (nombre === 'inventario') {
+    inventarioSubtab = 'crud';
+    sincronizarFechasEtiquetaCrudaConFechaGlobal();
+    actualizarEtiquetaCrudaFechasLabel();
+    renderInventario();
+  }
   else if (nombre === 'historial') {
     if (datosGlobal?.length) {
       renderHistorialLib(datosLibrillos);
@@ -1847,23 +1852,44 @@ function cambiarSubtab(tab) {
   enviarEventoAnalytics({ eventName: 'historial_subtab', meta: { tab } });
 }
 
-// ── SUBTABS INVENTARIO ────────────────────────────────────────────────────────
+// Vista etiqueta cruda: solo crudas (sin subtab librillos).
 function cambiarSubtabInventario(tab) {
-  inventarioSubtab = tab;
-  document.getElementById('stab-inv-lib')?.classList.toggle('active', tab === 'lib');
-  document.getElementById('stab-inv-crud')?.classList.toggle('active', tab === 'crud');
-  const sLib = document.getElementById('subtab-inv-lib');
-  const sCr = document.getElementById('subtab-inv-crud');
-  const tLib = document.getElementById('inv-toolbar-lib-top');
-  const tCr = document.getElementById('inv-toolbar-crud-top');
-  if (sLib) sLib.style.display = tab === 'lib' ? 'block' : 'none';
-  if (sCr) sCr.style.display = tab === 'crud' ? 'block' : 'none';
-  if (tLib) tLib.style.display = tab === 'lib' ? 'flex' : 'none';
-  if (tCr) tCr.style.display = tab === 'crud' ? 'flex' : 'none';
-  seleccionados.clear();
-  seleccionadosCrud.clear();
+  inventarioSubtab = 'crud';
   renderInventario();
-  enviarEventoAnalytics({ eventName: 'inventario_subtab', meta: { tab } });
+  enviarEventoAnalytics({ eventName: 'inventario_subtab', meta: { tab: tab || 'crud' } });
+}
+
+function fechasEtiquetaCruda() {
+  const fechaPlan = String(document.getElementById('etq-cruda-fecha-plan')?.value || '').trim();
+  const fechaDespacho = String(document.getElementById('etq-cruda-fecha-despacho')?.value || '').trim();
+  if (fechaPlan || fechaDespacho) {
+    return {
+      fechaPlan,
+      fechaRevision: fechaDespacho,
+      fechaEtiquetas: fechaDespacho || fechaPlan,
+    };
+  }
+  return fechasReimpresionHistorico();
+}
+
+function sincronizarFechasEtiquetaCrudaConFechaGlobal() {
+  const despacho = String(document.getElementById('fecha-global')?.value || '').trim() || fechaOperativaISO();
+  const plan = fechaPlanDesdeFechaDespacho(despacho);
+  const fp = document.getElementById('etq-cruda-fecha-plan');
+  const fd = document.getElementById('etq-cruda-fecha-despacho');
+  if (fp) fp.value = plan;
+  if (fd) fd.value = despacho;
+}
+
+function actualizarEtiquetaCrudaFechasLabel() {
+  const { fechaPlan, fechaRevision } = fechasEtiquetaCruda();
+  const lbl = document.getElementById('ret-crudas-rango-label');
+  if (!lbl) return;
+  if (!fechaPlan || !fechaRevision) {
+    lbl.textContent = 'Plan → despacho: —';
+    return;
+  }
+  lbl.textContent = `Plan ${labelFecha(fechaPlan)} → despacho ${labelFecha(fechaRevision)}`;
 }
 
 // ── FETCH ─────────────────────────────────────────────────────────────────────
@@ -5386,10 +5412,10 @@ function pintarCrudasRetenidasEtiqueta() {
 }
 
 async function cargarCrudasRetenidasEtiqueta(opts = {}) {
-  const { fechaPlan, fechaRevision } = fechasReimpresionHistorico();
+  const { fechaPlan, fechaRevision } = fechasEtiquetaCruda();
   const fechaDespacho = fechaRevision;
   if (!fechaPlan || !fechaDespacho) {
-    mostrarToast('Selecciona fecha plan y fecha despacho/revisión', 'err');
+    mostrarToast('Selecciona fecha plan y fecha despacho', 'err');
     return;
   }
   if (fechaPlan > fechaDespacho) {
@@ -5467,7 +5493,7 @@ async function imprimirEtiquetasCrudasRetenidasSeleccion() {
     return;
   }
   return runWithAppLoader('Preparando etiquetas de crudas retenidas...', async () => {
-    const { fechaPlan, fechaRevision } = fechasReimpresionHistorico();
+    const { fechaPlan, fechaRevision } = fechasEtiquetaCruda();
     const fechaDespacho = fechaRevision;
     const porId = new Map((crudasRetenidasEtiqueta || []).map((r) => [String(r.id_producto || '').trim(), r]));
     const rows = ids.map((id) => porId.get(String(id))).filter(Boolean);
@@ -5709,6 +5735,10 @@ async function cambiarFecha() {
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
   document.getElementById('pg-sub').textContent = labelFecha(fecha);
   sincronizarFechasSecundariasConFechaGlobal();
+  if (vistaActivaNombre() === 'inventario') {
+    sincronizarFechasEtiquetaCrudaConFechaGlobal();
+    actualizarEtiquetaCrudaFechasLabel();
+  }
   const hit = cacheDatosPorFechaFront.get(fecha);
   const cacheVigente = hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS;
   if (STALE_WHILE_REVALIDATE && cacheVigente) {
@@ -5759,7 +5789,7 @@ async function cargarDatos() {
       .catch((e) => console.warn('Refresco inicial en segundo plano:', e));
     return;
   }
-  return runWithAppLoader('Cargando inventario del turno...', async () => {
+  return runWithAppLoader('Cargando etiquetas crudas...', async () => {
     try {
       abortarLibAuto();
       await cargarDatosTurnoDesdeRed(fecha);
@@ -6651,41 +6681,11 @@ function htmlFilasSalioOtroDiaInventario(registros, modo) {
 }
 
 function renderInventario() {
+  inventarioSubtab = 'crud';
   const fechaSel = document.getElementById('fecha-global')?.value || hoyISO();
   const despachados = listaSalidasInventarioParaDia(fechaSel);
   const otroDia = listaSalioOtroDiaInventario(fechaSel);
-  const movLib = resumenMovimientoRealInventario(datosLibrillos || [], fechaSel);
   const movCrud = resumenMovimientoRealInventario(datosCrudasHist || [], fechaSel);
-
-  const pendLib = obtenerPendientesInventario();
-  const txtLib = (document.getElementById('srch-inv') && document.getElementById('srch-inv').value.toLowerCase().trim()) || '';
-  const tbody = document.getElementById('tbody-inv');
-  const tbodyDesp = document.getElementById('tbody-desp');
-  if (tbody) {
-    document.getElementById('inv-count').textContent = pendLib.length + ' pendientes';
-    document.getElementById('inv-total-label').textContent = txtLib
-      ? pendLib.length + ' coincidencias'
-      : pendLib.length + ' pendientes de despacho';
-    const lblMov = document.getElementById('inv-mov-real-label');
-    if (lblMov) {
-      lblMov.textContent =
-        `Mov. real: ${movLib.despachadoDia} despachado(s) día · ${movLib.pendiente} pendiente(s) · ${movLib.salioOtroDia} salió otro día`;
-    }
-    const vacioPend = txtLib ? 'Sin resultados' : 'Todos los librillos han sido despachados';
-    tbody.innerHTML = htmlFilasPendientesInv(pendLib, vacioPend);
-  }
-  if (tbodyDesp) {
-    const nLibDesp = despachados.filter(s => esVistaHistorialLibrillos(datosGlobal.find(x => x.id_producto === s.id_producto) || {})).length;
-    document.getElementById('desp-count').textContent = nLibDesp + ' despachos';
-    tbodyDesp.innerHTML = htmlFilasDespachadosHoy(despachados, 'lib');
-  }
-  const tbodyOtroLib = document.getElementById('tbody-otro-dia-lib');
-  if (tbodyOtroLib) {
-    const rows = otroDia.filter((r) => esVistaHistorialLibrillos(r.d));
-    const lbl = document.getElementById('otro-dia-lib-count');
-    if (lbl) lbl.textContent = `${rows.length} registros`;
-    tbodyOtroLib.innerHTML = htmlFilasSalioOtroDiaInventario(rows, 'lib');
-  }
 
   const pendCr = obtenerPendientesInventarioCrud();
   const txtCr = (document.getElementById('srch-inv-crud') && document.getElementById('srch-inv-crud').value.toLowerCase().trim()) || '';
@@ -6721,7 +6721,7 @@ function renderInventario() {
 }
 
 function filtrarInventario() {
-  renderInventario();
+  filtrarInventarioCrud();
 }
 
 function filtrarInventarioCrud() {
