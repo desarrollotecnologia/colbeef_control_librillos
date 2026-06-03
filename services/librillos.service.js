@@ -611,7 +611,6 @@ function esCambioSucursalOperativoCruda(row) {
   if (!antes || !despues || antes === despues) return false;
   // Excluir reasignaciones comerciales que la operación no considera etiqueta nueva de cruda.
   if (antes.includes('VICTOR HUGO Y CIA')) return false;
-  if (despues === '8262') return false;
   return true;
 }
 
@@ -619,6 +618,40 @@ function esCambioEtiquetaCrudaOperativa(row) {
   const antes = sucursalNormLibrilloRow({ sucursal: row?.sucursal_original });
   const despues = sucursalNormLibrilloRow({ sucursal: row?.sucursal_actual });
   return esCambioSucursalOperativoCruda({ sucursal_antes: antes, sucursal_despues: despues });
+}
+
+/** Cambio operativo de etiqueta: auditoría despacho (p. ej. CRAX→8262) o plan vs despacho. */
+function cambioEtiquetaCrudaDespacho({ puestoOriginal, puestoActual, auditoriaSucursal }) {
+  const audAntes = sucursalNormLibrilloRow({ sucursal: auditoriaSucursal?.sucursal_antes });
+  const audDespues = sucursalNormLibrilloRow({ sucursal: auditoriaSucursal?.sucursal_despues });
+  if (
+    audAntes &&
+    audDespues &&
+    esCambioSucursalOperativoCruda({ sucursal_antes: audAntes, sucursal_despues: audDespues })
+  ) {
+    return {
+      cambio: true,
+      puesto_original: audAntes,
+      puesto_nuevo: audDespues,
+      fuente: 'auditoria_local',
+    };
+  }
+  const orig = sucursalNormLibrilloRow({ sucursal: puestoOriginal });
+  const act = sucursalNormLibrilloRow({ sucursal: puestoActual });
+  if (esCambioEtiquetaCrudaOperativa({ sucursal_original: orig, sucursal_actual: act })) {
+    return {
+      cambio: true,
+      puesto_original: orig,
+      puesto_nuevo: act,
+      fuente: auditoriaSucursal?.sucursal_despues ? 'auditoria_local' : 'plan_vs_despacho',
+    };
+  }
+  return {
+    cambio: false,
+    puesto_original: orig || audAntes || null,
+    puesto_nuevo: act || audDespues || orig || null,
+    fuente: null,
+  };
 }
 
 function horaAuditoriaMs(row) {
@@ -714,6 +747,13 @@ function rowCrudaRetenidaEtiqueta({
   const pendiente = !fechaSalidaCava && !fechaSalidaColbeef;
   const diaSalida = fechaBogotaDeValor(fechaSalidaCava || fechaSalidaColbeef);
   const retenidaParaDespacho = pendiente || diaSalida === fechaDespacho;
+  const cambioEtq = cambioEtiquetaCrudaDespacho({
+    puestoOriginal,
+    puestoActual,
+    auditoriaSucursal,
+  });
+  const puestoOriginalEtiqueta = cambioEtq.puesto_original || puestoOriginal || null;
+  const puestoNuevoEtiqueta = cambioEtq.puesto_nuevo || puestoActual || puestoOriginal || null;
   return {
     id_producto: id,
     identificacion: rowPlan?.identificacion || null,
@@ -724,17 +764,17 @@ function rowCrudaRetenidaEtiqueta({
     empresa_destino: rowPlan?.empresa_destino || null,
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
-    sucursal_original: puestoOriginal || null,
-    sucursal_original_fuente: puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot',
-    sucursal_actual: puestoActual || null,
-    puesto_etiqueta: puestoActual || puestoOriginal || null,
-    sucursal: puestoActual || rowPlan?.sucursal || null,
-    cambio_sucursal_despacho:
-      esCambioEtiquetaCrudaOperativa({
-        sucursal_original: puestoOriginal,
-        sucursal_actual: puestoActual,
-      }) && Boolean(auditoriaSucursal?.sucursal_despues),
-    cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
+    sucursal_original: puestoOriginalEtiqueta,
+    sucursal_original_fuente: cambioEtq.fuente === 'auditoria_local'
+      ? 'auditoria_local'
+      : puestoOriginal
+        ? 'snapshot_etiqueta_plan'
+        : 'sin_snapshot',
+    sucursal_actual: puestoNuevoEtiqueta,
+    puesto_etiqueta: puestoNuevoEtiqueta,
+    sucursal: puestoNuevoEtiqueta || rowPlan?.sucursal || null,
+    cambio_sucursal_despacho: cambioEtq.cambio,
+    cambio_sucursal_fuente: cambioEtq.fuente || (auditoriaSucursal ? 'auditoria_local' : null),
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
