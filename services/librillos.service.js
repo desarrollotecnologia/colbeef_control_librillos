@@ -614,43 +614,23 @@ function esCambioSucursalOperativoCruda(row) {
   return true;
 }
 
-function esCambioEtiquetaCrudaOperativa(row) {
-  const antes = sucursalNormLibrilloRow({ sucursal: row?.sucursal_original });
-  const despues = sucursalNormLibrilloRow({ sucursal: row?.sucursal_actual });
-  return esCambioSucursalOperativoCruda({ sucursal_antes: antes, sucursal_despues: despues });
-}
-
-/** Cambio operativo de etiqueta: auditoría despacho (p. ej. CRAX→8262) o plan vs despacho. */
-function cambioEtiquetaCrudaDespacho({ puestoOriginal, puestoActual, auditoriaSucursal }) {
-  const audAntes = sucursalNormLibrilloRow({ sucursal: auditoriaSucursal?.sucursal_antes });
-  const audDespues = sucursalNormLibrilloRow({ sucursal: auditoriaSucursal?.sucursal_despues });
-  if (
-    audAntes &&
-    audDespues &&
-    esCambioSucursalOperativoCruda({ sucursal_antes: audAntes, sucursal_despues: audDespues })
-  ) {
+/** Reetiquetado: solo cambios del cruce plan faena → revisión/despacho (misma lista operativa). */
+export function evaluarCambioEtiquetaCrudaCrucePlanRevision(cambioPlanRevision) {
+  const antes = sucursalNormLibrilloRow({ sucursal: cambioPlanRevision?.sucursal_antes });
+  const despues = sucursalNormLibrilloRow({ sucursal: cambioPlanRevision?.sucursal_despues });
+  if (!esCambioSucursalOperativoCruda({ sucursal_antes: antes, sucursal_despues: despues })) {
     return {
-      cambio: true,
-      puesto_original: audAntes,
-      puesto_nuevo: audDespues,
-      fuente: 'auditoria_local',
-    };
-  }
-  const orig = sucursalNormLibrilloRow({ sucursal: puestoOriginal });
-  const act = sucursalNormLibrilloRow({ sucursal: puestoActual });
-  if (esCambioEtiquetaCrudaOperativa({ sucursal_original: orig, sucursal_actual: act })) {
-    return {
-      cambio: true,
-      puesto_original: orig,
-      puesto_nuevo: act,
-      fuente: auditoriaSucursal?.sucursal_despues ? 'auditoria_local' : 'plan_vs_despacho',
+      cambio: false,
+      puesto_original: antes || null,
+      puesto_nuevo: despues || antes || null,
+      fuente: null,
     };
   }
   return {
-    cambio: false,
-    puesto_original: orig || audAntes || null,
-    puesto_nuevo: act || audDespues || orig || null,
-    fuente: null,
+    cambio: true,
+    puesto_original: antes,
+    puesto_nuevo: despues,
+    fuente: cambioPlanRevision?.fuente || 'plan_vs_revision',
   };
 }
 
@@ -727,6 +707,7 @@ function rowCrudaRetenidaEtiqueta({
   rowPlan,
   sucursalOriginal,
   sucursalActual,
+  cambioPlanRevision,
   auditoriaSucursal,
   salidaCava,
   salidaColbeef,
@@ -747,11 +728,7 @@ function rowCrudaRetenidaEtiqueta({
   const pendiente = !fechaSalidaCava && !fechaSalidaColbeef;
   const diaSalida = fechaBogotaDeValor(fechaSalidaCava || fechaSalidaColbeef);
   const retenidaParaDespacho = pendiente || diaSalida === fechaDespacho;
-  const cambioEtq = cambioEtiquetaCrudaDespacho({
-    puestoOriginal,
-    puestoActual,
-    auditoriaSucursal,
-  });
+  const cambioEtq = evaluarCambioEtiquetaCrudaCrucePlanRevision(cambioPlanRevision);
   const puestoOriginalEtiqueta = cambioEtq.puesto_original || puestoOriginal || null;
   const puestoNuevoEtiqueta = cambioEtq.puesto_nuevo || puestoActual || puestoOriginal || null;
   return {
@@ -765,8 +742,8 @@ function rowCrudaRetenidaEtiqueta({
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
     sucursal_original: puestoOriginalEtiqueta,
-    sucursal_original_fuente: cambioEtq.fuente === 'auditoria_local'
-      ? 'auditoria_local'
+    sucursal_original_fuente: cambioEtq.cambio
+      ? cambioEtq.fuente || 'plan_vs_revision'
       : puestoOriginal
         ? 'snapshot_etiqueta_plan'
         : 'sin_snapshot',
@@ -774,7 +751,7 @@ function rowCrudaRetenidaEtiqueta({
     puesto_etiqueta: puestoNuevoEtiqueta,
     sucursal: puestoNuevoEtiqueta || rowPlan?.sucursal || null,
     cambio_sucursal_despacho: cambioEtq.cambio,
-    cambio_sucursal_fuente: cambioEtq.fuente || (auditoriaSucursal ? 'auditoria_local' : null),
+    cambio_sucursal_fuente: cambioEtq.fuente || null,
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
@@ -822,6 +799,7 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     sucursalesGuardadas,
     auditoriaSucursalDespacho,
     reimpresosMap,
+    cruceSucursalPlanRevision,
   ] = await Promise.all([
     mapaPendienteSalidaCavaPorIds(ids),
     mapaSalidasColbeefPorIds(ids),
@@ -829,8 +807,18 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     leerSucursalesCrudas(),
     mapaAuditoriaSucursalDespachoPorIds(fechaPlan, fechaDespacho, ids),
     obtenerReimpresionesCrudasMapSeguro(fechaPlan, fechaDespacho),
+    obtenerCambiosSucursalRevisionPlanFaena(fechaPlan, fechaDespacho).catch((e) => {
+      log.warn('Reetiquetado: cruce plan/revisión', { error: e.message });
+      return { cambios_todos_sucursal: [] };
+    }),
   ]);
   const snapshotPlan = sucursalesGuardadas?.fechas?.[fechaPlan]?.ids || {};
+  const mapaCruceSucursal = new Map(
+    (cruceSucursalPlanRevision?.cambios_todos_sucursal || []).map((c) => [
+      String(c?.id || '').trim(),
+      c,
+    ])
+  );
 
   const items = crudasPlan
     .map((rowPlan) => {
@@ -842,10 +830,18 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
       const puestoOriginalEtiqueta = sucursalNormLibrilloRow({ sucursal: sucOriginal });
       const puestoActualEtiqueta = sucursalNormLibrilloRow({ sucursal: sucActual });
       const auditoriaSucursal = auditoriaSucursalDespacho.get(id) || null;
+      const cruceRow = mapaCruceSucursal.get(id) || null;
       return rowCrudaRetenidaEtiqueta({
         rowPlan,
         sucursalOriginal: puestoOriginalEtiqueta,
         sucursalActual: puestoActualEtiqueta,
+        cambioPlanRevision: cruceRow
+          ? {
+              sucursal_antes: cruceRow.sucursal_antes,
+              sucursal_despues: cruceRow.sucursal_despues,
+              fuente: cruceRow.fuente,
+            }
+          : null,
         auditoriaSucursal,
         salidaCava,
         salidaColbeef,
@@ -876,6 +872,7 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     total_con_puesto: items.filter((x) => x.puesto_etiqueta).length,
     total_sin_puesto: items.filter((x) => !x.puesto_etiqueta).length,
     total_con_cambio_sucursal: items.filter((x) => x.cambio_sucursal_despacho).length,
+    total_cambios_cruce_plan_revision: mapaCruceSucursal.size,
     total_reimpresas: items.filter((x) => x.ya_reimpresa).length,
     total_pendientes_etiqueta: items.filter((x) => x.cambio_sucursal_despacho && x.requiere_etiqueta && !x.ya_reimpresa).length,
     por_sucursal: porSucursal,
