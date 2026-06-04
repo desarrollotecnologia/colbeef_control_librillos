@@ -766,6 +766,20 @@ body{
 ::-webkit-scrollbar-thumb{background:var(--brd);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--tx3)}
 
+/* ── MODO SOLO VISTA (?vista=…&solo=1 o /reporte-librillos) ── */
+body.modo-solo-vista .sidebar,
+body.modo-solo-vista .sidebar-backdrop,
+body.modo-solo-vista .mobile-menu-btn,
+body.modo-solo-vista .topbar {
+  display: none !important;
+}
+body.modo-solo-vista .main {
+  margin-left: 0;
+}
+body.modo-solo-vista .vista {
+  padding-top: 12px;
+}
+
 /* ── PRINT ───────────────────────────────────────── */
 @media print{
   .sidebar,.sidebar-backdrop,.mobile-menu-btn,.topbar,.rep-grid,.btn-print,.btn-pdf,.topbar-vista,.no-print,.toast,.app-loader{display:none!important}

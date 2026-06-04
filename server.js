@@ -89,6 +89,18 @@ app.get('/api/health', async (req, res) => {
 
 app.use(errorHandlerMiddleware);
 
+// Enlace corto desde Inventarios → solo Rep. Librillos (sin menú lateral)
+app.get('/reporte-librillos', (req, res) => {
+  const q = new URLSearchParams(req.query);
+  q.set('vista', 'rep-librillos');
+  q.set('solo', '1');
+  q.delete('usuario');
+  q.delete('user');
+  q.delete('login');
+  const qs = q.toString();
+  res.redirect(302, `/${qs ? `?${qs}` : ''}`);
+});
+
 // Interfaz web (sin caché agresiva: el navegador suele guardar app.js y parece que "no toma cambios")
 app.use(
   express.static(path.join(__dirname, 'frontend'), {
