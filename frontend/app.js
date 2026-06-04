@@ -1737,16 +1737,84 @@ function aplicarConfigUi() {
   bind(home, links.find((x) => x && x.id === 'home'), () => window.location.assign('/'));
 }
 
+let _modoSoloVista = false;
+
+function esModoSoloVista() {
+  return _modoSoloVista;
+}
+
+/** Modo pantalla única: ?solo=1 o ruta /reporte-librillos (oculta menú y barra superior). */
+function aplicarModoSoloPantalla() {
+  try {
+    const path = String(window.location.pathname || '')
+      .replace(/\/+$/, '')
+      .toLowerCase();
+    const q = new URLSearchParams(window.location.search || '');
+    const solo =
+      q.get('solo') === '1' ||
+      q.get('embed') === '1' ||
+      path === '/reporte-librillos' ||
+      path.endsWith('/reporte-librillos');
+    _modoSoloVista = !!solo;
+    if (solo) document.body.classList.add('modo-solo-vista');
+  } catch {
+    /* ignore */
+  }
+}
+
+function repLibAplicarParametrosDesdeQueryString() {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const anio = String(q.get('anio') || q.get('year') || '').trim();
+    const mes = String(q.get('mes') || q.get('month') || '').trim();
+    const selAnio = document.getElementById('rep-lib-anio');
+    const selMes = document.getElementById('rep-lib-mes');
+    if (!selAnio && !selMes) return;
+    repLibArmarAniosSelect();
+    repLibArmarMesesSelect();
+    if (anio && selAnio) {
+      const tiene = [...selAnio.options].some((o) => o.value === anio);
+      if (tiene) selAnio.value = anio;
+    }
+    if (mes && selMes) {
+      const m = Number(mes);
+      if (Number.isFinite(m) && m >= 1 && m <= 12) selMes.value = String(m);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Deep link: ?vista=inventario|historial|… al cargar la página. */
 function aplicarVistaDesdeQueryString() {
   try {
+    aplicarModoSoloPantalla();
+    const path = String(window.location.pathname || '')
+      .replace(/\/+$/, '')
+      .toLowerCase();
     const q = new URLSearchParams(window.location.search || '');
-    const v = (q.get('vista') || '').trim().toLowerCase();
+    let v = (q.get('vista') || '').trim().toLowerCase();
+    if (!v && (path === '/reporte-librillos' || path.endsWith('/reporte-librillos'))) {
+      v = 'rep-librillos';
+      _modoSoloVista = true;
+      document.body.classList.add('modo-solo-vista');
+    }
     if (!v) return;
-    const permitidas = new Set(['historial', 'inventario', 'clientes', 'totales', 'reportes', 'rep-librillos', 'guias', 'historico']);
+    const permitidas = new Set([
+      'historial',
+      'inventario',
+      'clientes',
+      'totales',
+      'reportes',
+      'rep-librillos',
+      'guias',
+      'historico',
+    ]);
     if (!permitidas.has(v)) return;
     const nav = document.querySelector(`.nav-item[data-vista="${v}"]`);
     if (nav) irVista(v, nav);
+    else irVista(v, null);
+    if (v === 'rep-librillos') repLibAplicarParametrosDesdeQueryString();
   } catch {
     /* ignore */
   }
@@ -2329,6 +2397,7 @@ async function refrescarGlobal() {
 }
 
 function iniciarAutoRefreshGlobal() {
+  if (esModoSoloVista()) return;
   if (_autoGlobalTimer) return;
   _autoGlobalTimer = setInterval(refrescarGlobal, AUTO_REFRESH_DATOS_MS);
 }
@@ -5771,6 +5840,7 @@ async function cambiarFecha() {
 
 // ── CARGAR DATOS ──────────────────────────────────────────────────────────────
 async function cargarDatos() {
+  if (esModoSoloVista()) return;
   const fecha = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
   const hit = cacheDatosPorFechaFront.get(fecha);
   const cacheVigente = hit && Date.now() - Number(hit.ts || 0) <= CACHE_FRONT_MS;
@@ -9865,17 +9935,27 @@ actualizarLabelCorteTurno();
 void cargarConfigOperacion();
 window.addEventListener('pointerdown', unlockAudio, { once: true });
 aplicarVistaDesdeQueryString();
-cargarDatos();
-iniciarAutoRefreshGlobal();
-iniciarWatchObservaciones();
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return;
-  clearTimeout(_visCatchupTimer);
-  _visCatchupTimer = setTimeout(() => {
-    void refrescarGlobal();
-    void refrescarSiCambioObservacion();
-  }, 350);
-});
+if (!esModoSoloVista()) {
+  cargarDatos();
+  iniciarAutoRefreshGlobal();
+  iniciarWatchObservaciones();
+} else {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    const vRep = document.getElementById('vista-rep-librillos');
+    if (vRep?.classList.contains('active')) void cargarReporteLibrillosVista(false);
+  });
+}
+if (!esModoSoloVista()) {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    clearTimeout(_visCatchupTimer);
+    _visCatchupTimer = setTimeout(() => {
+      void refrescarGlobal();
+      void refrescarSiCambioObservacion();
+    }, 350);
+  });
+}
 window.addEventListener('resize', () => {
   if (window.innerWidth > 900) cerrarMenuMovil();
 });
