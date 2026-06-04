@@ -206,8 +206,8 @@ function puestoDesdeFilaConsulta(d) {
 }
 
 function detectarCambioPuestoCrudaPlanRevision(dPlan, dRev, obsAnt, obsNue) {
-  const pAnt = sucursalNormLibrilloRow(dPlan);
-  const pNue = sucursalNormLibrilloRow(dRev);
+  const pAnt = puestoOperativoDesdeFila(dPlan, obsAnt);
+  const pNue = puestoOperativoDesdeFila(dRev, obsNue);
   if (pAnt !== pNue && (pAnt || pNue)) return { sucursal_antes: pAnt, sucursal_despues: pNue };
   return null;
 }
@@ -961,7 +961,7 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
     throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
   }
-  const cacheKey = `v3-agrupacion|${fechaPlan}|${fechaRevision}`;
+  const cacheKey = `v4-sucursal-hasta-dia|${fechaPlan}|${fechaRevision}`;
   const hitCruce = cacheCambiosSucursalRevision.get(cacheKey);
   if (hitCruce && Date.now() - Number(hitCruce.ts || 0) <= CACHE_CRUCE_SUCURSAL_MS) {
     return hitCruce.data;
@@ -1011,10 +1011,12 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     };
   }
 
-  const [obsPlan, obsRev, mapaCava] = await Promise.all([
+  const [obsPlan, obsRev, mapaCava, sucursalHastaPlan, sucursalHastaRevision] = await Promise.all([
     mapaObservacionPartePorIdsEnFecha(fechaPlan, idsPlan),
     mapaObservacionPartePorIdsEnFecha(fechaRevision, idsPlan),
     mapaPendienteSalidaCavaPorIds(idsPlan),
+    mapaSucursalPorIdsHastaFechaDia(fechaPlan, idsPlan),
+    mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsPlan),
   ]);
 
   const idsCrudasPlan = idsPlan.filter((id) => {
@@ -1113,13 +1115,34 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     pushCambio(id, diff, obsAnt, obsNue, 'bd_servidor');
   }
 
+  for (const id of idsCrudasPlan) {
+    if (cambios_todos_sucursal.some((x) => x.id === id)) continue;
+    const sAnt = sucursalNormLibrilloRow({ sucursal: sucursalHastaPlan.get(id) });
+    const sNue = sucursalNormLibrilloRow({ sucursal: sucursalHastaRevision.get(id) });
+    if (!esCambioSucursalOperativoCruda({ sucursal_antes: sAnt, sucursal_despues: sNue })) continue;
+    const dPlan = filaPlanPorId.get(id);
+    const dRev = filaRevPorId.get(id);
+    const obsAnt =
+      obsPlan.get(id) ||
+      String(dPlan?.observaciones ?? dPlan?.observacion ?? '').trim();
+    const obsNue =
+      obsRev.get(id) ||
+      String(dRev?.observaciones ?? dRev?.observacion ?? '').trim();
+    pushCambio(
+      id,
+      { sucursal_antes: sAnt, sucursal_despues: sNue },
+      obsAnt,
+      obsNue,
+      'bd_sucursal_hasta_dia'
+    );
+  }
+
   let cambiosGuardados = [];
   try {
-    const sucursalActualRevision = await mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsCrudasPlan);
     cambiosGuardados = await obtenerCambiosSucursalCrudasGuardadas(
       fechaPlan,
       fechaRevision,
-      sucursalActualRevision,
+      sucursalHastaRevision,
       idsCrudasSet
     );
   } catch (e) {
@@ -1129,6 +1152,8 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
   for (const c of cambiosGuardados) {
     const id = String(c?.id || '').trim();
     if (!id || cambios_todos_sucursal.some((x) => x.id === id)) continue;
+    // Si trazabilidad tiene sucursal en plan y revisión, no usar snapshot local (evita origen erróneo).
+    if (sucursalHastaPlan.has(id) && sucursalHastaRevision.has(id)) continue;
     pushCambio(
       id,
       {
