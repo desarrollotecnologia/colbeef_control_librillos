@@ -20,7 +20,6 @@ import {
   obtenerAuditoriaClasificacion,
   obtenerConfigOperacion,
 } from '../services/validacion.service.js';
-import { obtenerEnlacesEntradaColbeef } from '../lib/enlace-entrada.js';
 
 // GET /api/librillos?fecha=YYYY-MM-DD
 // GET /api/librillos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD — rango (una respuesta, más rápido que N llamadas)
@@ -185,19 +184,6 @@ export const getAuditoriaClasificacion = async (req, res) => {
 // GET /api/librillos/config — parámetros operativos del backend
 export const getConfigOperacion = (req, res) => {
   res.json(obtenerConfigOperacion());
-};
-
-// GET /api/librillos/enlace-entrada?destino=programa|reporte-librillos|ambos&usuario=
-export const getEnlaceEntrada = (req, res) => {
-  try {
-    const destino = String(req.query?.destino || 'ambos').trim();
-    const usuario =
-      req.query?.usuario != null ? String(req.query.usuario).trim() : null;
-    res.json(obtenerEnlacesEntradaColbeef({ destino, usuario: usuario || null }));
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message || 'Error al obtener enlace de entrada' });
-  }
 };
 
 // GET /api/librillos/cambios-sucursal-revision?fecha_plan=&fecha_revision= — crudas plan faena vs revisión

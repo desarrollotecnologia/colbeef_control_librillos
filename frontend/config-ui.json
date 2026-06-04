@@ -1,15 +1,6 @@
 {
   "navHistorialHint": "Plan faena · insensibilizados",
-  "linkColbeefDesdeInventario": "http://192.168.20.205:8080/?vista=historial&usuario={usuario}",
-  "entradaDesdeInventario": {
-    "baseUrl": "http://192.168.20.205:8080",
-    "vista": "historial",
-    "usuarioParam": "usuario"
-  },
-  "entradaReporteLibrillos": {
-    "baseUrl": "http://192.168.20.205:8080",
-    "incluirUsuario": false
-  },
+  "linkColbeefDesdeInventario": "http://192.168.20.137:8080/",
   "inventariosPostMessageOrigins": [
     "http://192.168.20.205:8501"
   ],

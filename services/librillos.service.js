@@ -206,8 +206,8 @@ function puestoDesdeFilaConsulta(d) {
 }
 
 function detectarCambioPuestoCrudaPlanRevision(dPlan, dRev, obsAnt, obsNue) {
-  const pAnt = puestoOperativoDesdeFila(dPlan, obsAnt);
-  const pNue = puestoOperativoDesdeFila(dRev, obsNue);
+  const pAnt = sucursalNormLibrilloRow(dPlan);
+  const pNue = sucursalNormLibrilloRow(dRev);
   if (pAnt !== pNue && (pAnt || pNue)) return { sucursal_antes: pAnt, sucursal_despues: pNue };
   return null;
 }
@@ -611,6 +611,7 @@ function esCambioSucursalOperativoCruda(row) {
   if (!antes || !despues || antes === despues) return false;
   // Excluir reasignaciones comerciales que la operación no considera etiqueta nueva de cruda.
   if (antes.includes('VICTOR HUGO Y CIA')) return false;
+  if (despues === '8262') return false;
   return true;
 }
 
@@ -618,81 +619,6 @@ function esCambioEtiquetaCrudaOperativa(row) {
   const antes = sucursalNormLibrilloRow({ sucursal: row?.sucursal_original });
   const despues = sucursalNormLibrilloRow({ sucursal: row?.sucursal_actual });
   return esCambioSucursalOperativoCruda({ sucursal_antes: antes, sucursal_despues: despues });
-}
-
-/** Marca cambio desde fila del cruce plan faena → revisión/despacho. */
-export function evaluarCambioEtiquetaCrudaCrucePlanRevision(cambioPlanRevision) {
-  const antes = sucursalNormLibrilloRow({ sucursal: cambioPlanRevision?.sucursal_antes });
-  const despues = sucursalNormLibrilloRow({ sucursal: cambioPlanRevision?.sucursal_despues });
-  if (!esCambioSucursalOperativoCruda({ sucursal_antes: antes, sucursal_despues: despues })) {
-    return {
-      cambio: false,
-      puesto_original: antes || null,
-      puesto_nuevo: despues || antes || null,
-      fuente: null,
-    };
-  }
-  return {
-    cambio: true,
-    puesto_original: antes,
-    puesto_nuevo: despues,
-    fuente: cambioPlanRevision?.fuente || 'plan_vs_revision',
-  };
-}
-
-/**
- * Reetiquetado: si el cruce plan→revisión respondió, usa solo esa lista (evita falsos positivos).
- * Si el cruce falló, vuelve al criterio operativo previo (plan vs despacho + auditoría despacho).
- */
-export function evaluarCambioEtiquetaCrudaRetenida({
-  puestoOriginal,
-  puestoActual,
-  auditoriaSucursal,
-  cambioPlanRevision,
-  usarSoloCrucePlanRevision = false,
-}) {
-  if (usarSoloCrucePlanRevision) {
-    return evaluarCambioEtiquetaCrudaCrucePlanRevision(cambioPlanRevision);
-  }
-
-  const orig = sucursalNormLibrilloRow({ sucursal: puestoOriginal });
-  const act = sucursalNormLibrilloRow({ sucursal: puestoActual });
-  const audAntes = sucursalNormLibrilloRow({ sucursal: auditoriaSucursal?.sucursal_antes });
-  const audDespues = sucursalNormLibrilloRow({ sucursal: auditoriaSucursal?.sucursal_despues });
-  const hayAudDespacho = Boolean(auditoriaSucursal?.sucursal_despues);
-
-  if (
-    hayAudDespacho &&
-    esCambioSucursalOperativoCruda({ sucursal_antes: orig, sucursal_despues: act })
-  ) {
-    return {
-      cambio: true,
-      puesto_original: orig,
-      puesto_nuevo: act,
-      fuente: 'plan_vs_despacho',
-    };
-  }
-
-  if (
-    hayAudDespacho &&
-    audAntes &&
-    audDespues &&
-    esCambioSucursalOperativoCruda({ sucursal_antes: audAntes, sucursal_despues: audDespues })
-  ) {
-    return {
-      cambio: true,
-      puesto_original: audAntes,
-      puesto_nuevo: audDespues,
-      fuente: 'auditoria_despacho',
-    };
-  }
-
-  return {
-    cambio: false,
-    puesto_original: orig || audAntes || null,
-    puesto_nuevo: act || audDespues || orig || null,
-    fuente: null,
-  };
 }
 
 function horaAuditoriaMs(row) {
@@ -768,8 +694,6 @@ function rowCrudaRetenidaEtiqueta({
   rowPlan,
   sucursalOriginal,
   sucursalActual,
-  cambioPlanRevision,
-  usarSoloCrucePlanRevision,
   auditoriaSucursal,
   salidaCava,
   salidaColbeef,
@@ -790,15 +714,6 @@ function rowCrudaRetenidaEtiqueta({
   const pendiente = !fechaSalidaCava && !fechaSalidaColbeef;
   const diaSalida = fechaBogotaDeValor(fechaSalidaCava || fechaSalidaColbeef);
   const retenidaParaDespacho = pendiente || diaSalida === fechaDespacho;
-  const cambioEtq = evaluarCambioEtiquetaCrudaRetenida({
-    puestoOriginal,
-    puestoActual,
-    auditoriaSucursal,
-    cambioPlanRevision,
-    usarSoloCrucePlanRevision,
-  });
-  const puestoOriginalEtiqueta = cambioEtq.puesto_original || puestoOriginal || null;
-  const puestoNuevoEtiqueta = cambioEtq.puesto_nuevo || puestoActual || puestoOriginal || null;
   return {
     id_producto: id,
     identificacion: rowPlan?.identificacion || null,
@@ -809,17 +724,17 @@ function rowCrudaRetenidaEtiqueta({
     empresa_destino: rowPlan?.empresa_destino || null,
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
-    sucursal_original: puestoOriginalEtiqueta,
-    sucursal_original_fuente: cambioEtq.cambio
-      ? cambioEtq.fuente || 'plan_vs_revision'
-      : puestoOriginal
-        ? 'snapshot_etiqueta_plan'
-        : 'sin_snapshot',
-    sucursal_actual: puestoNuevoEtiqueta,
-    puesto_etiqueta: puestoNuevoEtiqueta,
-    sucursal: puestoNuevoEtiqueta || rowPlan?.sucursal || null,
-    cambio_sucursal_despacho: cambioEtq.cambio,
-    cambio_sucursal_fuente: cambioEtq.fuente || null,
+    sucursal_original: puestoOriginal || null,
+    sucursal_original_fuente: puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot',
+    sucursal_actual: puestoActual || null,
+    puesto_etiqueta: puestoActual || puestoOriginal || null,
+    sucursal: puestoActual || rowPlan?.sucursal || null,
+    cambio_sucursal_despacho:
+      esCambioEtiquetaCrudaOperativa({
+        sucursal_original: puestoOriginal,
+        sucursal_actual: puestoActual,
+      }) && Boolean(auditoriaSucursal?.sucursal_despues),
+    cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
@@ -867,7 +782,6 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     sucursalesGuardadas,
     auditoriaSucursalDespacho,
     reimpresosMap,
-    cruceSucursalPlanRevision,
   ] = await Promise.all([
     mapaPendienteSalidaCavaPorIds(ids),
     mapaSalidasColbeefPorIds(ids),
@@ -875,19 +789,8 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     leerSucursalesCrudas(),
     mapaAuditoriaSucursalDespachoPorIds(fechaPlan, fechaDespacho, ids),
     obtenerReimpresionesCrudasMapSeguro(fechaPlan, fechaDespacho),
-    obtenerCambiosSucursalRevisionPlanFaena(fechaPlan, fechaDespacho).catch((e) => {
-      log.warn('Reetiquetado: cruce plan/revisión', { error: e.message });
-      return null;
-    }),
   ]);
-  const crucePlanRevisionDisponible = cruceSucursalPlanRevision !== null;
   const snapshotPlan = sucursalesGuardadas?.fechas?.[fechaPlan]?.ids || {};
-  const mapaCruceSucursal = new Map(
-    (cruceSucursalPlanRevision?.cambios_todos_sucursal || []).map((c) => [
-      String(c?.id || '').trim(),
-      c,
-    ])
-  );
 
   const items = crudasPlan
     .map((rowPlan) => {
@@ -899,19 +802,10 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
       const puestoOriginalEtiqueta = sucursalNormLibrilloRow({ sucursal: sucOriginal });
       const puestoActualEtiqueta = sucursalNormLibrilloRow({ sucursal: sucActual });
       const auditoriaSucursal = auditoriaSucursalDespacho.get(id) || null;
-      const cruceRow = mapaCruceSucursal.get(id) || null;
       return rowCrudaRetenidaEtiqueta({
         rowPlan,
         sucursalOriginal: puestoOriginalEtiqueta,
         sucursalActual: puestoActualEtiqueta,
-        cambioPlanRevision: cruceRow
-          ? {
-              sucursal_antes: cruceRow.sucursal_antes,
-              sucursal_despues: cruceRow.sucursal_despues,
-              fuente: cruceRow.fuente,
-            }
-          : null,
-        usarSoloCrucePlanRevision: crucePlanRevisionDisponible,
         auditoriaSucursal,
         salidaCava,
         salidaColbeef,
@@ -942,8 +836,6 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
     total_con_puesto: items.filter((x) => x.puesto_etiqueta).length,
     total_sin_puesto: items.filter((x) => !x.puesto_etiqueta).length,
     total_con_cambio_sucursal: items.filter((x) => x.cambio_sucursal_despacho).length,
-    total_cambios_cruce_plan_revision: mapaCruceSucursal.size,
-    cruce_plan_revision_disponible: crucePlanRevisionDisponible,
     total_reimpresas: items.filter((x) => x.ya_reimpresa).length,
     total_pendientes_etiqueta: items.filter((x) => x.cambio_sucursal_despacho && x.requiere_etiqueta && !x.ya_reimpresa).length,
     por_sucursal: porSucursal,
@@ -961,7 +853,7 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaPlan) || !/^\d{4}-\d{2}-\d{2}$/.test(fechaRevision)) {
     throw new Error('fecha_plan y fecha_revision deben ser YYYY-MM-DD');
   }
-  const cacheKey = `v4-sucursal-hasta-dia|${fechaPlan}|${fechaRevision}`;
+  const cacheKey = `v3-agrupacion|${fechaPlan}|${fechaRevision}`;
   const hitCruce = cacheCambiosSucursalRevision.get(cacheKey);
   if (hitCruce && Date.now() - Number(hitCruce.ts || 0) <= CACHE_CRUCE_SUCURSAL_MS) {
     return hitCruce.data;
@@ -1011,12 +903,10 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     };
   }
 
-  const [obsPlan, obsRev, mapaCava, sucursalHastaPlan, sucursalHastaRevision] = await Promise.all([
+  const [obsPlan, obsRev, mapaCava] = await Promise.all([
     mapaObservacionPartePorIdsEnFecha(fechaPlan, idsPlan),
     mapaObservacionPartePorIdsEnFecha(fechaRevision, idsPlan),
     mapaPendienteSalidaCavaPorIds(idsPlan),
-    mapaSucursalPorIdsHastaFechaDia(fechaPlan, idsPlan),
-    mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsPlan),
   ]);
 
   const idsCrudasPlan = idsPlan.filter((id) => {
@@ -1115,34 +1005,13 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
     pushCambio(id, diff, obsAnt, obsNue, 'bd_servidor');
   }
 
-  for (const id of idsCrudasPlan) {
-    if (cambios_todos_sucursal.some((x) => x.id === id)) continue;
-    const sAnt = sucursalNormLibrilloRow({ sucursal: sucursalHastaPlan.get(id) });
-    const sNue = sucursalNormLibrilloRow({ sucursal: sucursalHastaRevision.get(id) });
-    if (!esCambioSucursalOperativoCruda({ sucursal_antes: sAnt, sucursal_despues: sNue })) continue;
-    const dPlan = filaPlanPorId.get(id);
-    const dRev = filaRevPorId.get(id);
-    const obsAnt =
-      obsPlan.get(id) ||
-      String(dPlan?.observaciones ?? dPlan?.observacion ?? '').trim();
-    const obsNue =
-      obsRev.get(id) ||
-      String(dRev?.observaciones ?? dRev?.observacion ?? '').trim();
-    pushCambio(
-      id,
-      { sucursal_antes: sAnt, sucursal_despues: sNue },
-      obsAnt,
-      obsNue,
-      'bd_sucursal_hasta_dia'
-    );
-  }
-
   let cambiosGuardados = [];
   try {
+    const sucursalActualRevision = await mapaSucursalPorIdsHastaFechaDia(fechaRevision, idsCrudasPlan);
     cambiosGuardados = await obtenerCambiosSucursalCrudasGuardadas(
       fechaPlan,
       fechaRevision,
-      sucursalHastaRevision,
+      sucursalActualRevision,
       idsCrudasSet
     );
   } catch (e) {
@@ -1152,8 +1021,6 @@ export async function obtenerCambiosSucursalRevisionPlanFaena(fechaPlanISO, fech
   for (const c of cambiosGuardados) {
     const id = String(c?.id || '').trim();
     if (!id || cambios_todos_sucursal.some((x) => x.id === id)) continue;
-    // Si trazabilidad tiene sucursal en plan y revisión, no usar snapshot local (evita origen erróneo).
-    if (sucursalHastaPlan.has(id) && sucursalHastaRevision.has(id)) continue;
     pushCambio(
       id,
       {

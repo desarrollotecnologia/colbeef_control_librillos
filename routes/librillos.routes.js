@@ -8,7 +8,6 @@ import {
   getDiagnostico,
   getAuditoriaClasificacion,
   getConfigOperacion,
-  getEnlaceEntrada,
   getResumenMacro,
   getCrudasCambioSucursal,
   getCambiosSucursalRevisionPlan,
@@ -25,7 +24,6 @@ router.get('/validacion', getValidacion); // ?fecha=YYYY-MM-DD
 router.get('/diagnostico', getDiagnostico); // ?fecha=YYYY-MM-DD
 router.get('/auditoria-clasificacion', getAuditoriaClasificacion); // ?fecha=YYYY-MM-DD
 router.get('/config', getConfigOperacion);
-router.get('/enlace-entrada', getEnlaceEntrada);
 router.get('/reporte-mensual', getReporteMensualLibrillos); // ?anio=YYYY&mes=1-12
 router.get('/resumen', getResumenMacro); // ?fecha=YYYY-MM-DD
 router.get('/crudas-cambio-sucursal', getCrudasCambioSucursal); // ?fecha=YYYY-MM-DD
