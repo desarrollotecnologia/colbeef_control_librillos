@@ -5500,18 +5500,22 @@ async function imprimirEtiquetasCrudasRetenidasSeleccion() {
     const lista = rows
       .filter((r) => r.requiere_etiqueta !== false && !r.ya_reimpresa)
       .filter((r) => r.cambio_sucursal_despacho)
-      .map((r) => ({
-        id_producto: r.id_producto,
-        identificacion: r.identificacion || r.id_producto,
-        propietario: r.propietario || 'Sin asignar',
-        observacion: r.observacion || 'CRUDAS',
-        observaciones: r.observaciones || r.observacion || 'CRUDAS',
-        sucursal: r.puesto_etiqueta || r.sucursal_actual,
-        plaza: null,
-        empresa_destino: r.empresa_destino || '',
-        fecha_ingreso_cava: r.fecha_ingreso_cava || null,
-        fecha_salida_cava: null,
-      }))
+      .map((r) => {
+        const puesto = r.puesto_etiqueta || r.sucursal_actual || null;
+        return {
+          id_producto: r.id_producto,
+          identificacion: r.identificacion || r.id_producto,
+          propietario: r.propietario || 'Sin asignar',
+          observacion: r.observacion || 'CRUDAS',
+          observaciones: r.observaciones || r.observacion || 'CRUDAS',
+          puesto_etiqueta: puesto,
+          sucursal: puesto,
+          plaza: puesto,
+          empresa_destino: r.empresa_destino || '',
+          fecha_ingreso_cava: r.fecha_ingreso_cava || null,
+          fecha_salida_cava: null,
+        };
+      })
       .filter((d) => d.id_producto && d.sucursal);
     if (!lista.length) {
       mostrarToast('No hay retenidas imprimibles: revise puesto o reimpresión previa.', 'err');
@@ -7413,9 +7417,16 @@ function esPlaceholderTexto(v) {
 }
 
 function esEtiquetaInstruccionOperativa(txt) {
-  const u = String(txt || '').toUpperCase();
+  const u = String(txt || '').toUpperCase().trim();
   if (!u) return false;
-  return /\bRETIRAR?\s+LIBRIL+OS?\b|\bCRUDAS?\b|\bDERIVADOS?\b|\bCARNICOS?\b|\bOBSERVA?CION\b|\bACONDICIONAMIENTO\b|\bDESPOSTE\b|\bCONGELACION\b|\bCABEZA\b|\bCUAJOS\b|\bCANUTAS\b|\bLENGUAS\b/.test(u);
+  if (/\bRETIRAR?\s+LIBRIL+OS?\b/.test(u)) return true;
+  if (/^\s*CRUDAS?\s*$/i.test(u)) return true;
+  if (/^\s*DERIVADOS?\s*$/i.test(u)) return true;
+  if (/^\s*CARNICOS?\s*$/i.test(u)) return true;
+  if (/\bDERIVADOS?\s+CARNICOS?\b/.test(u)) return true;
+  // Puesto real con sufijo CARNICO (p. ej. PLCO CARNICO) — no es texto de instrucción.
+  if (/^[A-Z0-9][A-Z0-9\s./_-]*\s+CARNICOS?$/i.test(u)) return false;
+  return /\bOBSERVA?CION\b|\bACONDICIONAMIENTO\b|\bDESPOSTE\b|\bCONGELACION\b|\bCABEZA\b|\bCUAJOS\b|\bCANUTAS\b|\bLENGUAS\b/.test(u);
 }
 
 /**
@@ -8910,6 +8921,8 @@ function abrirVentanaEtiquetasCrudas(crudas, opts = {}) {
     'file:///C:/Users/CAMPUSLANDS/.cursor/projects/c-laragon-www-colbeef/assets/c__Users_CAMPUSLANDS_AppData_Roaming_Cursor_User_workspaceStorage_6c0d8d21b0889b1b6f744157fa715904_images_image-f0207b74-5fdd-443c-ae30-5731fefecd6b.png';
   const logoEtiquetaFallback = `${window.location.origin}/logo-colbeef.png`;
   const plazaEtiquetaCruda = (d) => {
+    const puestoFijado = limpiarPuestoTxt(d?.puesto_etiqueta);
+    if (puestoFijado && !esPlaceholderTexto(puestoFijado)) return puestoFijado;
     const principal = limpiarPuestoTxt(ubicacionPlaza(d));
     if (principal && principal !== '—') return principal;
     const respaldo = limpiarPuestoTxt(puestoNormalizado(d));
