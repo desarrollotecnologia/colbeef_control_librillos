@@ -44,13 +44,16 @@ export function calcularResumenMacro(fecha, rowsAll, meta_universo, opcionesEnv 
     const u = (s) => sinMarcasDiacriticos(String(s ?? '')).toUpperCase();
     return u(d?.sucursal).includes('OLIMPICA') || u(d?.plaza).includes('OLIMPICA');
   };
+  const tieneCanutasEnObservacion = (d) => /\bcanutas?\b/i.test(textoObs(d));
   let chunchullasCrudas = 0;
   let estiloBogota = 0;
   let olimpica = 0;
+  let canutas = 0;
   rows.forEach((d) => {
     if (tieneEstiloBogota(d)) estiloBogota += 1;
     else if (esCruda(d)) chunchullasCrudas += 1;
     if (esSucursalOlimpica(d)) olimpica += 1;
+    if (tieneCanutasEnObservacion(d)) canutas += 1;
     const codRaw = String(d?.agrupacion_codigo || 'asurcarnes').trim() || 'asurcarnes';
     const recod =
       RESUMEN_RECODIFICAR_ASUR_PENDIENTE_A_COCIDOS &&
@@ -66,6 +69,7 @@ export function calcularResumenMacro(fecha, rowsAll, meta_universo, opcionesEnv 
     chunchullas_crudas: chunchullasCrudas,
     estilo_bogota: estiloBogota,
     olimpica,
+    canutas,
     asurcarnes_glo: Number(countCod.get('asurcarnes_glo') || 0),
     asurcarnescol: Number(countCod.get('asurcarnescol') || 0),
     global_hides: Number(countCod.get('global_hides') || 0),

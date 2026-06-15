@@ -18,4 +18,14 @@ describe('calcularResumenMacro', () => {
     const r = calcularResumenMacro('2026-05-20', rows, null, {});
     assert.equal(r.categorias.cocidos, 1);
   });
+
+  it('cuenta canuta o canutas en observación', () => {
+    const rows = [
+      { agrupacion_codigo: 'cat', observaciones: 'RETIRAR LIBRILLOS CANUTAS' },
+      { agrupacion_codigo: 'cat', observaciones: 'canuta para derivados' },
+      { agrupacion_codigo: 'cat', observaciones: 'DERIVADOS' },
+    ];
+    const r = calcularResumenMacro('2026-05-20', rows, null, {});
+    assert.equal(r.categorias.canutas, 2);
+  });
 });

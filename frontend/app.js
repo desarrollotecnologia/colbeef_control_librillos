@@ -2576,6 +2576,7 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
         .toUpperCase();
     return u(d?.sucursal).includes('OLIMPICA') || u(d?.plaza).includes('OLIMPICA');
   };
+  const tieneCanutasLch = (d) => /\bcanutas?\b/i.test(textoObsResumenLch(d));
 
   const totalCrudas = rm && !usarSoloLibrillos
     ? Number(rm?.categorias?.chunchullas_crudas || 0)
@@ -2589,6 +2590,10 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
     rm && !usarSoloLibrillos
       ? Number(rm?.categorias?.estilo_bogota ?? 0)
       : (baseLista || []).filter(tieneEstiloBogotaLch).length;
+  const vCanutas =
+    rm && !usarSoloLibrillos
+      ? Number(rm?.categorias?.canutas ?? 0)
+      : (baseLista || []).filter(tieneCanutasLch).length;
 
   /** Conteo por agrupacion_codigo del plan completo (misma fuente que listado / API). */
   const vAsurGlo = mapAgr.get('asurcarnes_glo') || 0;
@@ -2728,10 +2733,11 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
             <tbody>
               <tr><td>OLIMPICA</td><td>${vOlimpica}</td></tr>
               <tr><td>ESTILO BOGOTA</td><td>${vEstiloBogota}</td></tr>
+              <tr><td>CANUTAS</td><td>${vCanutas}</td></tr>
             </tbody>
           </table>
           <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:520px">
-            OLIMPICA: sucursal o plaza contiene «OLIMPICA» (con o sin tilde). ESTILO BOGOTA: cualquier fila con ese texto en observación/plan/parte/retiro (con o sin CRUDAS; no entran en CHUNCHULLAS CRUDAS).
+            OLIMPICA: sucursal o plaza contiene «OLIMPICA» (con o sin tilde). ESTILO BOGOTA: cualquier fila con ese texto en observación/plan/parte/retiro (con o sin CRUDAS; no entran en CHUNCHULLAS CRUDAS). CANUTAS: observación/plan/parte/retiro con «canuta» o «canutas» (sin distinguir mayúsculas).
           </p>
         </div>
       </div>
