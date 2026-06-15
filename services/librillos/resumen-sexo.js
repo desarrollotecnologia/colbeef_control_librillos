@@ -45,6 +45,15 @@ export function clasificarSexoProducto(sexoRaw) {
   return 'sin_sexo';
 }
 
+/** Etiqueta legible para UI (Macho / Hembra / texto crudo / null). */
+export function etiquetaSexoProducto(sexoRaw) {
+  const c = clasificarSexoProducto(sexoRaw);
+  if (c === 'macho') return 'Macho';
+  if (c === 'hembra') return 'Hembra';
+  const t = String(sexoRaw ?? '').trim();
+  return t || null;
+}
+
 /**
  * @param {string} fechaISO YYYY-MM-DD
  * @returns {Promise<object>}

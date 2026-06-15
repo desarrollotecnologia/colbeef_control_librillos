@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { clasificarSexoProducto } from '../services/librillos/resumen-sexo.js';
+import { clasificarSexoProducto, etiquetaSexoProducto } from '../services/librillos/resumen-sexo.js';
 
 describe('clasificarSexoProducto', () => {
   it('clasifica hembras', () => {
@@ -20,5 +20,13 @@ describe('clasificarSexoProducto', () => {
     assert.equal(clasificarSexoProducto(''), 'sin_sexo');
     assert.equal(clasificarSexoProducto(null), 'sin_sexo');
     assert.equal(clasificarSexoProducto('otro'), 'sin_sexo');
+  });
+});
+
+describe('etiquetaSexoProducto', () => {
+  it('etiquetas legibles', () => {
+    assert.equal(etiquetaSexoProducto('M'), 'Macho');
+    assert.equal(etiquetaSexoProducto('hembra'), 'Hembra');
+    assert.equal(etiquetaSexoProducto(''), null);
   });
 });

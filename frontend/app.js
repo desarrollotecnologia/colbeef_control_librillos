@@ -2001,9 +2001,19 @@ function metaConSacrificiosEmergenciaEnriquecidos(meta) {
         identificacion: r.identificacion || d.identificacion || null,
         propietario: r.propietario || d.propietario || d.nombre_propietario || null,
         observaciones: r.observaciones || d.observaciones || d.observacion || null,
+        sexo: r.sexo ?? d.sexo ?? null,
+        sexo_etiqueta: r.sexo_etiqueta || d.sexo_etiqueta || null,
+        peso_media_canal_1: r.peso_media_canal_1 ?? d.peso_media_canal_1 ?? null,
+        peso_media_canal_2: r.peso_media_canal_2 ?? d.peso_media_canal_2 ?? null,
       };
     }),
   };
+}
+
+function fmtPesoKgEmergencia(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return n.toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 }
 
 function htmlSacrificioEmergenciaPlanInsens(meta) {
@@ -2018,9 +2028,19 @@ function htmlSacrificioEmergenciaPlanInsens(meta) {
     const hora = r.hora_insensibilizacion
       ? String(r.hora_insensibilizacion).split('-')[0].slice(0, 5)
       : '';
+    const sexoTxt = r.sexo_etiqueta || r.sexo || '—';
+    const sexoCls =
+      String(sexoTxt).toLowerCase() === 'macho'
+        ? 'hist-badge hist-badge-ok'
+        : String(sexoTxt).toLowerCase() === 'hembra'
+          ? 'hist-badge hist-badge-cruda'
+          : 'hist-badge hist-badge-otro';
     return `<tr>
       <td><strong>${escapeHtml(r.id_producto || '—')}</strong></td>
       <td>${escapeHtml(r.identificacion || '—')}</td>
+      <td><span class="${sexoCls}">${escapeHtml(sexoTxt)}</span></td>
+      <td>${escapeHtml(fmtPesoKgEmergencia(r.peso_media_canal_1))}</td>
+      <td>${escapeHtml(fmtPesoKgEmergencia(r.peso_media_canal_2))}</td>
       <td>${escapeHtml(r.propietario || '—')}</td>
       <td><span class="hist-badge hist-badge-ok">Emergencia</span></td>
       <td>${escapeHtml(planTxt)}</td>
@@ -2032,16 +2052,26 @@ function htmlSacrificioEmergenciaPlanInsens(meta) {
     ? `<p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">${nFuera} fuera del plan de hoy (explica +${nFuera} en listado/resumen).</p>`
     : '';
   return `
-    <div class="plan-emerg-box" style="margin-top:14px;max-width:920px;padding:10px 12px;border:1px solid #f0d9a8;background:#fffaf0;border-radius:8px">
+    <div class="plan-emerg-box" style="margin-top:14px;max-width:1100px;padding:10px 12px;border:1px solid #f0d9a8;background:#fffaf0;border-radius:8px">
       <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#9a6700">Sacrificio de emergencia (${items.length})</p>
       <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
-        Hubo res(es) insensibilizada(s) en puesto de emergencia este día. No forman parte del plan de faena de la fecha (salvo que también estén en plan hoy).
+        Reses insensibilizadas en puesto de emergencia este día. Sexo y pesos de medias canales desde trazabilidad (producto).
       </p>
       ${notaFuera}
       <div class="tw">
-        <table class="dt" style="max-width:920px">
+        <table class="dt" style="max-width:1100px">
           <thead>
-            <tr><th>ID producto</th><th>Identificación</th><th>Propietario</th><th>Tipo</th><th>Plan</th><th>Insensibilización</th></tr>
+            <tr>
+              <th>ID producto</th>
+              <th>Arete</th>
+              <th>Sexo</th>
+              <th>Media canal 1 (kg)</th>
+              <th>Media canal 2 (kg)</th>
+              <th>Propietario</th>
+              <th>Tipo</th>
+              <th>Plan</th>
+              <th>Insensibilización</th>
+            </tr>
           </thead>
           <tbody>${trs}</tbody>
         </table>

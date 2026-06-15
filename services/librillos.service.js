@@ -63,7 +63,7 @@ import {
   CACHE_REPORTE_MENSUAL_MS,
 } from './librillos/cache-store.js';
 import { calcularResumenMacro } from './librillos/resumen-macro.js';
-import { obtenerResumenSexoPorFecha } from './librillos/resumen-sexo.js';
+import { obtenerResumenSexoPorFecha, etiquetaSexoProducto } from './librillos/resumen-sexo.js';
 import {
   armarReporteLibrillosMensual,
   esDomingoIso,
@@ -1711,30 +1711,77 @@ async function mapaUltimoPlanFaenaPorIds(idsTexto) {
   return out;
 }
 
+/** Sexo, arete y pesos de canal desde trazabilidad_proceso.producto (solo IDs solicitados). */
+async function mapaProductoDetallePorIds(idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  try {
+    const res = await pool.query(
+      `
+      SELECT
+        id::text AS id_producto,
+        identificacion,
+        sexo,
+        peso_animal_pie,
+        peso_media_canal_1,
+        peso_media_canal_2
+      FROM trazabilidad_proceso.producto
+      WHERE id::text = ANY($1::text[])
+      `,
+      [ids]
+    );
+    (res.rows || []).forEach((r) => {
+      const id = String(r.id_producto || '').trim();
+      if (id) out.set(id, r);
+    });
+  } catch (err) {
+    log.warn('Producto detalle (emergencia)', { error: err.message });
+  }
+  return out;
+}
+
+function numPesoProducto(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** Detalle de reses en puesto sacrificio de emergencia (solo si hay alguna ese día). */
 async function detalleSacrificiosEmergenciaPorFecha(fechaISO, plan, emerg) {
   if (!INCLUIR_SACRIFICIO_EMERGENCIA || !emerg?.size) return [];
   const ids = [...emerg].sort((a, b) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
-  const [insensMap, planUltimoMap, parteDia] = await Promise.all([
+  const [insensMap, planUltimoMap, parteDia, productoMap] = await Promise.all([
     mapaInsensibilizacionDiaPorIds(fechaISO, ids),
     mapaUltimoPlanFaenaPorIds(ids),
     filasParteProductoPorIdsYFecha(fechaISO, ids),
+    mapaProductoDetallePorIds(ids),
   ]);
   return ids.map((id) => {
     const ins = insensMap.get(id) || null;
     const planUlt = planUltimoMap.get(id) || null;
     const parte = parteDia?.map?.get(id) || null;
+    const prod = productoMap.get(id) || null;
     const fechaPlanUlt = planUlt?.fecha_plan
       ? fechaBogotaDeValor(planUlt.fecha_plan)
       : null;
     const enPlanHoy = plan.has(id);
+    const mc1 = numPesoProducto(prod?.peso_media_canal_1);
+    const mc2 = numPesoProducto(prod?.peso_media_canal_2);
+    const pesoCanalTotal =
+      mc1 != null || mc2 != null ? Number(mc1 || 0) + Number(mc2 || 0) : null;
     return {
       id_producto: id,
-      identificacion: parte?.identificacion || null,
+      identificacion: parte?.identificacion || prod?.identificacion || null,
+      sexo: prod?.sexo != null ? String(prod.sexo).trim() : null,
+      sexo_etiqueta: etiquetaSexoProducto(prod?.sexo),
       propietario: parte?.nombre_propietario || parte?.propietario || null,
       observaciones: parte?.observaciones || parte?.observacion || null,
+      peso_animal_pie: numPesoProducto(prod?.peso_animal_pie),
+      peso_media_canal_1: mc1,
+      peso_media_canal_2: mc2,
+      peso_canal_total: pesoCanalTotal,
       en_plan_faena_hoy: enPlanHoy,
       fuera_plan_hoy: !enPlanHoy,
       fecha_plan_vigente: fechaPlanUlt,
