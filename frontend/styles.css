@@ -1824,6 +1824,8 @@ body{
 .resumen-dia-total td:last-child{
   color:#c0392b;
 }
+.resumen-dia-sexo-macho td{background:#e8f0fa}
+.resumen-dia-sexo-hembra td{background:#fde8f0}
 
 /* Cuadros resumen compactos (Reportes) */
 .compact-summary .ph{

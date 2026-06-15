@@ -2201,11 +2201,14 @@ async function fetchSalidas() {
   }
 }
 
-async function fetchResumenMacro(fecha) {
+async function fetchResumenMacro(fecha, opts = {}) {
   if (!fecha) return null;
-  const hit = cacheResumenMacroFront.get(String(fecha));
-  if (hit && (Date.now() - Number(hit.ts || 0)) <= CACHE_FRONT_MS) {
-    return hit.data;
+  const bypass = opts.bypassCache === true;
+  if (!bypass) {
+    const hit = cacheResumenMacroFront.get(String(fecha));
+    if (hit && (Date.now() - Number(hit.ts || 0)) <= CACHE_FRONT_MS) {
+      return hit.data;
+    }
   }
   try {
     const res = await fetch(`${API_URL}/resumen?fecha=${encodeURIComponent(fecha)}`);
@@ -2453,6 +2456,43 @@ function resumenAgrupacionesClienteDestino(lista = datosGlobal) {
   return [...base, ...extras].filter(x => x.total > 0);
 }
 
+/** Cuadro macho/hembra del plan de faena (API resumen_sexo). */
+function htmlResumenSexoPlanFaena(resumenSexo, metaUniverso = null) {
+  const rs = resumenSexo && typeof resumenSexo === 'object' ? resumenSexo : null;
+  if (!rs) return '';
+  const machos = Number(rs.machos || 0);
+  const hembras = Number(rs.hembras || 0);
+  const total = Number(rs.total || 0);
+  const sinSexo = Number(rs.sin_sexo || 0);
+  const nPlan = Number(rs.total_plan_faena || metaUniverso?.total_plan_faena || 0);
+  const nInsens = Number(rs.total_insensibilizados || metaUniverso?.total_insensibilizados || 0);
+  const nEmerg = Number(rs.emergencia_agregadas || metaUniverso?.emergencia_fuera_plan || 0);
+  const notaEmerg =
+    rs.incluir_sacrificio_emergencia !== false && nEmerg > 0
+      ? ` Incluye <strong>${nEmerg}</strong> de emergencia fuera del plan.`
+      : '';
+  const notaSinSexo =
+    sinSexo > 0
+      ? ` <span style="color:var(--rojo)">${sinSexo} sin sexo en producto.</span>`
+      : '';
+  return `
+    <div class="tw rep-table-wrap resumen-dia-tabla-sexo" style="margin-top:14px">
+      <h4 class="rep-bloque-resumen-h" style="font-size:14px;margin:0 0 8px">Plan de faena — sexo</h4>
+      <table class="dt resumen-dia-table" style="max-width:320px">
+        <thead><tr><th>Sexo</th><th>Total</th></tr></thead>
+        <tbody>
+          <tr class="resumen-dia-sexo-macho"><td>Macho</td><td>${machos}</td></tr>
+          <tr class="resumen-dia-sexo-hembra"><td>Hembra</td><td>${hembras}</td></tr>
+          <tr class="resumen-dia-total"><td>TOTAL</td><td>${total}</td></tr>
+        </tbody>
+      </table>
+      <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:520px;line-height:1.45">
+        Plan faena: <strong>${nPlan}</strong> · insensibilizados hoy: <strong>${nInsens}</strong>.
+        Se actualiza al planillar (auto-refresh).${notaEmerg}${notaSinSexo}
+      </p>
+    </div>`;
+}
+
 /** HTML del cuadro «Resumen de libros y chunchullas crudas» (solo Reporte general / export). */
 function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
   const rm = opts?.resumenMacro || null;
@@ -2637,12 +2677,14 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       : `Total consolidado: <strong>${totalGeneral}</strong>`;
 
   const cuadroPlan = opts?.metaUniverso ? htmlCuadroPlanVsInsens(opts.metaUniverso) : '';
+  const cuadroSexo = !usarSoloLibrillos ? htmlResumenSexoPlanFaena(rm?.resumen_sexo, opts?.metaUniverso) : '';
 
   return `
     <div class="rep-bloque-resumen-lch">
       <h3 class="rep-bloque-resumen-h">Resumen de libros y chunchullas crudas</h3>
       <p class="rep-bloque-resumen-meta">${metaTotal}</p>
       ${cuadroPlan}
+      ${cuadroSexo}
       <div class="resumen-dia-dos-tablas">
         <div class="tw rep-table-wrap">
         <table class="dt resumen-dia-table" style="max-width:520px">
@@ -2753,7 +2795,10 @@ async function actualizarVistaTotales() {
         const usarCacheDia =
           fecha && fecha === fechaDatosGlobal && Array.isArray(datosGlobal) && datosGlobal.length > 0;
         if (usarCacheDia) {
-          [salidas, resumenMacro] = await Promise.all([fetchSalidas(), fetchResumenMacro(fecha)]);
+          [salidas, resumenMacro] = await Promise.all([
+            fetchSalidas(),
+            fetchResumenMacro(fecha, { bypassCache: true }),
+          ]);
           datos = datosGlobal;
           metaUniversoTurno =
             resumenMacro?.meta_universo || (await fetchMetaUniverso(fecha));
@@ -2761,7 +2806,7 @@ async function actualizarVistaTotales() {
           [datos, salidas, resumenMacro] = await Promise.all([
             fetchPorFecha(fecha),
             fetchSalidas(),
-            fetchResumenMacro(fecha),
+            fetchResumenMacro(fecha, { bypassCache: true }),
           ]);
           metaUniversoTurno =
             resumenMacro?.meta_universo || (await fetchMetaUniverso(fecha));

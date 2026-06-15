@@ -63,6 +63,7 @@ import {
   CACHE_REPORTE_MENSUAL_MS,
 } from './librillos/cache-store.js';
 import { calcularResumenMacro } from './librillos/resumen-macro.js';
+import { obtenerResumenSexoPorFecha } from './librillos/resumen-sexo.js';
 import {
   armarReporteLibrillosMensual,
   esDomingoIso,
@@ -2509,17 +2510,31 @@ export const obtenerLibrillosPorFecha = async (fecha) => await consultarLibrillo
 
 export async function obtenerResumenMacroPorFecha(fecha) {
   let meta_universo = null;
+  let resumen_sexo = null;
   try {
-    meta_universo = await obtenerMetaUniversoPorFecha(fecha);
+    [meta_universo, resumen_sexo] = await Promise.all([
+      obtenerMetaUniversoPorFecha(fecha),
+      obtenerResumenSexoPorFecha(fecha).catch((err) => {
+        log.warn('Resumen sexo no disponible', { fecha, error: err.message });
+        return null;
+      }),
+    ]);
   } catch {
     meta_universo = null;
+    try {
+      resumen_sexo = await obtenerResumenSexoPorFecha(fecha);
+    } catch (err) {
+      log.warn('Resumen sexo no disponible', { fecha, error: err.message });
+      resumen_sexo = null;
+    }
   }
   const datos = await consultarLibrillosConCache(fecha);
   const rowsAll = Array.isArray(datos) ? datos : [];
-  return calcularResumenMacro(fecha, rowsAll, meta_universo, {
+  const macro = calcularResumenMacro(fecha, rowsAll, meta_universo, {
     requiere_insensibilizacion_plan_faena: REQUIERE_INSENSIBILIZACION_PLAN_FAENA,
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
   });
+  return { ...macro, resumen_sexo };
 }
 
 /** Días calendario Bogotá entre dos fechas ISO (inclusive). */
