@@ -1476,18 +1476,6 @@ function interseccionIdsSets(plan, insens) {
   return out.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
 }
 
-function unionPlanInsensMasEmergencia(plan, insens, emerg) {
-  const merged = new Set(interseccionIdsSets(plan, insens));
-  if (emerg && emerg.size) {
-    for (const id of emerg) {
-      if (insens.has(id)) merged.add(String(id).trim());
-    }
-  }
-  return [...merged].sort((a, b) =>
-    String(a).localeCompare(String(b), undefined, { numeric: true })
-  );
-}
-
 let sqlSacrificioEmergenciaCache = null;
 let sacrificioEmergenciaTablaOk = undefined;
 
@@ -1578,27 +1566,18 @@ async function idsUniversoReporteDia(fechaISO) {
       if (!planOtroDia.has(String(id))) merged.add(id);
     });
   }
-  if (INCLUIR_SACRIFICIO_EMERGENCIA) {
-    const emerg = await idsSacrificioEmergenciaPorFecha(fechaISO);
-    const extrasEmerg = [...emerg].filter((id) => !plan.has(id));
-    const planOtroDia = await idsConPlanFaenaActivoEnOtraFecha(fechaISO, extrasEmerg);
-    for (const id of emerg) {
-      if (!plan.has(id) && !planOtroDia.has(String(id).trim())) merged.add(String(id).trim());
-    }
-  }
   return [...merged].sort((a, b) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
 }
 
-/** Subconjunto informativo plan ∩ insens (+ emergencia), solo para KPI / diagnóstico. */
+/** Subconjunto informativo plan ∩ insens (solo planillados del día). */
 async function idsUniversoPlanInsensListado(fechaISO) {
-  const [plan, insens, emerg] = await Promise.all([
+  const [plan, insens] = await Promise.all([
     idsPlanFaenaPorFecha(fechaISO),
     idsInsensibilizacionPorFecha(fechaISO),
-    idsSacrificioEmergenciaPorFecha(fechaISO),
   ]);
-  return unionPlanInsensMasEmergencia(plan, insens, emerg);
+  return interseccionIdsSets(plan, insens);
 }
 
 /** Metadatos plan vs insensibilización (KPI / diagnóstico). */
@@ -1616,22 +1595,20 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
     idsUniversoPlanInsensListado(fecha),
   ]);
   const insensAnteriorPlan = await idsInsensibilizacionAntesDeFecha(fecha, plan);
-  const totalPlanPlanillado = plan.size;
   let planSinInsens = 0;
   let planConInsens = 0;
   let planInsensFechaAnterior = 0;
   let insensMadrugadaSiguienteEnPlan = 0;
   plan.forEach((id) => {
-    if (insensAnteriorPlan.has(id)) {
-      planInsensFechaAnterior += 1;
-      return;
-    }
     if (insensTurnoPlan.has(id)) {
       planConInsens += 1;
       if (!insens.has(id)) insensMadrugadaSiguienteEnPlan += 1;
+    } else if (insensAnteriorPlan.has(id)) {
+      planConInsens += 1;
+      planInsensFechaAnterior += 1;
     } else planSinInsens += 1;
   });
-  const totalPlanOperativo = planConInsens + planSinInsens;
+  const totalInsensEnPlan = [...insens].filter((id) => plan.has(id)).length;
   let insensSinPlan = 0;
   let emergenciaFueraPlan = 0;
   insens.forEach((id) => {
@@ -1650,9 +1627,9 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
     filtro_insensibilizacion_activo: false,
     universo_plan_completo: true,
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
-    total_plan_faena: totalPlanOperativo,
-    total_plan_faena_planillado: totalPlanPlanillado,
-    total_insensibilizados: insens.size,
+    total_plan_faena: plan.size,
+    total_insensibilizados: totalInsensEnPlan,
+    total_insensibilizados_calendario: insens.size,
     total_sacrificio_emergencia: emerg.size,
     total_en_listado: idsListado.length,
     total_plan_interseccion_insens: idsPlanInsens.length,
@@ -1953,13 +1930,10 @@ export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
   });
   const totalPosterior = items.filter((x) => x.estado === 'INSENSIBILIZADO_POSTERIOR').length;
   const totalPendientes = items.filter((x) => x.estado === 'PENDIENTE_INSENSIBILIZACION').length;
-  const totalPlanPlanillado = plan.size;
-  const totalPlanOperativo = totalPlanPlanillado - itemsAnterior.length;
   return {
     fecha,
-    total_plan_faena: totalPlanOperativo,
-    total_plan_faena_planillado: totalPlanPlanillado,
-    total_insensibilizados_en_plan: totalPlanOperativo - totalPendientes,
+    total_plan_faena: plan.size,
+    total_insensibilizados_en_plan: plan.size - totalPendientes,
     total_sin_insensibilizar: totalPendientes,
     total_insensibilizados_anterior: itemsAnterior.length,
     total_insensibilizados_posterior: totalPosterior,
@@ -2321,7 +2295,7 @@ const consultarLibrillos = async (fecha = null) => {
             };
           });
           if (COLBEEF_DEBUG) {
-            const modoUniverso = `plan completo${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}${INCLUIR_SACRIFICIO_EMERGENCIA ? '+emerg fuera plan' : ''}`;
+            const modoUniverso = `plan completo${USE_UNION_PARTE_PLAN_DIA ? '+parte día' : ''}`;
             console.log(
               `🧭 Universo ${fechaISO}: ${idsOrdenados.length} IDs (${modoUniverso}) · con parte tipo ${ID_TIPO_PARTE_COLBEEF} mismo día: ${idsConParte.size}`
             );

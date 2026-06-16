@@ -2082,10 +2082,10 @@ function htmlSacrificioEmergenciaPlanInsens(meta) {
 function htmlCuadroPlanVsInsens(meta, opts = {}) {
   if (!meta || !Number(meta.total_plan_faena)) return '';
   const nPlan = Number(meta.total_plan_faena) || 0;
-  const nPlanPlanillado = Number(meta.total_plan_faena_planillado) || nPlan;
   const nInsens = Number(meta.plan_con_insensibilizacion) || 0;
   const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
   const nAnterior = Number(meta.plan_insensibilizado_fecha_anterior) || 0;
+  const nInsensCal = Number(meta.total_insensibilizados_calendario);
   const nListado = Number(meta.total_en_listado) || 0;
   const horaCorte = Number(meta.hora_corte_turno_insens_bogota);
   const nMadrugada = Number(meta.insens_madrugada_siguiente_en_plan) || 0;
@@ -2094,7 +2094,10 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
         Corte de turno insensibilización: hasta las <strong>${String(horaCorte).padStart(2, '0')}:00</strong> del día siguiente
         (madrugada cuenta para el plan del día anterior).
         ${nMadrugada ? ` Hoy: <strong>${nMadrugada}</strong> del plan se insensibilizaron en esa madrugada.` : ''}
-        ${nAnterior ? ` <strong>${nAnterior}</strong> planillados tarde (ya sacrificados antes) no entran en el total operativo.` : ''}
+        ${nAnterior ? ` <strong>${nAnterior}</strong> del plan ya estaban insensibilizados en fecha anterior (planillaje tardío).` : ''}
+        ${Number.isFinite(nInsensCal) && nInsensCal > Number(meta.total_insensibilizados || 0)
+    ? ` Insensibilizados calendario del día: <strong>${nInsensCal}</strong> (emergencias fuera de plan no entran al total).`
+    : ''}
       </p>`
     : '';
   const bloqueEmerg = htmlSacrificioEmergenciaPlanInsens(meta);
@@ -2119,10 +2122,9 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
         <table class="dt plan-insens-table" style="max-width:520px">
           <thead><tr><th>Indicador</th><th>Cantidad</th></tr></thead>
           <tbody>
-            <tr><td>En plan de faena (a faenar este día)</td><td><strong>${nPlan}</strong></td></tr>
-            ${nAnterior ? `<tr><td>Planillaje tardío (ya sacrificados antes)</td><td><strong>${nAnterior}</strong></td></tr>` : ''}
-            ${nPlanPlanillado > nPlan ? `<tr><td>Total planillado en sistema</td><td><strong>${nPlanPlanillado}</strong></td></tr>` : ''}
+            <tr><td>En plan de faena (planillado)</td><td><strong>${nPlan}</strong></td></tr>
             <tr><td>Ya insensibilizados (en plan)</td><td><strong>${nInsens}</strong></td></tr>
+            ${nAnterior ? `<tr><td>En plan, ya sacrificados en fecha anterior</td><td><strong>${nAnterior}</strong></td></tr>` : ''}
             <tr><td>En plan sin insensibilizar</td><td><strong>${nSinInsens}</strong></td></tr>
             <tr><td>En listado / resumen (clasificados)</td><td><strong>${nListado}</strong></td></tr>
           </tbody>
@@ -2532,11 +2534,6 @@ function htmlResumenSexoPlanFaena(resumenSexo, metaUniverso = null) {
   const sinSexo = Number(rs.sin_sexo || 0);
   const nPlan = Number(rs.total_plan_faena || metaUniverso?.total_plan_faena || 0);
   const nInsens = Number(rs.total_insensibilizados || metaUniverso?.total_insensibilizados || 0);
-  const nEmerg = Number(rs.emergencia_agregadas || metaUniverso?.emergencia_fuera_plan || 0);
-  const notaEmerg =
-    rs.incluir_sacrificio_emergencia !== false && nEmerg > 0
-      ? ` Incluye <strong>${nEmerg}</strong> de emergencia fuera del plan.`
-      : '';
   const notaSinSexo =
     sinSexo > 0
       ? ` <span style="color:var(--rojo)">${sinSexo} sin sexo en producto.</span>`
@@ -2553,8 +2550,8 @@ function htmlResumenSexoPlanFaena(resumenSexo, metaUniverso = null) {
         </tbody>
       </table>
       <p class="rep-bloque-resumen-meta" style="margin:8px 0 0;font-size:11px;color:var(--tx3);max-width:520px;line-height:1.45">
-        Plan faena: <strong>${nPlan}</strong> · insensibilizados hoy: <strong>${nInsens}</strong>.
-        Se actualiza al planillar (auto-refresh).${notaEmerg}${notaSinSexo}
+        Plan faena: <strong>${nPlan}</strong> · insensibilizados en plan hoy: <strong>${nInsens}</strong>.
+        Emergencias fuera de plan no entran al total (solo tabla informativa). Se actualiza al planillar (auto-refresh).${notaSinSexo}
       </p>
     </div>`;
 }

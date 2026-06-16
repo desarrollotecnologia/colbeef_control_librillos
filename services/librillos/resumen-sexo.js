@@ -1,38 +1,8 @@
 /**
- * Resumen macho/hembra del plan de faena (+ emergencias insensibilizadas el mismo día).
+ * Resumen macho/hembra del plan de faena planillado (solo lo planillado ese día).
  */
 import { pool } from '../../config/db.js';
-import {
-  INCLUIR_SACRIFICIO_EMERGENCIA,
-  SACRIFICIO_EMERGENCIA_PUESTO_ILIKE,
-  SACRIFICIO_EMERGENCIA_PUESTO_TABLA,
-  columnasNombrePuestoTrabajo,
-} from '../../config/sacrificio-emergencia.js';
-
-function parseTablaPgCalificada(cualificada) {
-  const s = String(cualificada || '').trim();
-  const m = s.match(/^([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)$/i);
-  if (!m) return null;
-  return { schema: m[1].toLowerCase(), table: m[2].toLowerCase() };
-}
-
-function sqlCteEmergenciaIds() {
-  if (!INCLUIR_SACRIFICIO_EMERGENCIA) return null;
-  const tbl = parseTablaPgCalificada(SACRIFICIO_EMERGENCIA_PUESTO_TABLA);
-  const cols = columnasNombrePuestoTrabajo();
-  if (!tbl || !cols.length) return null;
-  const condPuesto = cols
-    .map((c) => `COALESCE(pt.${c}, '') ILIKE $2`)
-    .join(' OR ');
-  return `
-    emerg_ids AS (
-      SELECT DISTINCT i.id_producto::text AS id_producto
-      FROM trazabilidad_proceso.insensibilizacion i
-      INNER JOIN ${tbl.schema}.${tbl.table} pt ON pt.id = i.id_puesto_trabajo
-      WHERE i.fecha_registro = $1::date
-        AND (${condPuesto})
-    )`;
-}
+import { INCLUIR_SACRIFICIO_EMERGENCIA } from '../../config/sacrificio-emergencia.js';
 
 /** Clasificación de sexo (misma lógica que consulta operativa del usuario). */
 export function clasificarSexoProducto(sexoRaw) {
@@ -64,11 +34,6 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
     throw new Error('fecha debe ser YYYY-MM-DD');
   }
 
-  const cteEmerg = sqlCteEmergenciaIds();
-  const unionEmerg = cteEmerg
-    ? `UNION SELECT id_producto FROM emerg_ids`
-    : '';
-
   const sql = `
     WITH plan_ids AS (
       SELECT DISTINCT pfp.id_producto::text AS id_producto
@@ -77,30 +42,12 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
         ON pfp.id_plan_faena = pf.id
       WHERE DATE(timezone('America/Bogota', pf.fecha_plan)) = $1::date
         AND pfp.fecha_fin_vigencia = pf.fecha_plan
-        AND NOT EXISTS (
-          SELECT 1
-          FROM trazabilidad_proceso.insensibilizacion i
-          WHERE i.id_producto::text = pfp.id_producto::text
-            AND i.fecha_registro < $1::date
-        )
     ),
-    plan_ids_planillado AS (
-      SELECT DISTINCT pfp.id_producto::text AS id_producto
-      FROM trazabilidad_proceso.plan_faena pf
-      JOIN trazabilidad_proceso.plan_faena_producto pfp
-        ON pfp.id_plan_faena = pf.id
-      WHERE DATE(timezone('America/Bogota', pf.fecha_plan)) = $1::date
-        AND pfp.fecha_fin_vigencia = pf.fecha_plan
-    ),
-    ${cteEmerg ? `${cteEmerg},` : ''}
-    ids_dia AS (
-      SELECT id_producto FROM plan_ids
-      ${unionEmerg}
-    ),
-    insens_dia AS (
-      SELECT DISTINCT id_producto::text AS id_producto
-      FROM trazabilidad_proceso.insensibilizacion
-      WHERE fecha_registro = $1::date
+    insens_dia_plan AS (
+      SELECT DISTINCT i.id_producto::text AS id_producto
+      FROM trazabilidad_proceso.insensibilizacion i
+      INNER JOIN plan_ids p ON p.id_producto = i.id_producto::text
+      WHERE i.fecha_registro = $1::date
     )
     SELECT
       COUNT(*) FILTER (
@@ -111,34 +58,21 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
       )::int AS machos,
       COUNT(*)::int AS total,
       (SELECT COUNT(*)::int FROM plan_ids) AS total_plan_faena,
-      (SELECT COUNT(*)::int FROM plan_ids_planillado) AS total_plan_faena_planillado,
-      (SELECT COUNT(*)::int FROM insens_dia) AS total_insensibilizados,
+      (SELECT COUNT(*)::int FROM insens_dia_plan) AS total_insensibilizados,
       (
         SELECT COUNT(*)::int
-        FROM ids_dia d
+        FROM plan_ids d
         LEFT JOIN trazabilidad_proceso.producto p ON p.id::text = d.id_producto
         WHERE p.id IS NULL OR TRIM(COALESCE(p.sexo, '')) = ''
            OR LOWER(COALESCE(p.sexo, '')) NOT IN (
              'hembra', 'f', 'h', 'vaca', 'macho', 'm', 'novillo', 'toro'
            )
       ) AS sin_sexo
-      ${
-        cteEmerg
-          ? `, (
-        SELECT COUNT(*)::int
-        FROM emerg_ids e
-        WHERE NOT EXISTS (
-          SELECT 1 FROM plan_ids p WHERE p.id_producto = e.id_producto
-        )
-      ) AS emergencia_agregadas`
-          : ', 0::int AS emergencia_agregadas'
-      }
-    FROM ids_dia d
+    FROM plan_ids d
     LEFT JOIN trazabilidad_proceso.producto p ON p.id::text = d.id_producto
   `;
 
-  const params = cteEmerg ? [fecha, SACRIFICIO_EMERGENCIA_PUESTO_ILIKE] : [fecha];
-  const res = await pool.query(sql, params);
+  const res = await pool.query(sql, [fecha]);
   const row = res.rows?.[0] || {};
 
   const hembras = Number(row.hembras || 0);
@@ -153,9 +87,8 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
     sin_sexo,
     total,
     total_plan_faena: Number(row.total_plan_faena || 0),
-    total_plan_faena_planillado: Number(row.total_plan_faena_planillado || 0),
     total_insensibilizados: Number(row.total_insensibilizados || 0),
-    emergencia_agregadas: Number(row.emergencia_agregadas || 0),
+    emergencia_agregadas: 0,
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
     generado_en: new Date().toISOString(),
   };
