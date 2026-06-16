@@ -1188,6 +1188,11 @@ let _toastOnClick = null;
 let historicoCambios = [];
 let historicoCambiosFiltrados = [];
 let historicoCrudasSeleccionadas = new Set();
+/** Reimpresión crudas en histórico: oculto (usar menú Etiqueta cruda). */
+const HISTORICO_REIMP_CRUDAS_VISIBLE = false;
+function historicoReimpCrudasVisible() {
+  return HISTORICO_REIMP_CRUDAS_VISIBLE;
+}
 let crudasRetenidasEtiqueta = [];
 let crudasRetenidasSeleccionadas = new Set();
 /** IDs ya reimpresos para el par plan→revisión cargado (Map id → { fecha, usuario, ... }). */
@@ -1803,7 +1808,7 @@ function irVista(nombre, btn, opts = {}) {
   else if (nombre === 'guias') actualizarHintFechaGuia();
   else if (nombre === 'rep-librillos') void cargarReporteLibrillosVista();
   if (nombre === 'historico') {
-    actualizarUsuarioReimpresionVisible();
+    if (historicoReimpCrudasVisible()) actualizarUsuarioReimpresionVisible();
     if (!opts.skipHistoricoFechas) {
       const fechaRevision = String(document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
       const fd = document.getElementById('fecha-historico-desde');
@@ -1813,7 +1818,7 @@ function irVista(nombre, btn, opts = {}) {
       if (fh) fh.value = fechaRevision;
       prefetchDatosHistoricoReimp(fechaPlan, fechaRevision);
     }
-    actualizarHistoricoReimpFechas();
+    if (historicoReimpCrudasVisible()) actualizarHistoricoReimpFechas();
     if (!opts.skipHistoricoCarga) void cargarHistoricoCambios();
   }
   trackVista(nombre);
@@ -4652,6 +4657,7 @@ function actualizarUsuarioReimpresionVisible() {
 }
 
 function actualizarHistoricoReimpFechas() {
+  if (!historicoReimpCrudasVisible()) return;
   actualizarUsuarioReimpresionVisible();
   const { fechaPlan, fechaRevision, fechaEtiquetas } = fechasReimpresionHistorico();
   const el = document.getElementById('historico-reimp-fechas');
@@ -4781,6 +4787,7 @@ async function registrarReimpresionCrudasApi(fechaPlan, fechaRevision, listaDato
 }
 
 function actualizarResumenReimpresionCrudas() {
+  if (!historicoReimpCrudasVisible()) return;
   const el = document.getElementById('historico-reimp-resumen');
   if (!el) return;
   const conCambio = filasReimpresionUnicasPorId(
@@ -4816,6 +4823,10 @@ function actualizarResumenReimpresionCrudas() {
 }
 
 async function irHistoricoReimpresionCrudas(cambiosExplicitos = null, opts = {}) {
+  if (!historicoReimpCrudasVisible()) {
+    mostrarToast('Reetiquetado de crudas: use el menú Etiqueta cruda.', 'warn');
+    return;
+  }
   const btn = document.querySelector('.nav-item[data-vista="historico"]');
   const fechaRevDefault =
     String(opts.fechaRevision || document.getElementById('fecha-global')?.value || '').trim() || hoyISO();
@@ -5087,6 +5098,7 @@ function htmlFilaHistoricoCruda(r, seleccionable = false) {
 }
 
 function pintarTablaHistoricoCrudas(gen) {
+  if (!historicoReimpCrudasVisible()) return;
   const g = gen == null ? ++_histCrudasPaintGen : gen;
   const tbody = document.getElementById('tbody-historico-crudas');
   const chkAll = document.getElementById('chk-historico-crudas');
@@ -5196,13 +5208,15 @@ function aplicarHistoricoDesdeCache(hit, fechaPlan, fechaRevision) {
   const lbl = document.getElementById('historico-rango-label');
   if (lbl && hit.lblText) lbl.textContent = hit.lblText;
   void (async () => {
-    if (!reimpresosCrudasMap.size) {
-      reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
+    if (historicoReimpCrudasVisible()) {
+      if (!reimpresosCrudasMap.size) {
+        reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
+      }
+      aplicarReimpresosAHistorico();
+      await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
     }
-    aplicarReimpresosAHistorico();
-    await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
     filtrarHistoricoCambios();
-    actualizarHistoricoReimpFechas();
+    if (historicoReimpCrudasVisible()) actualizarHistoricoReimpFechas();
   })();
 }
 
@@ -5297,10 +5311,12 @@ async function cargarHistoricoCambios(opts = {}) {
       mostrarToast('Cruce de sucursal no disponible; mostrando solo auditoría', 'warn');
     }
     historicoCambios = fusionarHistoricoCambios(filasAud, filasCruce);
-    reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
-    aplicarReimpresosAHistorico();
-    await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
-    aplicarReimpresosAHistorico();
+    if (historicoReimpCrudasVisible()) {
+      reimpresosCrudasMap = await fetchReimpresionesCrudasMap(fechaPlan, fechaRevision);
+      aplicarReimpresosAHistorico();
+      await enriquecerElegibilidadReimpresionCrudas(fechaRevision);
+      aplicarReimpresosAHistorico();
+    }
     const lbl = document.getElementById('historico-rango-label');
     const nCruce = filasCruce.length;
     const nCrudasPlan = Number(payloadCruce?.total_crudas_plan || 0);
@@ -5326,7 +5342,7 @@ async function cargarHistoricoCambios(opts = {}) {
       lblText,
     });
     filtrarHistoricoCambios();
-    actualizarHistoricoReimpFechas();
+    if (historicoReimpCrudasVisible()) actualizarHistoricoReimpFechas();
     const ms = Math.max(0, Date.now() - t0);
     enviarEventoAnalytics({
       eventName: 'historico_auditoria_cargar',
