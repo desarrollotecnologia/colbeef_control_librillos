@@ -77,6 +77,20 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
         ON pfp.id_plan_faena = pf.id
       WHERE DATE(timezone('America/Bogota', pf.fecha_plan)) = $1::date
         AND pfp.fecha_fin_vigencia = pf.fecha_plan
+        AND NOT EXISTS (
+          SELECT 1
+          FROM trazabilidad_proceso.insensibilizacion i
+          WHERE i.id_producto::text = pfp.id_producto::text
+            AND i.fecha_registro < $1::date
+        )
+    ),
+    plan_ids_planillado AS (
+      SELECT DISTINCT pfp.id_producto::text AS id_producto
+      FROM trazabilidad_proceso.plan_faena pf
+      JOIN trazabilidad_proceso.plan_faena_producto pfp
+        ON pfp.id_plan_faena = pf.id
+      WHERE DATE(timezone('America/Bogota', pf.fecha_plan)) = $1::date
+        AND pfp.fecha_fin_vigencia = pf.fecha_plan
     ),
     ${cteEmerg ? `${cteEmerg},` : ''}
     ids_dia AS (
@@ -97,6 +111,7 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
       )::int AS machos,
       COUNT(*)::int AS total,
       (SELECT COUNT(*)::int FROM plan_ids) AS total_plan_faena,
+      (SELECT COUNT(*)::int FROM plan_ids_planillado) AS total_plan_faena_planillado,
       (SELECT COUNT(*)::int FROM insens_dia) AS total_insensibilizados,
       (
         SELECT COUNT(*)::int
@@ -138,6 +153,7 @@ export async function obtenerResumenSexoPorFecha(fechaISO) {
     sin_sexo,
     total,
     total_plan_faena: Number(row.total_plan_faena || 0),
+    total_plan_faena_planillado: Number(row.total_plan_faena_planillado || 0),
     total_insensibilizados: Number(row.total_insensibilizados || 0),
     emergencia_agregadas: Number(row.emergencia_agregadas || 0),
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,

@@ -1615,15 +1615,23 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
     idsUniversoReporteDia(fecha),
     idsUniversoPlanInsensListado(fecha),
   ]);
+  const insensAnteriorPlan = await idsInsensibilizacionAntesDeFecha(fecha, plan);
+  const totalPlanPlanillado = plan.size;
   let planSinInsens = 0;
   let planConInsens = 0;
+  let planInsensFechaAnterior = 0;
   let insensMadrugadaSiguienteEnPlan = 0;
   plan.forEach((id) => {
+    if (insensAnteriorPlan.has(id)) {
+      planInsensFechaAnterior += 1;
+      return;
+    }
     if (insensTurnoPlan.has(id)) {
       planConInsens += 1;
       if (!insens.has(id)) insensMadrugadaSiguienteEnPlan += 1;
     } else planSinInsens += 1;
   });
+  const totalPlanOperativo = planConInsens + planSinInsens;
   let insensSinPlan = 0;
   let emergenciaFueraPlan = 0;
   insens.forEach((id) => {
@@ -1642,13 +1650,15 @@ export async function obtenerMetaUniversoPorFecha(fechaISO) {
     filtro_insensibilizacion_activo: false,
     universo_plan_completo: true,
     incluir_sacrificio_emergencia: INCLUIR_SACRIFICIO_EMERGENCIA,
-    total_plan_faena: plan.size,
+    total_plan_faena: totalPlanOperativo,
+    total_plan_faena_planillado: totalPlanPlanillado,
     total_insensibilizados: insens.size,
     total_sacrificio_emergencia: emerg.size,
     total_en_listado: idsListado.length,
     total_plan_interseccion_insens: idsPlanInsens.length,
     plan_con_insensibilizacion: planConInsens,
     plan_sin_insensibilizar: planSinInsens,
+    plan_insensibilizado_fecha_anterior: planInsensFechaAnterior,
     hora_corte_turno_insens_bogota: HORA_CORTE_TURNO_BOGOTA,
     insens_madrugada_siguiente_en_plan: insensMadrugadaSiguienteEnPlan,
     insens_sin_plan: insensSinPlan,
@@ -1852,6 +1862,40 @@ async function mapaPrimeraInsensibilizacionDesdeFecha(fechaISO, idsTexto) {
   return out;
 }
 
+/** Última insensibilización con fecha anterior al plan (sacrificio previo al día planillado). */
+async function mapaUltimaInsensibilizacionAntesDeFecha(fechaISO, idsTexto) {
+  const ids = [...new Set((idsTexto || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  const res = await pool.query(
+    `
+    SELECT DISTINCT ON (id_producto::text)
+      id_producto::text AS id_producto,
+      fecha_registro,
+      hora_registro,
+      id_puesto_trabajo,
+      user_name
+    FROM trazabilidad_proceso.insensibilizacion
+    WHERE id_producto::text = ANY($1::text[])
+      AND fecha_registro < $2::date
+    ORDER BY id_producto::text, fecha_registro DESC NULLS LAST, hora_registro DESC NULLS LAST
+    `,
+    [ids, fechaISO]
+  );
+  (res.rows || []).forEach((r) => {
+    const id = String(r.id_producto || '').trim();
+    if (id) out.set(id, r);
+  });
+  return out;
+}
+
+async function idsInsensibilizacionAntesDeFecha(fechaISO, idsSet) {
+  const ids = [...(idsSet || [])];
+  if (!ids.length) return new Set();
+  const map = await mapaUltimaInsensibilizacionAntesDeFecha(fechaISO, ids);
+  return new Set(map.keys());
+}
+
 /** IDs que están activos en plan de faena pero aún no tienen insensibilización del día. */
 export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
   const fecha = String(fechaISO || '').trim();
@@ -1862,20 +1906,19 @@ export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
     idsPlanFaenaPorFecha(fecha),
     idsInsensibilizacionParaTurnoPlan(fecha),
   ]);
-  const ids = [...plan]
+  const candidatos = [...plan]
     .filter((id) => !insensTurno.has(id))
     .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
-  const [{ map: parteMap }, planInfoMap, insensPosteriorMap] = await Promise.all([
-    filasParteProductoPorIdsYFecha(fecha, ids),
-    mapaPlanFaenaInfoPorIds(fecha, ids),
-    mapaPrimeraInsensibilizacionDesdeFecha(fecha, ids),
+  const [{ map: parteMap }, planInfoMap, insensPosteriorMap, insensAnteriorMap] = await Promise.all([
+    filasParteProductoPorIdsYFecha(fecha, candidatos),
+    mapaPlanFaenaInfoPorIds(fecha, candidatos),
+    mapaPrimeraInsensibilizacionDesdeFecha(fecha, candidatos),
+    mapaUltimaInsensibilizacionAntesDeFecha(fecha, candidatos),
   ]);
-  const items = ids.map((id) => {
+  const buildItem = (id, insensReal, estado) => {
     const parte = parteMap.get(String(id)) || {};
     const planInfo = planInfoMap.get(String(id)) || {};
-    const insensPosterior = insensPosteriorMap.get(String(id)) || null;
-    const fechaInsens = insensPosterior?.fecha_registro || null;
-    const estadoActual = fechaInsens ? 'INSENSIBILIZADO_POSTERIOR' : 'PENDIENTE_INSENSIBILIZACION';
+    const fechaInsens = insensReal?.fecha_registro || null;
     return {
       id_producto: id,
       identificacion: parte.identificacion || null,
@@ -1889,21 +1932,40 @@ export async function obtenerPlanSinInsensibilizarDetalle(fechaISO) {
       fecha_fin_vigencia: planInfo.fecha_fin_vigencia || null,
       plan_cerrado: Boolean(planInfo.cerrado),
       fecha_insensibilizacion_real: fechaInsens,
-      hora_insensibilizacion_real: insensPosterior?.hora_registro || null,
-      usuario_insensibilizacion: insensPosterior?.user_name || null,
-      id_puesto_trabajo_insensibilizacion: insensPosterior?.id_puesto_trabajo || null,
-      estado: estadoActual,
+      hora_insensibilizacion_real: insensReal?.hora_registro || null,
+      usuario_insensibilizacion: insensReal?.user_name || null,
+      id_puesto_trabajo_insensibilizacion: insensReal?.id_puesto_trabajo || null,
+      estado,
     };
+  };
+  const itemsAnterior = [];
+  const items = [];
+  candidatos.forEach((id) => {
+    const insensAnterior = insensAnteriorMap.get(String(id)) || null;
+    if (insensAnterior) {
+      itemsAnterior.push(buildItem(id, insensAnterior, 'INSENSIBILIZADO_ANTERIOR'));
+      return;
+    }
+    const insensPosterior = insensPosteriorMap.get(String(id)) || null;
+    const fechaInsens = insensPosterior?.fecha_registro || null;
+    const estadoActual = fechaInsens ? 'INSENSIBILIZADO_POSTERIOR' : 'PENDIENTE_INSENSIBILIZACION';
+    items.push(buildItem(id, insensPosterior, estadoActual));
   });
   const totalPosterior = items.filter((x) => x.estado === 'INSENSIBILIZADO_POSTERIOR').length;
+  const totalPendientes = items.filter((x) => x.estado === 'PENDIENTE_INSENSIBILIZACION').length;
+  const totalPlanPlanillado = plan.size;
+  const totalPlanOperativo = totalPlanPlanillado - itemsAnterior.length;
   return {
     fecha,
-    total_plan_faena: plan.size,
-    total_insensibilizados_en_plan: plan.size - ids.length,
-    total_sin_insensibilizar: ids.length,
+    total_plan_faena: totalPlanOperativo,
+    total_plan_faena_planillado: totalPlanPlanillado,
+    total_insensibilizados_en_plan: totalPlanOperativo - totalPendientes,
+    total_sin_insensibilizar: totalPendientes,
+    total_insensibilizados_anterior: itemsAnterior.length,
     total_insensibilizados_posterior: totalPosterior,
-    total_pendientes_actuales: items.length - totalPosterior,
+    total_pendientes_actuales: totalPendientes,
     items,
+    items_insensibilizado_anterior: itemsAnterior,
     generado_en: new Date().toISOString(),
   };
 }

@@ -2082,8 +2082,10 @@ function htmlSacrificioEmergenciaPlanInsens(meta) {
 function htmlCuadroPlanVsInsens(meta, opts = {}) {
   if (!meta || !Number(meta.total_plan_faena)) return '';
   const nPlan = Number(meta.total_plan_faena) || 0;
+  const nPlanPlanillado = Number(meta.total_plan_faena_planillado) || nPlan;
   const nInsens = Number(meta.plan_con_insensibilizacion) || 0;
   const nSinInsens = Number(meta.plan_sin_insensibilizar) || 0;
+  const nAnterior = Number(meta.plan_insensibilizado_fecha_anterior) || 0;
   const nListado = Number(meta.total_en_listado) || 0;
   const horaCorte = Number(meta.hora_corte_turno_insens_bogota);
   const nMadrugada = Number(meta.insens_madrugada_siguiente_en_plan) || 0;
@@ -2092,6 +2094,7 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
         Corte de turno insensibilización: hasta las <strong>${String(horaCorte).padStart(2, '0')}:00</strong> del día siguiente
         (madrugada cuenta para el plan del día anterior).
         ${nMadrugada ? ` Hoy: <strong>${nMadrugada}</strong> del plan se insensibilizaron en esa madrugada.` : ''}
+        ${nAnterior ? ` <strong>${nAnterior}</strong> planillados tarde (ya sacrificados antes) no entran en el total operativo.` : ''}
       </p>`
     : '';
   const bloqueEmerg = htmlSacrificioEmergenciaPlanInsens(meta);
@@ -2116,7 +2119,9 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
         <table class="dt plan-insens-table" style="max-width:520px">
           <thead><tr><th>Indicador</th><th>Cantidad</th></tr></thead>
           <tbody>
-            <tr><td>En plan de faena (fecha plan)</td><td><strong>${nPlan}</strong></td></tr>
+            <tr><td>En plan de faena (a faenar este día)</td><td><strong>${nPlan}</strong></td></tr>
+            ${nAnterior ? `<tr><td>Planillaje tardío (ya sacrificados antes)</td><td><strong>${nAnterior}</strong></td></tr>` : ''}
+            ${nPlanPlanillado > nPlan ? `<tr><td>Total planillado en sistema</td><td><strong>${nPlanPlanillado}</strong></td></tr>` : ''}
             <tr><td>Ya insensibilizados (en plan)</td><td><strong>${nInsens}</strong></td></tr>
             <tr><td>En plan sin insensibilizar</td><td><strong>${nSinInsens}</strong></td></tr>
             <tr><td>En listado / resumen (clasificados)</td><td><strong>${nListado}</strong></td></tr>
@@ -2131,28 +2136,57 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
 
 function htmlPlanSinInsensibilizarDetalle(data) {
   const rows = Array.isArray(data?.items) ? data.items : [];
-  if (!rows.length) {
+  const rowsAnterior = Array.isArray(data?.items_insensibilizado_anterior)
+    ? data.items_insensibilizado_anterior
+    : [];
+  const totalPendActual = Number(data?.total_pendientes_actuales || 0);
+  const totalPosterior = Number(data?.total_insensibilizados_posterior || 0);
+  const totalAnterior = Number(data?.total_insensibilizados_anterior || 0);
+  if (!rows.length && !rowsAnterior.length) {
     return '<p style="font-size:12px;color:var(--ok);font-weight:600;margin:0">No hay códigos pendientes de insensibilización para esta fecha.</p>';
   }
-  const totalPosterior = Number(data?.total_insensibilizados_posterior || 0);
-  const totalPendActual = Number(data?.total_pendientes_actuales || 0);
-  const trs = rows.map((r) => `
+  const badgeEstado = (estado) => {
+    if (estado === 'INSENSIBILIZADO_POSTERIOR') {
+      return '<span class="hist-badge hist-badge-ok">Insensibilizado posterior</span>';
+    }
+    if (estado === 'INSENSIBILIZADO_ANTERIOR') {
+      return '<span class="hist-badge hist-badge-ok">Sacrificado en fecha anterior</span>';
+    }
+    return '<span class="hist-badge hist-badge-pend">Pendiente</span>';
+  };
+  const filaTabla = (r) => `
     <tr>
       <td><strong>${escapeHtml(r.id_producto || '—')}</strong></td>
       <td>${escapeHtml(r.identificacion || '—')}</td>
-      <td>${r.estado === 'INSENSIBILIZADO_POSTERIOR'
-        ? '<span class="hist-badge hist-badge-ok">Insensibilizado posterior</span>'
-        : '<span class="hist-badge hist-badge-pend">Pendiente</span>'}</td>
+      <td>${badgeEstado(r.estado)}</td>
       <td>${escapeHtml(r.fecha_insensibilizacion_real ? labelFecha(String(r.fecha_insensibilizacion_real).slice(0, 10)) : '—')}</td>
       <td>${escapeHtml(r.usuario_insensibilizacion || '—')}</td>
       <td>${escapeHtml(r.usuario_plan || '—')}</td>
       <td>${escapeHtml(r.id_plan_faena || '—')}</td>
       <td>${escapeHtml(r.observaciones || '—')}</td>
-    </tr>
-  `).join('');
-  return `
+    </tr>`;
+  const trs = rows.map(filaTabla).join('');
+  const trsAnterior = rowsAnterior.map(filaTabla).join('');
+  const bloqueAnterior = rowsAnterior.length
+    ? `
+    <div style="margin-top:14px">
+      <p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">
+        ${totalAnterior} código(s) en plan de hoy ya estaban insensibilizados en fecha anterior (no cuentan como pendientes).
+      </p>
+      <div class="tw">
+        <table class="dt" style="max-width:920px">
+          <thead>
+            <tr><th>ID producto</th><th>Identificación</th><th>Estado</th><th>Fecha real insens.</th><th>Usuario insens.</th><th>Usuario plan</th><th>Plan</th><th>Observación</th></tr>
+          </thead>
+          <tbody>${trsAnterior}</tbody>
+        </table>
+      </div>
+    </div>`
+    : '';
+  const bloquePendientes = rows.length
+    ? `
     <p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">
-      ${rows.length} código(s) no tuvieron insensibilización en la fecha plan.
+      ${totalPendActual + totalPosterior} código(s) sin insensibilización en el turno del plan.
       ${totalPosterior} ya aparecen insensibilizados después · ${totalPendActual} siguen pendientes.
     </p>
     <div class="tw">
@@ -2162,7 +2196,9 @@ function htmlPlanSinInsensibilizarDetalle(data) {
         </thead>
         <tbody>${trs}</tbody>
       </table>
-    </div>`;
+    </div>`
+    : '';
+  return `${bloquePendientes}${bloqueAnterior}`;
 }
 
 async function cargarPlanSinInsensibilizarDetalle() {
