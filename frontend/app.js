@@ -5460,6 +5460,12 @@ function filasCrudasRetenidasPendientes() {
 function actualizarContadorCrudasRetenidas() {
   const el = document.getElementById('n-ret-crudas-sel');
   if (el) el.textContent = String(crudasRetenidasSeleccionadas.size);
+  const elPdf = document.getElementById('n-ret-crudas-pdf');
+  if (elPdf) {
+    const sel = crudasRetenidasSeleccionadas.size;
+    const total = filasCrudasRetenidasConCambio().length;
+    elPdf.textContent = sel ? String(sel) : String(total);
+  }
 }
 
 function htmlFilaCrudaRetenida(r, seleccionable = false) {
@@ -5628,10 +5634,29 @@ function filasCrudasRetenidasConCambio() {
   return (crudasRetenidasEtiqueta || []).filter((r) => r?.cambio_sucursal_despacho);
 }
 
+/** PDF: selección marcada en tabla; si no hay ninguna, todas las que tienen cambio. */
+function filasCrudasRetenidasParaPdf() {
+  const conCambio = filasCrudasRetenidasConCambio();
+  const sel = [...crudasRetenidasSeleccionadas].map((id) => String(id || '').trim()).filter(Boolean);
+  if (sel.length) {
+    const selSet = new Set(sel);
+    return {
+      rows: conCambio.filter((r) => selSet.has(String(r.id_producto || '').trim())),
+      modo: 'seleccion',
+      totalConCambio: conCambio.length,
+    };
+  }
+  return { rows: conCambio, modo: 'todas', totalConCambio: conCambio.length };
+}
+
 async function descargarPdfCrudasRetenidasConCambio() {
-  const rows = filasCrudasRetenidasConCambio();
-  if (!rows.length) {
+  const { rows, modo, totalConCambio } = filasCrudasRetenidasParaPdf();
+  if (!totalConCambio) {
     mostrarToast('No hay crudas con cambio de sucursal cargadas. Use Buscar retenidas.', 'err');
+    return;
+  }
+  if (!rows.length) {
+    mostrarToast('Selecciona crudas con cambio en la tabla o desmarca todo para exportar el listado completo.', 'err');
     return;
   }
   const { fechaPlan, fechaRevision } = fechasEtiquetaCruda();
@@ -5658,10 +5683,14 @@ async function descargarPdfCrudasRetenidasConCambio() {
       doc.setTextColor(75, 91, 80);
       doc.text(`Plan ${planTxt} → despacho ${despTxt}`, 12, 27);
       doc.text(`Generado: ${new Date().toLocaleString('es-CO')}`, 12, 32);
+      if (modo === 'seleccion') {
+        doc.text(`Selección: ${rows.length} de ${totalConCambio} con cambio de sucursal`, 12, 37);
+      }
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
       doc.setTextColor(26, 46, 34);
-      doc.text(`Total con cambio: ${rows.length}`, pageW - 12, 14, { align: 'right' });
+      const totalLabel = modo === 'seleccion' ? `En PDF: ${rows.length}` : `Total con cambio: ${rows.length}`;
+      doc.text(totalLabel, pageW - 12, 14, { align: 'right' });
 
       const head = [[
         'Estado',
@@ -5685,7 +5714,7 @@ async function descargarPdfCrudasRetenidasConCambio() {
       doc.autoTable({
         head,
         body,
-        startY: 38,
+        startY: modo === 'seleccion' ? 43 : 38,
         margin: { left: 10, right: 10 },
         styles: { fontSize: 8, cellPadding: 1.8, overflow: 'linebreak' },
         headStyles: { fillColor: green, textColor: 255, halign: 'center', fontStyle: 'bold' },
@@ -5702,17 +5731,26 @@ async function descargarPdfCrudasRetenidasConCambio() {
 
       const slugPlan = String(fechaPlan || 'plan').replace(/-/g, '');
       const slugDesp = String(fechaDespacho || 'desp').replace(/-/g, '');
-      const filename = `Crudas_cambio_sucursal_${slugPlan}_${slugDesp}.pdf`;
+      const filename = modo === 'seleccion'
+        ? `Crudas_cambio_sucursal_${slugPlan}_${slugDesp}_${rows.length}sel.pdf`
+        : `Crudas_cambio_sucursal_${slugPlan}_${slugDesp}.pdf`;
       doc.save(filename);
-      mostrarToast('PDF generado', 'ok');
+      mostrarToast(
+        modo === 'seleccion'
+          ? `PDF generado (${rows.length} seleccionadas)`
+          : `PDF generado (${rows.length} con cambio)`,
+        'ok'
+      );
       enviarEventoAnalytics({
         eventName: 'export_pdf',
         viewName: 'inventario',
         meta: {
           tipo: 'crudas_retenidas_con_cambio',
+          modo,
           fecha_plan: fechaPlan,
           fecha_despacho: fechaDespacho,
           total: rows.length,
+          total_con_cambio: totalConCambio,
         },
       });
     } catch (e) {
