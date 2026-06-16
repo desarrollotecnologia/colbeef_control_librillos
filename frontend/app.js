@@ -5616,6 +5616,111 @@ function seleccionarTodasCrudasRetenidas() {
   toggleTodasCrudasRetenidas(chkAll);
 }
 
+function etiquetaEstadoCrudaRetenida(r) {
+  if (r?.ya_reimpresa) return 'Reimpresa';
+  if (r?.cambio_sucursal_despacho) return 'Con cambio';
+  if (r?.salida_en_fecha_despacho) return 'Salida despacho';
+  if (r?.requiere_etiqueta === false) return 'No aplica';
+  return 'Pendiente';
+}
+
+function filasCrudasRetenidasConCambio() {
+  return (crudasRetenidasEtiqueta || []).filter((r) => r?.cambio_sucursal_despacho);
+}
+
+async function descargarPdfCrudasRetenidasConCambio() {
+  const rows = filasCrudasRetenidasConCambio();
+  if (!rows.length) {
+    mostrarToast('No hay crudas con cambio de sucursal cargadas. Use Buscar retenidas.', 'err');
+    return;
+  }
+  const { fechaPlan, fechaRevision } = fechasEtiquetaCruda();
+  const fechaDespacho = fechaRevision;
+  return runWithAppLoader('Generando PDF de crudas con cambio...', async () => {
+    try {
+      const JsPDF = await ensureJsPdfDisponible();
+      if (!repLibJsPdfListo()) throw new Error('jspdf no disponible');
+      const doc = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const green = [31, 95, 59];
+      const planTxt = fechaPlan ? labelFecha(fechaPlan) : '—';
+      const despTxt = fechaDespacho ? labelFecha(fechaDespacho) : '—';
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.setTextColor(45, 170, 65);
+      doc.text('Colbeef', 12, 14);
+      doc.setTextColor(26, 46, 34);
+      doc.setFontSize(13);
+      doc.text('Crudas retenidas — cambio de sucursal', 12, 21);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(75, 91, 80);
+      doc.text(`Plan ${planTxt} → despacho ${despTxt}`, 12, 27);
+      doc.text(`Generado: ${new Date().toLocaleString('es-CO')}`, 12, 32);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(26, 46, 34);
+      doc.text(`Total con cambio: ${rows.length}`, pageW - 12, 14, { align: 'right' });
+
+      const head = [[
+        'Estado',
+        'ID producto',
+        'Propietario',
+        'Puesto original',
+        'Puesto nuevo',
+        'Ingreso cava',
+        'Reimpresa',
+      ]];
+      const body = rows.map((r) => [
+        etiquetaEstadoCrudaRetenida(r),
+        String(r?.id_producto || '—'),
+        String(r?.propietario || '—'),
+        String(r?.sucursal_original || 'Sin snapshot'),
+        String(r?.puesto_etiqueta || r?.sucursal_actual || '—'),
+        formatFecha(r?.fecha_ingreso_cava) || '—',
+        r?.reimpreso_en ? formatFecha(r.reimpreso_en) : '—',
+      ]);
+
+      doc.autoTable({
+        head,
+        body,
+        startY: 38,
+        margin: { left: 10, right: 10 },
+        styles: { fontSize: 8, cellPadding: 1.8, overflow: 'linebreak' },
+        headStyles: { fillColor: green, textColor: 255, halign: 'center', fontStyle: 'bold' },
+        columnStyles: {
+          0: { cellWidth: 22 },
+          1: { cellWidth: 28 },
+          2: { cellWidth: 42 },
+          3: { cellWidth: 32 },
+          4: { cellWidth: 32 },
+          5: { cellWidth: 28 },
+          6: { cellWidth: 22 },
+        },
+      });
+
+      const slugPlan = String(fechaPlan || 'plan').replace(/-/g, '');
+      const slugDesp = String(fechaDespacho || 'desp').replace(/-/g, '');
+      const filename = `Crudas_cambio_sucursal_${slugPlan}_${slugDesp}.pdf`;
+      doc.save(filename);
+      mostrarToast('PDF generado', 'ok');
+      enviarEventoAnalytics({
+        eventName: 'export_pdf',
+        viewName: 'inventario',
+        meta: {
+          tipo: 'crudas_retenidas_con_cambio',
+          fecha_plan: fechaPlan,
+          fecha_despacho: fechaDespacho,
+          total: rows.length,
+        },
+      });
+    } catch (e) {
+      mostrarToast(`No se pudo generar PDF: ${e?.message || e}`, 'err');
+    }
+  });
+}
+
 async function imprimirEtiquetasCrudasRetenidasSeleccion() {
   const ids = [...crudasRetenidasSeleccionadas];
   if (!ids.length) {
