@@ -2021,9 +2021,10 @@ function fmtPesoKgEmergencia(v) {
   return n.toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 }
 
-function htmlSacrificioEmergenciaPlanInsens(meta) {
+function htmlSacrificioEmergenciaPlanInsens(meta, opts = {}) {
   const items = Array.isArray(meta?.sacrificios_emergencia) ? meta.sacrificios_emergencia : [];
   if (!items.length) return '';
+  const anchoCompleto = opts.anchoCompleto === true;
   const trs = items.map((r) => {
     const planTxt = r.en_plan_faena_hoy
       ? 'También en plan de hoy'
@@ -2057,14 +2058,14 @@ function htmlSacrificioEmergenciaPlanInsens(meta) {
     ? `<p style="margin:0 0 8px;font-size:12px;color:var(--tx2)">${nFuera} fuera del plan de hoy (explica +${nFuera} en listado/resumen).</p>`
     : '';
   return `
-    <div class="plan-emerg-box" style="margin-top:14px;max-width:1100px;padding:10px 12px;border:1px solid #f0d9a8;background:#fffaf0;border-radius:8px">
+    <div class="plan-emerg-box${anchoCompleto ? ' plan-emerg-box--full' : ''}" style="margin-top:14px;${anchoCompleto ? '' : 'max-width:1100px;'}padding:10px 12px;border:1px solid #f0d9a8;background:#fffaf0;border-radius:8px">
       <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#9a6700">Sacrificio de emergencia (${items.length})</p>
       <p style="margin:0 0 8px;font-size:12px;color:var(--tx2);line-height:1.45">
         Reses insensibilizadas en puesto de emergencia este día. Sexo y pesos de medias canales desde trazabilidad (producto).
       </p>
       ${notaFuera}
-      <div class="tw">
-        <table class="dt" style="max-width:1100px">
+      <div class="tw${anchoCompleto ? ' plan-emerg-table-wrap' : ''}">
+        <table class="dt plan-emerg-table${anchoCompleto ? ' plan-emerg-table--full' : ''}"${anchoCompleto ? '' : ' style="max-width:1100px"'}>
           <thead>
             <tr>
               <th>ID producto</th>
@@ -2105,7 +2106,7 @@ function htmlCuadroPlanVsInsens(meta, opts = {}) {
     : ''}
       </p>`
     : '';
-  const bloqueEmerg = htmlSacrificioEmergenciaPlanInsens(meta);
+  const bloqueEmerg = opts.sinEmergencia ? '' : htmlSacrificioEmergenciaPlanInsens(meta);
   const detallePendientes = opts.interactivo && nSinInsens > 0
     ? `
       <div class="plan-sin-insens-box" style="margin-top:12px;max-width:760px">
@@ -2749,7 +2750,12 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
       ? `Total consolidado: <strong>${totalGeneral}</strong> · plan faena: <strong>${nPlan}</strong>`
       : `Total consolidado: <strong>${totalGeneral}</strong>`;
 
-  const cuadroPlan = opts?.metaUniverso ? htmlCuadroPlanVsInsens(opts.metaUniverso) : '';
+  const cuadroPlan = opts?.metaUniverso
+    ? htmlCuadroPlanVsInsens(opts.metaUniverso, { sinEmergencia: true })
+    : '';
+  const bloqueEmergResumen = opts?.metaUniverso
+    ? htmlSacrificioEmergenciaPlanInsens(opts.metaUniverso, { anchoCompleto: true })
+    : '';
   const cuadroSexo = !usarSoloLibrillos ? htmlResumenSexoPlanFaena(rm?.resumen_sexo, opts?.metaUniverso) : '';
 
   return `
@@ -2800,7 +2806,8 @@ function htmlResumenLibrosChunchullasCrudas(lista, opts = {}) {
           </tbody>
         </table>
       </div>
-    </div>`;
+    </div>
+    ${bloqueEmergResumen ? `<div class="rep-sacrificio-emergencia-full">${bloqueEmergResumen}</div>` : ''}`;
 }
 
 function salidaUltimaEnRango(idProducto, salidas, desde, hasta) {
@@ -8823,6 +8830,10 @@ function cssExportVistaTotales() {
 .rep-bloque-resumen-lch{margin:12px 0;padding:14px 16px;background:#fafbfa;border:1px solid #c4cfc6;border-radius:12px}
 .rep-bloque-resumen-h{font-size:16px;font-weight:800;margin:0 0 8px;color:#1a1a1a}
 .rep-bloque-resumen-meta{font-size:12px;color:#555;margin:0 0 10px}
+.rep-sacrificio-emergencia-full{width:100%;max-width:none;margin:0 0 20px}
+.rep-sacrificio-emergencia-full .plan-emerg-box--full{max-width:none;width:100%;margin-top:0}
+.rep-sacrificio-emergencia-full .plan-emerg-table--full{width:100%;max-width:none;font-size:11px;border-collapse:collapse}
+.rep-sacrificio-emergencia-full .plan-emerg-table--full th,.rep-sacrificio-emergencia-full .plan-emerg-table--full td{border:1px solid #bbb;padding:6px 8px}
 .resumen-dia-dos-tablas{display:flex;flex-direction:column;gap:14px;align-items:stretch;width:100%}
 .resumen-dia-tabla-extras{flex:0 0 auto;max-width:520px}
 .resumen-dia-table{width:100%;max-width:520px;border-collapse:collapse;font-size:11px}

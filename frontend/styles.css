@@ -637,6 +637,37 @@ body{
   letter-spacing:.04em;
 }
 .rep-bloque-resumen-meta{font-size:12px;color:var(--tx2);margin:0 0 10px;}
+.rep-sacrificio-emergencia-full{
+  width:100%;
+  max-width:none;
+  margin:0 0 20px;
+}
+.rep-sacrificio-emergencia-full .plan-emerg-box--full{
+  max-width:none;
+  width:100%;
+  margin-top:0;
+  box-sizing:border-box;
+}
+.rep-sacrificio-emergencia-full .plan-emerg-table-wrap{
+  overflow-x:visible;
+  max-width:none;
+}
+.rep-sacrificio-emergencia-full .plan-emerg-table--full{
+  width:100%;
+  max-width:none;
+  table-layout:auto;
+  font-size:12px;
+}
+.rep-sacrificio-emergencia-full .plan-emerg-table--full th,
+.rep-sacrificio-emergencia-full .plan-emerg-table--full td{
+  padding:8px 10px;
+  white-space:nowrap;
+}
+.rep-sacrificio-emergencia-full .plan-emerg-table--full td:nth-child(6),
+.rep-sacrificio-emergencia-full .plan-emerg-table--full td:nth-child(8){
+  white-space:normal;
+  min-width:120px;
+}
 .resumen-dia-dos-tablas{
   display:flex;
   flex-direction:column;
