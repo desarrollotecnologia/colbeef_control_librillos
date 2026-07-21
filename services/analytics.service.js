@@ -12,11 +12,25 @@ let storageMode = null; // 'db' | 'file'
 let fileWriteQueue = Promise.resolve();
 
 function esErrorSoloLectura(err) {
+  const code = String(err?.code || '');
   const msg = String(err?.message || '').toLowerCase();
-  return msg.includes('read-only') || msg.includes('readonly');
+  return (
+    code === '25006' ||
+    code === '42501' ||
+    msg.includes('read-only') ||
+    msg.includes('readonly') ||
+    msg.includes('permission denied') ||
+    msg.includes('permiso denegado')
+  );
+}
+
+function forzarSoloArchivo() {
+  const v = String(process.env.ANALYTICS_USE_FILE || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
 }
 
 async function ensureFileStore() {
+  await fs.mkdir(path.dirname(fileStorePath), { recursive: true });
   try {
     await fs.access(fileStorePath);
   } catch {
@@ -245,6 +259,11 @@ function resumenDesdeEventosJs(rows, { desde, hasta }) {
 }
 
 async function ensureAnalyticsStorage() {
+  if (forzarSoloArchivo()) {
+    await ensureFileStore();
+    storageMode = 'file';
+    return storageMode;
+  }
   if (storageMode) return storageMode;
   if (ensured) {
     storageMode = 'db';
