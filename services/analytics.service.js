@@ -70,8 +70,16 @@ function extraerArrayJsonPrefix(raw) {
 }
 
 async function writeFileEvents(rows) {
-  await fs.writeFile(fileStoreTmpPath, JSON.stringify(rows), 'utf8');
-  await fs.rename(fileStoreTmpPath, fileStorePath);
+  const tmpPath = `${fileStoreTmpPath}.${process.pid}.${Date.now()}.${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(rows), 'utf8');
+    await fs.rename(tmpPath, fileStorePath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 }
 
 async function readFileEvents() {
@@ -94,14 +102,18 @@ async function readFileEvents() {
 }
 
 async function appendFileEvent(event) {
-  fileWriteQueue = fileWriteQueue.then(async () => {
-    const rows = await readFileEvents();
-    rows.push(event);
-    if (rows.length > 120000) {
-      rows.splice(0, rows.length - 120000);
-    }
-    await writeFileEvents(rows);
-  });
+  fileWriteQueue = fileWriteQueue
+    .catch((err) => {
+      console.warn('⚠️ Analitica: se recupera cola de escritura local:', err.message || err);
+    })
+    .then(async () => {
+      const rows = await readFileEvents();
+      rows.push(event);
+      if (rows.length > 120000) {
+        rows.splice(0, rows.length - 120000);
+      }
+      await writeFileEvents(rows);
+    });
   await fileWriteQueue;
 }
 
