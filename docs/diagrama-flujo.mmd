@@ -1,0 +1,111 @@
+%% Colbeef — Control de Librillos
+%% Abrir en: https://mermaid.live  (pegar todo el contenido)
+%% O en VS Code con extensión "Markdown Preview Mermaid Support"
+
+flowchart TB
+  %% ─── INICIO ─────────────────────────────────────────
+  START([Usuario abre el sistema]) --> FE[frontend/index.html + app.js]
+  FE --> FECHA{¿Hora Bogotá?}
+  FECHA -->|Antes de 13:00| D_AYER[Fecha = día anterior]
+  FECHA -->|Desde 13:00| D_HOY[Fecha = día actual]
+  D_AYER --> TABLERO
+  D_HOY --> TABLERO
+
+  TABLERO[Tablero operativo] --> MENU{¿Qué vista usa?}
+
+  %% ─── CONSULTA TURNO ─────────────────────────────────
+  MENU -->|Turno / Detalle| CONSULTA
+  MENU -->|Etiqueta cruda| SALIDAS
+  MENU -->|Por cliente| CLIENTES
+  MENU -->|Resumen del día| RESUMEN
+  MENU -->|Reportes / guías| REPORTES
+  MENU -->|Histórico| AUDITORIA
+  MENU -->|Dashboard| DASH
+
+  %% ─── Flujo consulta librillos ───────────────────────
+  subgraph CONSULTA[Consulta de librillos]
+    direction TB
+    C1[GET /api/librillos?fecha=YYYY-MM-DD] --> C2[routes → controllers]
+    C2 --> C3[librillos.service]
+    C3 --> C4{¿Caché válida?}
+    C4 -->|Sí| C5[Devuelve JSON cacheado]
+    C4 -->|No| C6[(PostgreSQL<br/>plan faena + parte + salidas)]
+    C6 --> C7[Enriquecer + clasificar<br/>propietario / cliente / plaza]
+    C7 --> C8[Guardar en caché por fecha]
+    C8 --> C5
+    C5 --> C9[UI: indicadores, pendientes,<br/>despachados, diferencias]
+  end
+
+  %% ─── Flujo salidas de cava ──────────────────────────
+  subgraph SALIDAS[Salidas de cava]
+    direction TB
+    S1[Operador elige productos] --> S2{Acción}
+    S2 -->|Registrar| S3[POST /api/salidas<br/>ids_productos]
+    S2 -->|Corregir fecha| S4[PUT /api/salidas/:id]
+    S2 -->|Eliminar admin| S5[DELETE /api/salidas/:id<br/>rol=admin]
+    S3 --> S6[salidas.service]
+    S4 --> S6
+    S5 --> S6
+    S6 --> S7{Persistencia}
+    S7 -->|PostgreSQL| S8[(tabla salidas)]
+    S7 -->|JSON| S9[(data/*.json)]
+    S8 --> S10[Invalidar caché del turno]
+    S9 --> S10
+    S10 --> S11[UI actualiza pendientes / despachados]
+  end
+
+  %% ─── Clasificación comercial ────────────────────────
+  subgraph CLIENTES[Por cliente / agrupaciones]
+    direction TB
+    CL1[Datos del turno ya clasificados] --> CL2[agrupaciones + reglas-librillos]
+    CL2 --> CL3[ajustes-clasificacion JSON]
+    CL3 --> CL4[UI: por cliente, plaza, canal]
+  end
+
+  %% ─── Resumen ───────────────────────────────────────
+  subgraph RESUMEN[Resumen del día]
+    direction TB
+    R1[GET /api/librillos/resumen] --> R2[resumen-macro]
+    R2 --> R3[Comparar plan vs parte vs despachos]
+    R3 --> R4[UI: consolidados y diferencias]
+  end
+
+  %% ─── Reportes y guías ───────────────────────────────
+  subgraph REPORTES[Reportes y guías]
+    direction TB
+    RP1{Tipo de salida}
+    RP1 -->|Mensual| RP2[GET /api/librillos/reporte-mensual]
+    RP1 -->|Guía| RP3["GET /api/guias/generar<br/>categoria: cat, derivados, global_hides"]
+    RP1 -->|Etiquetas PDF| RP4[jsPDF / html2pdf en frontend]
+    RP2 --> RP5[Tabla / exportación]
+    RP3 --> RP6[Solo productos despachados del turno]
+    RP4 --> RP5
+    RP6 --> RP5
+  end
+
+  %% ─── Auditoría ─────────────────────────────────────
+  subgraph AUDITORIA[Auditoría]
+    direction TB
+    A1[GET /api/auditoria/cambios] --> A2[Histórico planillaje]
+    A3[POST /api/auditoria/reimpresion-crudas] --> A4[Registro reimpresiones]
+    A2 --> A5[UI histórico]
+    A4 --> A5
+  end
+
+  %% ─── Dashboard ─────────────────────────────────────
+  subgraph DASH[Dashboard ejecutivo]
+    direction TB
+    D1[GET /api/dashboard/resumen o /librillos] --> D2[Chart.js indicadores]
+  end
+
+  %% ─── Corte de turno ─────────────────────────────────
+  CUTOFF[[Corte operativo salidas<br/>00:00–05:59 → día anterior<br/>HORA_CORTE = 6 Bogotá]]
+
+  CONSULTA --> CUTOFF
+  SALIDAS --> CUTOFF
+  CLIENTES --> FIN([Fin / siguiente acción])
+  RESUMEN --> FIN
+  REPORTES --> FIN
+  AUDITORIA --> FIN
+  DASH --> FIN
+  CUTOFF --> FIN
