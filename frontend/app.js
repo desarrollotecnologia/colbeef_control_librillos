@@ -9542,9 +9542,17 @@ const REP_LIB_CANALES = [
   { key: 'global_hides', label: 'GLOBAL HIDES', color: '#8e6ac8' },
   { key: 'asurcarnes_glo', label: 'ASURCARNES GLO', color: '#2e7d32' },
 ];
+const REP_LIB_FACTURABLE = new Set([
+  'derivados_carnicos',
+  'global_hides',
+  'asurcarnes',
+  'asurcarnescol',
+  'asurcarnes_glo',
+]);
 const REP_LIB_MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
 const repLibrillosState = {
   init: false,
+  rawPayload: null,
   lastRender: null,
   reqSeq: 0,
   generandoPdf: false,
@@ -9578,6 +9586,188 @@ function repLibArmarMesesSelect() {
   selMes.value = String(mesActual);
 }
 
+function repLibDiasEnMes(anio, mes) {
+  const y = Number(anio);
+  const m = Number(mes);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return 31;
+  return new Date(y, m, 0).getDate();
+}
+
+function repLibArmarDiasSelect() {
+  const selAnio = document.getElementById('rep-lib-anio');
+  const selMes = document.getElementById('rep-lib-mes');
+  const selDesde = document.getElementById('rep-lib-dia-desde');
+  const selHasta = document.getElementById('rep-lib-dia-hasta');
+  if (!selDesde || !selHasta) return;
+  const anio = Number(selAnio?.value || 0);
+  const mes = repLibMesDesdeSelect(selMes);
+  const maxDia = repLibDiasEnMes(anio, mes);
+  const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  const mesActual = Number(hoy.slice(5, 7));
+  const anioActual = Number(hoy.slice(0, 4));
+  const diaHoy = Number(hoy.slice(8, 10));
+  const hastaAuto = (anio === anioActual && mes === mesActual) ? diaHoy : maxDia;
+  const prevDesde = Number(selDesde.value || 1);
+  const prevHasta = Number(selHasta.value || 0);
+  const opts = Array.from({ length: maxDia }, (_, i) => {
+    const d = i + 1;
+    return `<option value="${d}">${d}</option>`;
+  }).join('');
+  selDesde.innerHTML = opts;
+  selHasta.innerHTML = `<option value="auto">Automático (${hastaAuto})</option>${opts}`;
+  selDesde.value = String(Math.min(Math.max(prevDesde || 1, 1), maxDia));
+  if (prevHasta && prevHasta <= maxDia && selHasta.querySelector(`option[value="${prevHasta}"]`)) {
+    selHasta.value = String(prevHasta);
+  } else {
+    selHasta.value = 'auto';
+  }
+}
+
+function repLibLeerFiltrosUi() {
+  const selDesde = document.getElementById('rep-lib-dia-desde');
+  const selHasta = document.getElementById('rep-lib-dia-hasta');
+  const chkCorte = document.getElementById('rep-lib-incluir-corte');
+  const raw = repLibrillosState.rawPayload || {};
+  const hastaAuto = Number(String(raw.hasta || '').slice(8, 10)) || 31;
+  const diaDesde = Number(selDesde?.value || 1);
+  const diaHastaRaw = String(selHasta?.value || 'auto');
+  const diaHasta = diaHastaRaw === 'auto' ? hastaAuto : Number(diaHastaRaw);
+  return {
+    dia_desde: Number.isFinite(diaDesde) ? diaDesde : 1,
+    dia_hasta: Number.isFinite(diaHasta) ? diaHasta : hastaAuto,
+    incluir_corte_anterior: chkCorte ? chkCorte.checked : true,
+  };
+}
+
+function repLibFiltrarPayload(payload, filtros = {}) {
+  if (!payload) return payload;
+  const hastaAuto = Number(String(payload.hasta || '').slice(8, 10)) || 31;
+  const desde = Math.min(
+    Number(filtros.dia_desde || 1),
+    Number(filtros.dia_hasta || hastaAuto)
+  );
+  const hasta = Math.max(
+    Number(filtros.dia_desde || 1),
+    Number(filtros.dia_hasta || hastaAuto)
+  );
+  const incluirCorte = filtros.incluir_corte_anterior !== false;
+
+  const filas = (payload.filas || []).filter((f) => {
+    const d = Number(String(f.fecha || '').slice(8, 10));
+    return Number.isFinite(d) && d >= desde && d <= hasta;
+  });
+
+  const totales = repLibFilaBase('tot');
+  filas.forEach((f) => {
+    REP_LIB_CANALES.forEach((c) => {
+      totales[c.key] += Number(f[c.key] || 0);
+    });
+  });
+  const totalLibros = REP_LIB_CANALES.reduce(
+    (s, c) => s + Number(totales[c.key] || 0),
+    0
+  );
+
+  const detalle = new Map();
+  let totalMes = 0;
+  filas.forEach((f) => {
+    REP_LIB_CANALES.forEach((c) => {
+      if (!REP_LIB_FACTURABLE.has(c.key)) return;
+      const n = Number(f[c.key] || 0);
+      if (n <= 0) return;
+      detalle.set(c.key, (detalle.get(c.key) || 0) + n);
+      totalMes += n;
+    });
+  });
+  const asurCombo =
+    Number(detalle.get('asurcarnes') || 0) +
+    Number(detalle.get('asurcarnescol') || 0) +
+    Number(detalle.get('asurcarnes_glo') || 0);
+  const factBase = payload.facturacion || {};
+  const totalCorteAnterior = incluirCorte
+    ? Number(factBase.total_corte_anterior || 0)
+    : 0;
+  const facturacion = {
+    ...factBase,
+    detalle: [
+      { codigo: 'derivados_carnicos', total: Number(detalle.get('derivados_carnicos') || 0) },
+      { codigo: 'global_hides', total: Number(detalle.get('global_hides') || 0) },
+      { codigo: 'asur_combo', total: asurCombo },
+    ].filter((x) => Number(x.total || 0) > 0),
+    total_mes: totalMes,
+    total_corte_anterior: totalCorteAnterior,
+    total_facturar: totalMes + totalCorteAnterior,
+    incluye_corte_anterior: incluirCorte,
+  };
+
+  const y = Number(payload.anio);
+  const m = Number(payload.mes);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const activo = desde > 1 || hasta < hastaAuto || !incluirCorte;
+
+  return {
+    ...payload,
+    desde: `${y}-${pad2(m)}-${pad2(desde)}`,
+    hasta: `${y}-${pad2(m)}-${pad2(hasta)}`,
+    filas,
+    totales,
+    total_libros: totalLibros,
+    dias_en_tabla: filas.length,
+    facturacion,
+    filtros: {
+      dia_desde: desde,
+      dia_hasta: hasta,
+      incluir_corte_anterior: incluirCorte,
+      activo,
+    },
+  };
+}
+
+function repLibReaplicarFiltrosLocales() {
+  if (!repLibrillosState.rawPayload) return;
+  const filtros = repLibLeerFiltrosUi();
+  repLibAplicarPayloadMensual(repLibFiltrarPayload(repLibrillosState.rawPayload, filtros));
+  repLibActualizarPresetActivo();
+}
+
+function repLibAplicarPresetFiltro(preset) {
+  const selDesde = document.getElementById('rep-lib-dia-desde');
+  const selHasta = document.getElementById('rep-lib-dia-hasta');
+  const chkCorte = document.getElementById('rep-lib-incluir-corte');
+  if (!selDesde || !selHasta || !chkCorte) return;
+
+  if (preset === 'solo_mes_sin_corte') {
+    selDesde.value = '1';
+    selHasta.value = 'auto';
+    chkCorte.checked = false;
+  } else if (preset === 'mes_completo_con_corte') {
+    selDesde.value = '1';
+    selHasta.value = 'auto';
+    chkCorte.checked = true;
+  } else {
+    return;
+  }
+  repLibReaplicarFiltrosLocales();
+}
+
+function repLibActualizarPresetActivo() {
+  const presets = document.querySelectorAll('.rep-lib-preset');
+  if (!presets.length) return;
+  const f = repLibLeerFiltrosUi();
+  const selHasta = document.getElementById('rep-lib-dia-hasta');
+  const hastaEsAuto = String(selHasta?.value || '') === 'auto';
+  presets.forEach((btn) => {
+    const p = String(btn.dataset.preset || '');
+    let active = false;
+    if (p === 'solo_mes_sin_corte') {
+      active = f.dia_desde === 1 && hastaEsAuto && !f.incluir_corte_anterior;
+    } else if (p === 'mes_completo_con_corte') {
+      active = f.dia_desde === 1 && hastaEsAuto && f.incluir_corte_anterior;
+    }
+    btn.classList.toggle('is-active', active);
+  });
+}
+
 function repLibFacturacionDesdeApi(f, payload = {}) {
   const mesNum = Number(payload?.mes ?? f?.mes ?? 0);
   const mesNombre = String(
@@ -9591,6 +9781,7 @@ function repLibFacturacionDesdeApi(f, payload = {}) {
     totalMes: Number(f?.total_mes || 0),
     totalCorteAnterior: Number(f?.total_corte_anterior || 0),
     totalFacturar: Number(f?.total_facturar || 0),
+    incluyeCorteAnterior: f?.incluye_corte_anterior !== false,
     mesNombre,
     corteAnteriorLabel: dPrev && Number.isFinite(dPrev.getTime())
       ? `${dPrev.getDate()} ${REP_LIB_MESES[dPrev.getMonth()]}`
@@ -9606,7 +9797,10 @@ function repLibActualizarPeriodoLabel(payload) {
   const suf = payload.mes_en_curso
     ? ` · mes en curso (hasta ${d2})`
     : ` · mes cerrado`;
-  el.textContent = `${payload.mes_nombre || ''} ${payload.anio || ''}: ${d1} — ${d2}${suf}`;
+  const filtro = payload?.filtros?.activo
+    ? ` · filtro días ${payload.filtros.dia_desde}–${payload.filtros.dia_hasta}${payload.filtros.incluir_corte_anterior ? '' : ' · sin corte mes anterior'}`
+    : '';
+  el.textContent = `${payload.mes_nombre || ''} ${payload.anio || ''}: ${d1} — ${d2}${suf}${filtro}`;
 }
 
 function repLibAplicarPayloadMensual(payload) {
@@ -9736,6 +9930,7 @@ function repLibPintarFacturacion(data) {
   const tbody = document.getElementById('rep-lib-fact-tbody');
   if (!txt || !tbody) return;
   txt.textContent = String(data?.periodoTexto || '');
+  const incluyeCorte = data?.incluyeCorteAnterior !== false;
   const etiqueta = (cod) => {
     if (cod === 'asur_combo') return 'ASURCARNES -COL-GLO';
     if (cod === 'asurcarnes_glo') return 'ASURCARNES -COL-GLO';
@@ -9747,16 +9942,19 @@ function repLibPintarFacturacion(data) {
       <td class="rep-lib-fact-value">${fmtNum(d.total)}</td>
     </tr>
   `).join('');
+  const filaCorte = incluyeCorte ? `
+    <tr>
+      <td class="rep-lib-fact-label">TOTAL ${escapeHtml(data?.corteAnteriorLabel || '')}</td>
+      <td class="rep-lib-fact-value">${fmtNum(data?.totalCorteAnterior || 0)}</td>
+    </tr>
+  ` : '';
   tbody.innerHTML = `
     ${rowsDetalle || '<tr><td class="rep-lib-fact-label">SIN REGISTROS FACTURABLES</td><td class="rep-lib-fact-value">0</td></tr>'}
     <tr class="rep-lib-fact-total">
       <td class="rep-lib-fact-label">TOTAL ${escapeHtml(data?.mesNombre || '')}</td>
       <td class="rep-lib-fact-value">${fmtNum(data?.totalMes || 0)}</td>
     </tr>
-    <tr>
-      <td class="rep-lib-fact-label">TOTAL ${escapeHtml(data?.corteAnteriorLabel || '')}</td>
-      <td class="rep-lib-fact-value">${fmtNum(data?.totalCorteAnterior || 0)}</td>
-    </tr>
+    ${filaCorte}
     <tr class="rep-lib-fact-total">
       <td class="rep-lib-fact-label">TOTAL A FACTURAR</td>
       <td class="rep-lib-fact-value">${fmtNum(data?.totalFacturar || 0)}</td>
@@ -10050,15 +10248,33 @@ async function cargarReporteLibrillosVista(forzar = false) {
     ld.setAttribute('aria-hidden', on ? 'false' : 'true');
   };
   repLibArmarMesesSelect();
+  repLibArmarDiasSelect();
   if (!repLibrillosState.init) {
     repLibArmarAniosSelect();
     const btn = document.getElementById('rep-lib-refrescar');
     const selAnio = document.getElementById('rep-lib-anio');
     const selMes = document.getElementById('rep-lib-mes');
+    const selDesde = document.getElementById('rep-lib-dia-desde');
+    const selHasta = document.getElementById('rep-lib-dia-hasta');
+    const chkCorte = document.getElementById('rep-lib-incluir-corte');
     const btnPdf = document.getElementById('rep-lib-descargar-pdf');
     btn?.addEventListener('click', () => { void cargarReporteLibrillosVista(true); });
-    selAnio?.addEventListener('change', () => { void cargarReporteLibrillosVista(false); });
-    selMes?.addEventListener('change', () => { void cargarReporteLibrillosVista(false); });
+    selAnio?.addEventListener('change', () => {
+      repLibArmarDiasSelect();
+      void cargarReporteLibrillosVista(false);
+    });
+    selMes?.addEventListener('change', () => {
+      repLibArmarDiasSelect();
+      void cargarReporteLibrillosVista(false);
+    });
+    selDesde?.addEventListener('change', repLibReaplicarFiltrosLocales);
+    selHasta?.addEventListener('change', repLibReaplicarFiltrosLocales);
+    chkCorte?.addEventListener('change', repLibReaplicarFiltrosLocales);
+    document.querySelectorAll('.rep-lib-preset').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        repLibAplicarPresetFiltro(String(btn.dataset.preset || ''));
+      });
+    });
     btnPdf?.addEventListener('click', descargarReporteLibrillosPDF);
     repLibrillosState.init = true;
   }
@@ -10106,7 +10322,9 @@ async function cargarReporteLibrillosVista(forzar = false) {
     if (!res.ok) {
       throw new Error(payload?.error || `HTTP ${res.status}`);
     }
-    repLibAplicarPayloadMensual(payload);
+    repLibrillosState.rawPayload = payload;
+    repLibArmarDiasSelect();
+    repLibReaplicarFiltrosLocales();
     const ms = Math.max(0, Date.now() - t0);
     enviarEventoAnalytics({
       eventName: 'reporte_librillos_cargar',

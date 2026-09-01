@@ -269,6 +269,9 @@ export const getReporteMensualLibrillos = async (req, res) => {
     }
     const datos = await obtenerReporteLibrillosMensual(anio, m, {
       bypassCache: Boolean(req.query?.refresh || req.query?.nocache),
+      dia_desde: req.query?.dia_desde,
+      dia_hasta: req.query?.dia_hasta,
+      incluir_corte_anterior: req.query?.incluir_corte_anterior,
     });
     return res.json(datos);
   } catch (error) {

@@ -225,3 +225,128 @@ export function armarReporteLibrillosMensual(registros, anio, mes) {
     canales: REP_LIB_CANALES,
   };
 }
+
+function diaMesDesdeIso(iso) {
+  const n = Number(String(iso || '').slice(8, 10));
+  return Number.isFinite(n) && n >= 1 && n <= 31 ? n : null;
+}
+
+function parseDiaFiltro(v, fallback) {
+  if (v === null || v === undefined || v === '') return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1 || n > 31) return fallback;
+  return Math.trunc(n);
+}
+
+function parseIncluirCorteFiltro(v, fallback = true) {
+  if (v === null || v === undefined || v === '') return fallback;
+  const s = String(v).trim().toLowerCase();
+  if (['0', 'false', 'no', 'off'].includes(s)) return false;
+  if (['1', 'true', 'si', 'sí', 'on'].includes(s)) return true;
+  return fallback;
+}
+
+function recalcularFacturacionDesdeFilas(filas, payload, incluirCorteAnterior) {
+  const detalle = new Map();
+  let totalMes = 0;
+  for (const f of filas || []) {
+    for (const c of REP_LIB_CANALES) {
+      if (!REP_LIB_FACTURABLE.has(c.key)) continue;
+      const n = Number(f[c.key] || 0);
+      if (n <= 0) continue;
+      detalle.set(c.key, (detalle.get(c.key) || 0) + n);
+      totalMes += n;
+    }
+  }
+  const asurCombo =
+    Number(detalle.get('asurcarnes') || 0) +
+    Number(detalle.get('asurcarnescol') || 0) +
+    Number(detalle.get('asurcarnes_glo') || 0);
+  const factBase = payload?.facturacion || {};
+  const totalCorteAnterior = incluirCorteAnterior
+    ? Number(factBase.total_corte_anterior || 0)
+    : 0;
+  return {
+    ...factBase,
+    detalle: [
+      { codigo: 'derivados_carnicos', total: Number(detalle.get('derivados_carnicos') || 0) },
+      { codigo: 'global_hides', total: Number(detalle.get('global_hides') || 0) },
+      { codigo: 'asur_combo', total: asurCombo },
+    ].filter((x) => Number(x.total || 0) > 0),
+    total_mes: totalMes,
+    total_corte_anterior: totalCorteAnterior,
+    total_facturar: totalMes + totalCorteAnterior,
+    incluye_corte_anterior: incluirCorteAnterior,
+  };
+}
+
+/**
+ * Aplica filtros operativos al reporte ya armado (tabla + facturación).
+ * @param {object} payload — salida de armarReporteLibrillosMensual
+ * @param {object} [opts]
+ * @param {number|string} [opts.dia_desde] — día inicial del mes (1-31)
+ * @param {number|string} [opts.dia_hasta] — día final del mes (1-31); vacío = hasta del payload
+ * @param {boolean|string|number} [opts.incluir_corte_anterior] — sumar último día del mes previo
+ */
+export function filtrarReporteLibrillosMensual(payload, opts = {}) {
+  if (!payload) return payload;
+  const hastaAuto = diaMesDesdeIso(payload.hasta) || 31;
+  const diaDesde = parseDiaFiltro(opts.dia_desde, 1);
+  const diaHasta = parseDiaFiltro(opts.dia_hasta, hastaAuto);
+  const desde = Math.min(diaDesde, diaHasta);
+  const hasta = Math.max(diaDesde, diaHasta);
+  const incluirCorte = parseIncluirCorteFiltro(opts.incluir_corte_anterior, true);
+
+  const sinFiltroDias = desde <= 1 && hasta >= hastaAuto;
+  const sinFiltroCorte = incluirCorte;
+  if (sinFiltroDias && sinFiltroCorte) {
+    return {
+      ...payload,
+      filtros: {
+        dia_desde: 1,
+        dia_hasta: hastaAuto,
+        incluir_corte_anterior: true,
+        activo: false,
+      },
+    };
+  }
+
+  const filas = (payload.filas || []).filter((f) => {
+    const d = diaMesDesdeIso(f.fecha);
+    return d != null && d >= desde && d <= hasta;
+  });
+
+  const totales = filaBase('tot');
+  filas.forEach((f) => {
+    REP_LIB_CANALES.forEach((c) => {
+      totales[c.key] += Number(f[c.key] || 0);
+    });
+  });
+  const totalLibros = REP_LIB_CANALES.reduce(
+    (s, c) => s + Number(totales[c.key] || 0),
+    0
+  );
+  const facturacion = recalcularFacturacionDesdeFilas(filas, payload, incluirCorte);
+
+  const y = Number(payload.anio);
+  const m = Number(payload.mes);
+  const desdeIso = `${y}-${pad2(m)}-${pad2(desde)}`;
+  const hastaIso = `${y}-${pad2(m)}-${pad2(hasta)}`;
+
+  return {
+    ...payload,
+    desde: desdeIso,
+    hasta: hastaIso,
+    filas,
+    totales,
+    total_libros: totalLibros,
+    dias_en_tabla: filas.length,
+    facturacion,
+    filtros: {
+      dia_desde: desde,
+      dia_hasta: hasta,
+      incluir_corte_anterior: incluirCorte,
+      activo: true,
+    },
+  };
+}

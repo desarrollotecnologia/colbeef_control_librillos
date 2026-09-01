@@ -67,6 +67,7 @@ import { obtenerResumenSexoPorFecha, etiquetaSexoProducto } from './librillos/re
 import {
   armarReporteLibrillosMensual,
   esDomingoIso,
+  filtrarReporteLibrillosMensual,
   rangoMesReporteLibrillos,
 } from './librillos/reporte-mensual.js';
 import { clasificarMovimiento } from './clasificacion-movimiento.service.js';
@@ -2683,35 +2684,38 @@ export async function obtenerReporteLibrillosMensual(anio, mes, opts = {}) {
     throw new Error('mes requerido (1-12)');
   }
   const cacheKey = `rep-mensual|${y}|${m}`;
+  let base = null;
   if (!opts.bypassCache) {
     const hit = cacheReporteMensualLibrillos.get(cacheKey);
     if (hit && Date.now() - Number(hit.ts || 0) <= CACHE_REPORTE_MENSUAL_MS) {
-      return hit.data;
+      base = hit.data;
     }
   }
-  const t0 = Date.now();
-  const rango = rangoMesReporteLibrillos(y, m);
-  const fechas = listaFechasDesdeHasta(rango.consulta_desde, rango.consulta_hasta)
-    .filter((fecha) => !esDomingoIso(fecha));
-  const registros = [];
-  const gruposDias = chunks(fechas, 1);
-  await procesarGruposConLimite(
-    gruposDias,
-    async ([fecha]) => {
-      const rows = await filasClasificacionParaReporteMensual(fecha);
-      if (rows?.length) registros.push(...rows);
-    },
-    REPORTE_MENSUAL_DIA_CONCURRENCY
-  );
-  const payload = {
-    ...armarReporteLibrillosMensual(registros, y, m),
-    generado_en: new Date().toISOString(),
-    ms_consulta: Date.now() - t0,
-    dias_consultados: fechas.length,
-    modo_consulta: 'clasificacion_ligera_paralela',
-  };
-  cacheReporteMensualLibrillos.set(cacheKey, { ts: Date.now(), data: payload });
-  return payload;
+  if (!base) {
+    const t0 = Date.now();
+    const rango = rangoMesReporteLibrillos(y, m);
+    const fechas = listaFechasDesdeHasta(rango.consulta_desde, rango.consulta_hasta)
+      .filter((fecha) => !esDomingoIso(fecha));
+    const registros = [];
+    const gruposDias = chunks(fechas, 1);
+    await procesarGruposConLimite(
+      gruposDias,
+      async ([fecha]) => {
+        const rows = await filasClasificacionParaReporteMensual(fecha);
+        if (rows?.length) registros.push(...rows);
+      },
+      REPORTE_MENSUAL_DIA_CONCURRENCY
+    );
+    base = {
+      ...armarReporteLibrillosMensual(registros, y, m),
+      generado_en: new Date().toISOString(),
+      ms_consulta: Date.now() - t0,
+      dias_consultados: fechas.length,
+      modo_consulta: 'clasificacion_ligera_paralela',
+    };
+    cacheReporteMensualLibrillos.set(cacheKey, { ts: Date.now(), data: base });
+  }
+  return filtrarReporteLibrillosMensual(base, opts);
 }
 
 export const obtenerObservacionesPorFecha = async (fecha) => {

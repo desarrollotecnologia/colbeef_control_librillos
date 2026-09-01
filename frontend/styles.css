@@ -2304,6 +2304,38 @@ body{
   padding:12px 14px;
   flex-wrap:wrap;
 }
+.rep-lib-check-corte{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:12px;
+  color:#334155;
+  padding:8px 10px;
+  border:1px solid #d8e2ec;
+  border-radius:8px;
+  background:#f8fafc;
+  max-width:280px;
+  line-height:1.35;
+}
+.rep-lib-check-corte input{margin:0;}
+.rep-lib-presets{
+  flex-basis:100%;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  padding-top:2px;
+}
+.rep-lib-presets-label{
+  font-size:12px;
+  color:#64748b;
+  font-weight:600;
+}
+.rep-lib-preset.is-active{
+  border-color:#0a7f2d;
+  background:#edf8ef;
+  color:#06531d;
+}
 .rep-lib-tabla thead tr{
   background:#0a7f2d !important;
 }

@@ -454,6 +454,27 @@
           <label class="fl" for="rep-lib-mes">MES</label>
           <select class="fs" id="rep-lib-mes" required></select>
         </div>
+        <div>
+          <label class="fl" for="rep-lib-dia-desde">DESDE DÍA</label>
+          <select class="fs" id="rep-lib-dia-desde" title="Primer día del mes a mostrar en la tabla"></select>
+        </div>
+        <div>
+          <label class="fl" for="rep-lib-dia-hasta">HASTA DÍA</label>
+          <select class="fs" id="rep-lib-dia-hasta" title="Último día del mes a mostrar en la tabla"></select>
+        </div>
+        <label class="rep-lib-check-corte" for="rep-lib-incluir-corte">
+          <input type="checkbox" id="rep-lib-incluir-corte" checked />
+          Incluir corte mes anterior en facturación
+        </label>
+        <div class="rep-lib-presets" id="rep-lib-presets">
+          <span class="rep-lib-presets-label">Atajos:</span>
+          <button type="button" class="btn-gen btn-gen-sec rep-lib-preset" data-preset="solo_mes_sin_corte">
+            Solo mes actual (sin corte)
+          </button>
+          <button type="button" class="btn-gen btn-gen-sec rep-lib-preset" data-preset="mes_completo_con_corte">
+            Mes completo (con corte)
+          </button>
+        </div>
         <button type="button" class="btn-gen btn-gen-sec" id="rep-lib-refrescar">Actualizar reporte</button>
         <button type="button" class="btn-gen btn-gen-sec" id="rep-lib-descargar-pdf">Descargar PDF</button>
       </div>

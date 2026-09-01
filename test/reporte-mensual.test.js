@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   armarReporteLibrillosMensual,
+  filtrarReporteLibrillosMensual,
   rangoMesReporteLibrillos,
   listaDiasIso,
   listaDiasProcesoIso,
@@ -75,5 +76,38 @@ describe('reporte-mensual', () => {
     assert.equal(r.desde, '2026-05-01');
     assert.match(r.corte_anterior, /^\d{4}-\d{2}-\d{2}$/);
     assert.equal(r.consulta_desde, r.corte_anterior);
+  });
+
+  it('filtra por día hasta y excluye corte anterior', () => {
+    const registros = [
+      {
+        id_producto: 'A',
+        fecha: '2026-04-30',
+        agrupacion_codigo: 'derivados_carnicos',
+        observaciones: 'RETIRAR LIBRILLOS',
+      },
+      {
+        id_producto: 'B',
+        fecha: '2026-05-09',
+        agrupacion_codigo: 'derivados_carnicos',
+        observaciones: 'RETIRAR LIBRILLOS',
+      },
+      {
+        id_producto: 'C',
+        fecha: '2026-05-31',
+        agrupacion_codigo: 'asurcarnes',
+        observaciones: 'RETIRAR LIBRILLOS',
+      },
+    ];
+    const base = armarReporteLibrillosMensual(registros, 2026, 5);
+    const filtrado = filtrarReporteLibrillosMensual(base, {
+      dia_hasta: 30,
+      incluir_corte_anterior: false,
+    });
+    assert.equal(filtrado.filas.some((x) => x.fecha === '2026-05-31'), false);
+    assert.equal(filtrado.facturacion.total_corte_anterior, 0);
+    assert.equal(filtrado.facturacion.total_mes, 1);
+    assert.equal(filtrado.facturacion.total_facturar, 1);
+    assert.equal(filtrado.filtros.activo, true);
   });
 });
