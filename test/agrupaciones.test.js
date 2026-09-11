@@ -32,6 +32,11 @@ describe('clasificarAgrupacionConAuditoria', () => {
     assert.equal(ag.codigo, 'derivados_carnicos');
   });
 
+  it('tolera libillo salomo → Global Hides', () => {
+    const ag = clasificarAgrupacionConAuditoria('retirar libillo salomo');
+    assert.equal(ag.codigo, 'global_hides');
+  });
+
   it('sigue clasificando CAT con retiro canónico', () => {
     const ag = clasificarAgrupacionConAuditoria('RETIRAR LIBRILLOS CAT');
     assert.equal(ag.codigo, 'cat');

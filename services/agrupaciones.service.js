@@ -109,7 +109,7 @@ function extraerDestinoDesdeObservacionNormalizada(t) {
   const m =
     t.match(/\bretirar\s+librillos\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i) ||
     t.match(
-      /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r+i+l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i
+      /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r?i?l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i
     );
   return String(m?.[1] || '')
     .replace(/\s+/g, ' ')

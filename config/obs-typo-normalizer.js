@@ -4,21 +4,21 @@
  * antes de parsear / clasificar, para no mandar retiros mal escritos a cocidos.
  */
 
-/** Retiro con typos: RRETIRAR, RETRAR, RETIRA, LIBRILOS, LIBRILLO, etc. */
+/** Retiro con typos: RRETIRAR, RETRAR, LIBILLO, LIBRILOS, LIBRILLO, etc. */
 export const RX_RETIRO_LIBRILLOS_FUZZY =
-  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r+i+l+l?o*s?\b/gi;
+  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r?i?l+l?o*s?\b/gi;
 
 /** Misma familia sin flag global (tests / .test). */
 export const RX_RETIRO_LIBRILLOS_FUZZY_TEST =
-  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r+i+l+l?o*s?\b/i;
+  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r?i?l+l?o*s?\b/i;
 
 /** Captura destino tras instrucción de retiro (tolerante a typos). */
 export const RX_RETIRO_LIBRILLOS_CAPTURE =
-  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r+i+l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?([A-Z0-9a-z .,_/&\-ÁÉÍÓÚÑáéíóúñ]+?)(?=\s*[\n\r\)]|\s*$)/gi;
+  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r?i?l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?([A-Z0-9a-z .,_/&\-ÁÉÍÓÚÑáéíóúñ]+?)(?=\s*[\n\r\)]|\s*$)/gi;
 
 /** Quita el bloque de retiro del texto limpio. */
 export const RX_RETIRO_LIBRILLOS_STRIP =
-  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r+i+l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?[^\n\r\)]*/gi;
+  /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r?i?l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?[^\n\r\)]*/gi;
 
 export function normalizarBasicoObs(texto) {
   return String(texto || '')
@@ -61,9 +61,9 @@ export function corregirDestinosComerciales(texto) {
     [/\bderivad+o+s?\b/gi, 'DERIVADOS'],
     [/\bcarviscol\b/gi, 'CARVISCOL'],
     [/\bcarvicol\b/gi, 'CARVISCOL'],
-    // Global Hides
+    // Global Hides / Salomon (salomo, salomón…)
     [/\bglobal\s*hides?\b/gi, 'GLOBAL HIDES'],
-    [/\bsalom[oó]n\b/gi, 'SALOMON'],
+    [/\bsalom[oó]n?\b/gi, 'SALOMON'],
     // CATTLEMENT se deja como cliente; CAT solo token corto
     [/\bcattlement\b/gi, 'CATTLEMENT'],
   ];
