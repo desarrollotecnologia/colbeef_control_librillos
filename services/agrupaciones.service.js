@@ -2,6 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { textoIndicaRetiroLibrillos } from '../config/plan-faena-obs.js';
+import {
+  RX_RETIRO_LIBRILLOS_FUZZY_TEST,
+  aliasCercano,
+  normalizarObservacionComercial,
+} from '../config/obs-typo-normalizer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, '../config/agrupaciones-librillos.json');
@@ -49,10 +54,7 @@ export function reglaOverrideGutierrezCarviscol(propietarioRaw, obsRaw) {
   if (prop !== PROP_NORM_GUTIERREZ_SUAREZ_CAMILO) return null;
   const obsNorm = normalizarObservacionMacro(obsRaw);
   const t = normalizarClienteDestino(obsNorm || obsRaw);
-  const retLibr =
-    /\bretira(?:r)?\s+librill?os?\b/.test(t) ||
-    /\bretira(?:r)?\s+librilo\b/.test(t) ||
-    /\bretira(?:r)?\s+librill\b/.test(t);
+  const retLibr = textoIndicaRetiroLibrillos(t);
   if (!retLibr || !t.includes('carviscol')) return null;
   return {
     cliente_destino: 'Uriel Vargas',
@@ -64,6 +66,7 @@ export function reglaOverrideGutierrezCarviscol(propietarioRaw, obsRaw) {
 /**
  * Coincidencia por alias en un string ya normalizado (observación completa o solo cliente).
  * Prioriza alias más largos; los de ≤4 caracteres solo coinciden en igualdad exacta.
+ * Si no hay match exacto, prueba cercanía tipográfica (Levenshtein) en alias ≥ 5.
  */
 function resolverGrupoPorAliases(n, cfg) {
   if (!n) return null;
@@ -90,44 +93,45 @@ function resolverGrupoPorAliases(n, cfg) {
       return { codigo: p.codigo, etiqueta: p.etiqueta };
     }
   }
+  // Typo-tolerant: destino cercano a un alias conocido
+  for (const p of pares) {
+    if (p.len < 5) continue;
+    if (aliasCercano(n, p.alias)) {
+      return { codigo: p.codigo, etiqueta: p.etiqueta };
+    }
+  }
   return null;
 }
 
-/** Extrae texto posterior a "RETIRAR LIBRILLOS" (observación ya normalizada a minúsculas). */
+/** Extrae texto posterior a "RETIRAR LIBRILLOS" (canónico o typo ya normalizado / fuzzy). */
 function extraerDestinoDesdeObservacionNormalizada(t) {
   if (!t) return '';
-  const m = t.match(
-    /\bretira(?:r)?\s+librill?os?\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i
-  );
+  const m =
+    t.match(/\bretirar\s+librillos\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i) ||
+    t.match(
+      /\br{1,3}e?t+i?r+a+r*\s+l+i+b+r+i+l+l?o*s?\b\s*[:\-]?\s*(?:para\s+)?([^\n\r)]+)/i
+    );
   return String(m?.[1] || '')
     .replace(/\s+/g, ' ')
     .replace(/\s*\.\s*$/, '')
     .trim();
 }
 
-/** Detecta instrucción de retiro (misma familia que clasificarAgrupacionConAuditoria). */
+/** Detecta instrucción de retiro (tolera typos: RRETIRAR, RETRAR, LIBRILOS…). */
 function textoTieneRetirarLibrillos(s) {
-  const x = String(s || '');
-  return (
-    /\bretirar\s+librillos\b/i.test(x) ||
-    /\bretirar\s+librilo\b/i.test(x) ||
-    /\bretirar\s+librill\b/i.test(x) ||
-    /\bretira\s+librillos\b/i.test(x) ||
-    /\bretira\s+librilo\b/i.test(x) ||
-    /\bretira\s+librill\b/i.test(x)
-  );
+  return textoIndicaRetiroLibrillos(s) || RX_RETIRO_LIBRILLOS_FUZZY_TEST.test(String(s || ''));
 }
 
 /**
  * Normalización "estilo macro" previa a clasificar:
+ * - corrige typos de retiro y destinos comerciales
  * - quita prefijos de turno /LxM/, /VxS/, etc.
- * - si hay paréntesis, usa tramo antes de "(" para evitar ruido de cola operativa
- * - excepción: si «RETIRAR LIBRILLOS» solo aparece **dentro** del paréntesis (p. ej. plaza + /SxD/ + `( RETIRAR … )`),
- *   se usa el texto completo sin turno para no clasificar todo como cocido.
+ * - si hay paréntesis, usa tramo antes de "(" salvo que el retiro solo esté dentro
  * - comprime espacios
  */
 export function normalizarObservacionMacro(obsRaw) {
-  const src = String(obsRaw || '')
+  const corregida = normalizarObservacionComercial(obsRaw);
+  const src = String(corregida || '')
     .replace(/\r?\n/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -199,13 +203,7 @@ export function clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback 
     return { ...fallbackComercial(cfg), regla: 'fallback_obs_vacia', observacion_normalizada: obsNorm };
   }
 
-  const retLibr =
-    /\bretirar\s+librillos\b/.test(t) ||
-    /\bretirar\s+librilo\b/.test(t) ||
-    /\bretirar\s+librill\b/.test(t) ||
-    /\bretira\s+librillos\b/.test(t) ||
-    /\bretira\s+librilo\b/.test(t) ||
-    /\bretira\s+librill\b/.test(t);
+  const retLibr = textoIndicaRetiroLibrillos(t);
 
   // Prioridad "tipo macro": primero subgrupos/especiales y destinos nominales,
   // luego bucket general ASURCARNES.
@@ -220,7 +218,7 @@ export function clasificarAgrupacionConAuditoria(obsRaw, clienteDestinoFallback 
     return { codigo: 'asurcarnes_glo', etiqueta: 'Asurcarnes GLO', regla: 'match_asurcarnes_glo', observacion_normalizada: obsNorm };
   }
 
-  if (/retira(?:r)?\s+librillos\s*[:\-]?\s*cat\b/.test(t)) {
+  if (/\bretirar\s+librillos\s*[:\-]?\s*cat\b/.test(t) || /retira(?:r)?\s+librillos\s*[:\-]?\s*cat\b/.test(t)) {
     return { codigo: 'cat', etiqueta: 'CAT', regla: 'match_cat_retirar', observacion_normalizada: obsNorm };
   }
 

@@ -1,12 +1,14 @@
 /**
  * Parseo de observaciones plan/parte (retiro librillos, plaza, cliente).
- * Extraído de librillos.service.js — misma lógica de negocio.
+ * Tolera typos de RETIRAR LIBRILLOS y destinos comerciales.
  */
 
-const RX_RETIRO_CAPTURE =
-  /\bRETIRAR?\s+LIBRIL+OS?\b\s*[:\-]?\s*(?:PARA\s+)?([A-Z0-9a-z .,_/&\-ÁÉÍÓÚÑáéíóúñ]+?)(?=\s*[\n\r\)]|\s*$)/gi;
-const RX_RETIRO_STRIP =
-  /\bRETIRAR?\s+LIBRIL+OS?\b\s*[:\-]?\s*(?:PARA\s+)?[^\n\r\)]*/gi;
+import {
+  RX_RETIRO_LIBRILLOS_CAPTURE,
+  RX_RETIRO_LIBRILLOS_STRIP,
+  normalizarObservacionComercial,
+} from '../../config/obs-typo-normalizer.js';
+
 const RX_COLA_PLAN_FAENA =
   /\b(?:VISCERAS?\s+PARA|VISCERAS?|ACONDICIONAMIENTO|DESPOSTE|CONGELACION|CARNES?\s+DE)\b[\s\S]*$/i;
 
@@ -41,11 +43,12 @@ export function parsearObservacion(obs) {
   if (!obs || obs.trim() === '') {
     return { observacion: null, cliente_destino: null, plaza: null };
   }
-  const src = String(obs).replace(/\r\n/g, '\n');
+  // Corrige typos (RRETIRAR, ASUCARNES, etc.) antes de extraer destino
+  const src = normalizarObservacionComercial(String(obs).replace(/\r\n/g, '\n'));
 
   let cliente = null;
   let m = null;
-  const rxCap = new RegExp(RX_RETIRO_CAPTURE.source, RX_RETIRO_CAPTURE.flags);
+  const rxCap = new RegExp(RX_RETIRO_LIBRILLOS_CAPTURE.source, RX_RETIRO_LIBRILLOS_CAPTURE.flags);
   while ((m = rxCap.exec(src)) !== null) {
     const c = limpiarClienteRetiro(m?.[1] || '');
     if (c) cliente = c;
@@ -55,7 +58,7 @@ export function parsearObservacion(obs) {
   const plaza = plazaDesdeTextoLimpio(limpio);
 
   let sinRetiro = limpio
-    .replace(RX_RETIRO_STRIP, ' ')
+    .replace(RX_RETIRO_LIBRILLOS_STRIP, ' ')
     .replace(/\(\s*\)/g, '')
     .replace(/\s+/g, ' ')
     .trim();

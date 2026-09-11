@@ -32,23 +32,11 @@ export function prioridadObsPlanVsParte() {
   return 'plan_first';
 }
 
-/** Misma familia que `retLibr` en agrupaciones: detecta instrucción de retiro en texto libre. */
+import { textoIndicaRetiroLibrillosTolerante } from './obs-typo-normalizer.js';
+
+/** Misma familia que `retLibr` en agrupaciones: detecta instrucción de retiro (tolera typos). */
 export function textoIndicaRetiroLibrillos(s) {
-  const t = String(s || '')
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!t) return false;
-  return (
-    /\bretirar\s+librillos\b/.test(t) ||
-    /\bretirar\s+librilo\b/.test(t) ||
-    /\bretirar\s+librill\b/.test(t) ||
-    /\bretira\s+librillos\b/.test(t) ||
-    /\bretira\s+librilo\b/.test(t) ||
-    /\bretira\s+librill\b/.test(t)
-  );
+  return textoIndicaRetiroLibrillosTolerante(s);
 }
 
 /**

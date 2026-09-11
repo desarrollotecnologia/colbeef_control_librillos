@@ -18,6 +18,11 @@ describe('parsearObservacion', () => {
     assert.ok(r.plaza?.includes('CAVA') || r.plaza === '01014 CAVA');
   });
 
+  it('extrae cliente aunque escriban RRETIRAR', () => {
+    const r = parsearObservacion('RRETIRAR LIBRILLOS ASURCARNES');
+    assert.match(String(r.cliente_destino || ''), /ASURCARNES/i);
+  });
+
   it('detecta CRUDAS en observación limpia', () => {
     const r = parsearObservacion('COLBEEF - PLAZA X ( CRUDAS ESTILO BOGOTA )');
     assert.match(String(r.observacion || ''), /CRUDAS/i);

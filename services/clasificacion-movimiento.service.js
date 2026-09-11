@@ -4,9 +4,9 @@
  */
 import {
   agrupacionDesdeObservacionCompleta,
-  normalizarClienteDestino,
   reglaOverrideGutierrezCarviscol,
 } from './agrupaciones.service.js';
+import { textoIndicaRetiroLibrillos } from '../config/plan-faena-obs.js';
 
 const CODIGOS_RETIRO_COMERCIAL = new Set([
   'asurcarnes',
@@ -29,11 +29,7 @@ export function clasificarMovimiento(d) {
   const obs = normalizarObs(obsRaw);
   const vacia = obs === '';
   const clienteParsed = String(d?.cliente_destino || '').trim();
-  const t = normalizarClienteDestino(obsRaw);
-  const retLibr =
-    /\bretirar\s+librillos\b/.test(t) ||
-    /\bretirar\s+librilo\b/.test(t) ||
-    /\bretirar\s+librill\b/.test(t);
+  const retLibr = textoIndicaRetiroLibrillos(obsRaw);
   const ovGut = reglaOverrideGutierrezCarviscol(d?.propietario, obsRaw);
   const ag = ovGut
     ? { codigo: ovGut.codigo, etiqueta: ovGut.etiqueta }

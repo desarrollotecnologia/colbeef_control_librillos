@@ -6432,7 +6432,7 @@ function normalizarObs(obs) {
   return String(obs || '').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
-const RX_RETIRO_LIBRILLO_FRONT = /\bRETIRAR?\s+LIBRIL+OS?\b/;
+const RX_RETIRO_LIBRILLO_FRONT = /\bR{1,3}E?T+I?R+A+R*\s+L+I+B+R+I+L+L?O*S?\b/i;
 
 /** Alineado con services/agrupaciones.service.js (códigos del merge API). */
 const COD_AGRUP_COMERCIAL = new Set([
