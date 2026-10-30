@@ -552,34 +552,34 @@ async function mapaSalidasColbeefPorIds(idsTexto) {
     }
   };
 
-  const useFile =
-    process.env.SALIDAS_USE_FILE === '1' ||
-    process.env.SALIDAS_USE_FILE === 'true';
-  if (!useFile) {
+  // MySQL local primero
+  const { getMySQLPool, isMySQLReady } = await import('../config/mysql.js');
+  if (isMySQLReady()) {
     try {
+      const db = getMySQLPool();
       const grupos = chunks(ids, META_RAIZ_BATCH);
       for (const grupo of grupos) {
-        const res = await pool.query(
-          `
-          SELECT id, id_producto, fecha_salida, registrado_por
-          FROM colbeef.salidas_cava
-          WHERE id_producto = ANY($1::text[])
-          ORDER BY fecha_salida DESC NULLS LAST, fecha_registro DESC NULLS LAST
-          `,
-          [grupo]
+        const placeholders = grupo.map(() => '?').join(',');
+        const [rows] = await db.query(
+          `SELECT id, id_producto, fecha_salida, registrado_por
+           FROM salidas
+           WHERE id_producto IN (${placeholders})
+           ORDER BY fecha_salida DESC, fecha_registro DESC`,
+          grupo
         );
-        (res.rows || []).forEach(addRow);
+        (rows || []).forEach(addRow);
       }
       return out;
     } catch {
-      // Si la tabla no existe o no hay permisos, cae al archivo local.
+      // cae a archivo
     }
   }
 
   try {
     const file = path.resolve(process.cwd(), 'data', 'salidas.json');
-    const rows = JSON.parse(fs.readFileSync(file, 'utf8') || '[]');
-    if (Array.isArray(rows)) rows.forEach(addRow);
+    const data = JSON.parse(fs.readFileSync(file, 'utf8') || '[]');
+    const rows = Array.isArray(data) ? data : Object.values(data);
+    rows.forEach(addRow);
   } catch {
     // Sin salidas locales.
   }
@@ -1218,10 +1218,34 @@ async function registrarCambiosPlanillajeTurno(turnoFecha, prevMap, nextMap) {
   if (tasks.length) await Promise.all(tasks);
 }
 
-function leerSnapshotPlanFaena(fechaISO) {
+async function leerSnapshotPlanFaena(fechaISO) {
   const key = String(fechaISO || '').trim();
   if (!key) return null;
   if (planSnapshotCache.has(key)) return planSnapshotCache.get(key);
+
+  // MySQL
+  const { getMySQLPool, isMySQLReady } = await import('../config/mysql.js');
+  if (isMySQLReady()) {
+    try {
+      const db = getMySQLPool();
+      const [rows] = await db.query(
+        'SELECT id_producto, texto_obs FROM plan_faena_snapshot WHERE fecha_turno = ?',
+        [key]
+      );
+      if (rows && rows.length > 0) {
+        const map = new Map(
+          rows.map((r) => [String(r.id_producto || '').trim(), String(r.texto_obs || '').trim()])
+              .filter(([id, txt]) => id && txt)
+        );
+        planSnapshotCache.set(key, map);
+        return map;
+      }
+    } catch (e) {
+      console.warn(`⚠️ plan_faena_snapshot MySQL read ${key}: ${e.message}`);
+    }
+  }
+
+  // Fallback: archivo JSON
   try {
     const file = path.join(PLAN_SNAPSHOT_DIR, `${key}.json`);
     if (!fs.existsSync(file)) return null;
@@ -1239,9 +1263,39 @@ function leerSnapshotPlanFaena(fechaISO) {
   }
 }
 
-function guardarSnapshotPlanFaenaSiNoExiste(fechaISO, map) {
+async function guardarSnapshotPlanFaenaSiNoExiste(fechaISO, map) {
   const key = String(fechaISO || '').trim();
   if (!key || !(map instanceof Map) || !map.size) return;
+
+  // MySQL
+  const { getMySQLPool, isMySQLReady } = await import('../config/mysql.js');
+  if (isMySQLReady()) {
+    try {
+      const db = getMySQLPool();
+      const [[{ cnt }]] = await db.query(
+        'SELECT COUNT(*) AS cnt FROM plan_faena_snapshot WHERE fecha_turno = ?', [key]
+      );
+      if (Number(cnt) > 0) return; // ya existe
+      const ahora = new Date();
+      const vals = [];
+      map.forEach((txt, id) => {
+        const idStr = String(id || '').trim();
+        const txtStr = String(txt || '').trim().slice(0, 500);
+        if (idStr && txtStr) vals.push([key, idStr, txtStr, ahora]);
+      });
+      if (vals.length) {
+        await db.query(
+          'INSERT IGNORE INTO plan_faena_snapshot (fecha_turno, id_producto, texto_obs, guardado_en) VALUES ?',
+          [vals]
+        );
+      }
+      return;
+    } catch (err) {
+      console.warn(`⚠️ No se pudo guardar snapshot plan faena MySQL ${key}: ${err.message}`);
+    }
+  }
+
+  // Fallback: archivo JSON
   try {
     fs.mkdirSync(PLAN_SNAPSHOT_DIR, { recursive: true });
     const file = path.join(PLAN_SNAPSHOT_DIR, `${key}.json`);
@@ -1254,15 +1308,7 @@ function guardarSnapshotPlanFaenaSiNoExiste(fechaISO, map) {
     });
     fs.writeFileSync(
       file,
-      JSON.stringify(
-        {
-          fecha: key,
-          guardado_en: new Date().toISOString(),
-          items,
-        },
-        null,
-        2
-      ),
+      JSON.stringify({ fecha: key, guardado_en: new Date().toISOString(), items }, null, 2),
       'utf8'
     );
   } catch (err) {
@@ -1275,7 +1321,7 @@ function guardarSnapshotPlanFaenaSiNoExiste(fechaISO, map) {
  * (misma semántica que «Visceras Blancas / Rojas» del Excel cuando existan en BD).
  */
 async function mapaTextoPlanFaenaPorFecha(fechaISO) {
-  const snapshot = leerSnapshotPlanFaena(fechaISO);
+  const snapshot = await leerSnapshotPlanFaena(fechaISO);
   if (snapshot && snapshot.size) return snapshot;
   const cols = columnasTextoPlanFaenaProducto();
   if (!cols.length) return new Map();
@@ -1307,7 +1353,7 @@ async function mapaTextoPlanFaenaPorFecha(fechaISO) {
       const t = String(r.texto_plan || '').trim();
       if (t) map.set(id, t);
     });
-    guardarSnapshotPlanFaenaSiNoExiste(fechaISO, map);
+    await guardarSnapshotPlanFaenaSiNoExiste(fechaISO, map);
     return map;
   } catch (err) {
     console.warn(
@@ -1317,8 +1363,8 @@ async function mapaTextoPlanFaenaPorFecha(fechaISO) {
   }
 }
 
-function mapaTextoPlanFaenaLocalPorFecha(fechaISO) {
-  const snapshot = leerSnapshotPlanFaena(fechaISO);
+async function mapaTextoPlanFaenaLocalPorFecha(fechaISO) {
+  const snapshot = await leerSnapshotPlanFaena(fechaISO);
   if (snapshot && snapshot.size) return snapshot;
   if (!USE_LOCAL_PLAN_FILES) return new Map();
   const k = String(fechaISO || '');
@@ -1341,7 +1387,7 @@ function mapaTextoPlanFaenaLocalPorFecha(fechaISO) {
         .map(([id, txt]) => [String(id).trim(), String(txt || '').trim()])
         .filter(([id, txt]) => id && txt)
     );
-    guardarSnapshotPlanFaenaSiNoExiste(fechaISO, m);
+    await guardarSnapshotPlanFaenaSiNoExiste(fechaISO, m);
     localPlanObsCache.set(k, m);
     return m;
   } catch {
@@ -2192,7 +2238,7 @@ async function consultarLibrillosClasificacionDia(fechaISO) {
 
   let planObsMap = await mapaTextoPlanFaenaPorFecha(fecha);
   if (!planObsMap.size) {
-    planObsMap = mapaTextoPlanFaenaLocalPorFecha(fecha);
+    planObsMap = await mapaTextoPlanFaenaLocalPorFecha(fecha);
   }
   const retiroObsMap = mapaTextoRetiroLocalPorFecha(fecha);
 
@@ -2398,7 +2444,7 @@ const consultarLibrillos = async (fecha = null) => {
     const retiroObsMap = mapaTextoRetiroLocalPorFecha(fechaISO);
     if (!planObsMap.size) {
       // Fallback local: usa archivos PlanFaena*.xls en data/ para replicar macro.
-      planObsMap = mapaTextoPlanFaenaLocalPorFecha(fechaISO);
+      planObsMap = await mapaTextoPlanFaenaLocalPorFecha(fechaISO);
     }
 
     // PASO 3: Unir (metadatos desde tablas + movimiento real de parte 13)
