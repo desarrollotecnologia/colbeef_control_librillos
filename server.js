@@ -17,6 +17,7 @@ import { writeRateLimitMiddleware } from './middleware/rate-limit.js';
 import { errorHandlerMiddleware } from './middleware/error-handler.js';
 import { snapshotHealthExtra } from './lib/runtime-state.js';
 import { log } from './lib/logger.js';
+import { initMySQL } from './config/mysql.js';
 
 dotenv.config();
 
@@ -108,5 +109,6 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log('GET /api/health — estado de base de datos');
   console.log('GET /api/librillos/validacion?fecha=YYYY-MM-DD — cuadre de movimientos');
   console.log('GET /api/librillos/diagnostico?fecha=YYYY-MM-DD — estado real (día/pendiente/otro día)');
+  await initMySQL();
   await iniciarPolling();
 });
