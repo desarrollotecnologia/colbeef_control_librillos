@@ -732,11 +732,15 @@ function rowCrudaRetenidaEtiqueta({
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
     cambio_sucursal_despacho:
-      esCambioEtiquetaCrudaOperativa({
-        sucursal_original: puestoOriginal,
-        sucursal_actual: puestoActual,
-      }) && Boolean(auditoriaSucursal?.sucursal_despues),
-    cambio_sucursal_fuente: auditoriaSucursal ? 'auditoria_local' : null,
+      // 1) La auditoría SIRT registró un cambio operativo (fuente más fiable)
+      Boolean(auditoriaSucursal?.cambio) ||
+      // 2) El snapshot muestra diferencia Y existe un registro de auditoría de despacho
+      (puestoOriginal !== null && puestoOriginal !== '' &&
+        esCambioEtiquetaCrudaOperativa({ sucursal_original: puestoOriginal, sucursal_actual: puestoActual }) &&
+        Boolean(auditoriaSucursal?.sucursal_despues)),
+    cambio_sucursal_fuente: auditoriaSucursal?.cambio
+      ? 'auditoria_sirt'
+      : (auditoriaSucursal ? 'auditoria_local' : null),
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
