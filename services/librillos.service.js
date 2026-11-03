@@ -707,6 +707,7 @@ function rowCrudaRetenidaEtiqueta({
   rowPlan,
   sucursalOriginal,
   sucursalActual,
+  sucursalOriginalFuente,
   auditoriaSucursal,
   salidaCava,
   salidaColbeef,
@@ -738,9 +739,7 @@ function rowCrudaRetenidaEtiqueta({
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
     sucursal_original: puestoOriginal || null,
-    sucursal_original_fuente: auditoriaSucursal?.sucursal_primera
-      ? 'auditoria_sirt_primera'
-      : (snapshotPlan?.[id]?.original?.sucursal ? 'snapshot_mysql' : 'sin_snapshot'),
+    sucursal_original_fuente: sucursalOriginalFuente || 'sin_snapshot',
     sucursal_actual: puestoActual || null,
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
@@ -829,6 +828,9 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
         auditoriaSucursal?.sucursal_primera ||
         snapshotPlan?.[id]?.original?.sucursal ||
         rowPlan?.sucursal || null;
+      const sucOriginalFuente = auditoriaSucursal?.sucursal_primera
+        ? 'auditoria_sirt_primera'
+        : (snapshotPlan?.[id]?.original?.sucursal ? 'snapshot_mysql' : 'sin_snapshot');
       const sucActual = sucursalActualDespacho.get(id) || rowPlan?.sucursal || null;
       const puestoOriginalEtiqueta = sucursalNormLibrilloRow({ sucursal: sucOriginal });
       const puestoActualEtiqueta = sucursalNormLibrilloRow({ sucursal: sucActual });
@@ -836,6 +838,7 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
         rowPlan,
         sucursalOriginal: puestoOriginalEtiqueta,
         sucursalActual: puestoActualEtiqueta,
+        sucursalOriginalFuente: sucOriginalFuente,
         auditoriaSucursal,
         salidaCava,
         salidaColbeef,
