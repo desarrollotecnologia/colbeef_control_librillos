@@ -669,23 +669,34 @@ async function mapaAuditoriaSucursalDespachoPorIds(fechaPlan, fechaDespacho, ids
 
   for (const [id, rows] of porId.entries()) {
     const ordenadas = rows.sort((a, b) => horaAuditoriaMs(a) - horaAuditoriaMs(b));
+    // Primera sucursal histórica = asignación original real del día del plan
+    const primera = ordenadas[0] || null;
+    // Última sucursal = estado más reciente hasta la fecha de despacho
+    const ultima = ordenadas[ordenadas.length - 1] || null;
+    const sucPrimera = sucursalNormLibrilloRow({ sucursal: primera?.sucursal });
+    const sucUltima  = sucursalNormLibrilloRow({ sucursal: ultima?.sucursal });
+    // Para compatibilidad, mantener lógica anterior por fecha de despacho
     const anteriores = ordenadas.filter((r) => fechaBogotaDeValor(r.audit_fecha) < fechaDespacho);
-    const despacho = ordenadas.filter((r) => fechaBogotaDeValor(r.audit_fecha) >= fechaDespacho);
+    const despachoRows = ordenadas.filter((r) => fechaBogotaDeValor(r.audit_fecha) >= fechaDespacho);
     const antes = anteriores[anteriores.length - 1] || null;
-    const despues = despacho[despacho.length - 1] || null;
-    if (!despues) continue;
+    const despues = despachoRows[despachoRows.length - 1] || null;
     const sucAntes = sucursalNormLibrilloRow({ sucursal: antes?.sucursal });
     const sucDespues = sucursalNormLibrilloRow({ sucursal: despues?.sucursal });
     out.set(id, {
+      // Primera asignación real (inicio del día del plan)
+      sucursal_primera: sucPrimera || null,
+      sucursal_ultima: sucUltima || null,
+      // Para compatibilidad con lógica de despacho
       sucursal_antes: sucAntes || null,
       sucursal_despues: sucDespues || null,
-      usuario: despues.user_name || null,
-      accion: despues.accion || null,
-      fecha: despues.audit_fecha || null,
-      hora: despues.audit_hora || null,
+      usuario: (despues || ultima)?.user_name || null,
+      accion: (despues || ultima)?.accion || null,
+      fecha: (despues || ultima)?.audit_fecha || null,
+      hora: (despues || ultima)?.audit_hora || null,
+      // Cambio detectado: primera asignación histórica ≠ última registrada
       cambio: esCambioSucursalOperativoCruda({
-        sucursal_antes: sucAntes,
-        sucursal_despues: sucDespues,
+        sucursal_antes: sucPrimera,
+        sucursal_despues: sucUltima,
       }),
     });
   }
@@ -727,20 +738,27 @@ function rowCrudaRetenidaEtiqueta({
     destino: rowPlan?.destino || null,
     plaza: rowPlan?.plaza || null,
     sucursal_original: puestoOriginal || null,
-    sucursal_original_fuente: puestoOriginal ? 'snapshot_etiqueta_plan' : 'sin_snapshot',
+    sucursal_original_fuente: auditoriaSucursal?.sucursal_primera
+      ? 'auditoria_sirt_primera'
+      : (snapshotPlan?.[id]?.original?.sucursal ? 'snapshot_mysql' : 'sin_snapshot'),
     sucursal_actual: puestoActual || null,
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
     cambio_sucursal_despacho:
-      // 1) La auditoría SIRT registró un cambio operativo (fuente más fiable)
+      // 1) La auditoría SIRT detectó cambio entre primera asignación y última (más fiable)
       Boolean(auditoriaSucursal?.cambio) ||
-      // 2) El snapshot muestra diferencia Y existe un registro de auditoría de despacho
+      // 2) Primera asignación SIRT difiere del estado actual (cambio durante el período)
+      (auditoriaSucursal?.sucursal_primera !== null && auditoriaSucursal?.sucursal_ultima !== null &&
+        esCambioEtiquetaCrudaOperativa({
+          sucursal_original: auditoriaSucursal.sucursal_primera,
+          sucursal_actual: auditoriaSucursal.sucursal_ultima,
+        })) ||
+      // 3) Snapshot MySQL muestra diferencia vs SIRT actual (fallback)
       (puestoOriginal !== null && puestoOriginal !== '' &&
-        esCambioEtiquetaCrudaOperativa({ sucursal_original: puestoOriginal, sucursal_actual: puestoActual }) &&
-        Boolean(auditoriaSucursal?.sucursal_despues)),
+        esCambioEtiquetaCrudaOperativa({ sucursal_original: puestoOriginal, sucursal_actual: puestoActual })),
     cambio_sucursal_fuente: auditoriaSucursal?.cambio
-      ? 'auditoria_sirt'
-      : (auditoriaSucursal ? 'auditoria_local' : null),
+      ? 'auditoria_sirt_primera_vs_ultima'
+      : (auditoriaSucursal?.sucursal_primera ? 'auditoria_sirt_snapshot' : 'mysql_snapshot'),
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
@@ -803,11 +821,17 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
       const id = String(rowPlan?.id_producto || '').trim();
       const salidaCava = mapaCava.get(id) || null;
       const salidaColbeef = mapaSalidas.get(id) || null;
-      const sucOriginal = snapshotPlan?.[id]?.original?.sucursal || rowPlan?.sucursal || null;
+      const auditoriaSucursal = auditoriaSucursalDespacho.get(id) || null;
+      // Sucursal original: prioridad 1) primera asignación histórica de SIRT (audit)
+      //                    prioridad 2) snapshot MySQL del día del plan
+      //                    prioridad 3) valor del plan en SIRT
+      const sucOriginal =
+        auditoriaSucursal?.sucursal_primera ||
+        snapshotPlan?.[id]?.original?.sucursal ||
+        rowPlan?.sucursal || null;
       const sucActual = sucursalActualDespacho.get(id) || rowPlan?.sucursal || null;
       const puestoOriginalEtiqueta = sucursalNormLibrilloRow({ sucursal: sucOriginal });
       const puestoActualEtiqueta = sucursalNormLibrilloRow({ sucursal: sucActual });
-      const auditoriaSucursal = auditoriaSucursalDespacho.get(id) || null;
       return rowCrudaRetenidaEtiqueta({
         rowPlan,
         sucursalOriginal: puestoOriginalEtiqueta,
