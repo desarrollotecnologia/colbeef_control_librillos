@@ -744,20 +744,12 @@ function rowCrudaRetenidaEtiqueta({
     puesto_etiqueta: puestoActual || puestoOriginal || null,
     sucursal: puestoActual || rowPlan?.sucursal || null,
     cambio_sucursal_despacho:
-      // 1) La auditoría SIRT detectó cambio entre primera asignación y última (más fiable)
-      Boolean(auditoriaSucursal?.cambio) ||
-      // 2) Primera asignación SIRT difiere del estado actual (cambio durante el período)
-      (auditoriaSucursal?.sucursal_primera !== null && auditoriaSucursal?.sucursal_ultima !== null &&
-        esCambioEtiquetaCrudaOperativa({
-          sucursal_original: auditoriaSucursal.sucursal_primera,
-          sucursal_actual: auditoriaSucursal.sucursal_ultima,
-        })) ||
-      // 3) Snapshot MySQL muestra diferencia vs SIRT actual (fallback)
+      // Comparar puesto original (snapshot o audit) vs puesto actual en SIRT.
+      // El snapshot captura el puesto REAL tras la entrada de datos (omite placeholders de <1min).
+      // Si no hay snapshot, el audit sirve de respaldo pero puede incluir placeholders.
       (puestoOriginal !== null && puestoOriginal !== '' &&
         esCambioEtiquetaCrudaOperativa({ sucursal_original: puestoOriginal, sucursal_actual: puestoActual })),
-    cambio_sucursal_fuente: auditoriaSucursal?.cambio
-      ? 'auditoria_sirt_primera_vs_ultima'
-      : (auditoriaSucursal?.sucursal_primera ? 'auditoria_sirt_snapshot' : 'mysql_snapshot'),
+    cambio_sucursal_fuente: sucursalOriginalFuente || 'sin_datos',
     cambio_sucursal_usuario: auditoriaSucursal?.usuario || null,
     cambio_sucursal_fecha: auditoriaSucursal?.fecha || null,
     cambio_sucursal_hora: auditoriaSucursal?.hora || null,
@@ -821,16 +813,18 @@ export async function obtenerCrudasRetenidasEtiqueta(fechaPlanISO, fechaDespacho
       const salidaCava = mapaCava.get(id) || null;
       const salidaColbeef = mapaSalidas.get(id) || null;
       const auditoriaSucursal = auditoriaSucursalDespacho.get(id) || null;
-      // Sucursal original: prioridad 1) primera asignación histórica de SIRT (audit)
-      //                    prioridad 2) snapshot MySQL del día del plan
+      // Sucursal original: prioridad 1) snapshot MySQL (captura el puesto REAL tras entrada de datos,
+      //                                                 excluye placeholders de <1 min de duración)
+      //                    prioridad 2) primera asignación histórica de SIRT (audit) — fallback si no hay snapshot
       //                    prioridad 3) valor del plan en SIRT
+      const sucOriginalSnapshot = snapshotPlan?.[id]?.original?.sucursal || null;
       const sucOriginal =
+        sucOriginalSnapshot ||
         auditoriaSucursal?.sucursal_primera ||
-        snapshotPlan?.[id]?.original?.sucursal ||
         rowPlan?.sucursal || null;
-      const sucOriginalFuente = auditoriaSucursal?.sucursal_primera
-        ? 'auditoria_sirt_primera'
-        : (snapshotPlan?.[id]?.original?.sucursal ? 'snapshot_mysql' : 'sin_snapshot');
+      const sucOriginalFuente = sucOriginalSnapshot
+        ? 'snapshot_mysql'
+        : (auditoriaSucursal?.sucursal_primera ? 'auditoria_sirt_primera' : 'sin_snapshot');
       const sucActual = sucursalActualDespacho.get(id) || rowPlan?.sucursal || null;
       const puestoOriginalEtiqueta = sucursalNormLibrilloRow({ sucursal: sucOriginal });
       const puestoActualEtiqueta = sucursalNormLibrilloRow({ sucursal: sucActual });
